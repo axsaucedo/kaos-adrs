@@ -3,7 +3,7 @@
 ## Milestones
 
 - [ ] Scaffold blog package.
-- [ ] Capture KAOS v0.4.0 release context, commits, and diffs.
+- [x] Capture KAOS v0.4.0 release context, commits, and diffs.
 - [ ] Synthesize reader-oriented agentic loop basics and KAOS autonomous architecture.
 - [ ] Research autonomous-agent industry landscape and Kubernetes deployment opportunity.
 - [ ] Define writing style and article positioning.
@@ -23,4 +23,3 @@
 - [ ] Includes Kubernetes deployment/scaling implications.
 - [ ] Includes visual plan for diagrams/screenshots.
 - [ ] Final files are committed in `kaos-ai-docs`.
-
