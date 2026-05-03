@@ -46,3 +46,8 @@ Commits will be appended as each milestone is completed.
 - Added `OUTLINE_COMPREHENSIVE.md` with the full topic-first article structure.
 - Added `IMAGE_PLAN.md` with five Mermaid diagrams, optional screenshots, and an optional UI GIF plan.
 - The outline now leads with the simple agentic loop, then autonomy, production controls, industry convergence, Kubernetes, KAOS, and build-it-yourself basics.
+
+### Milestone 7: Draft Article
+
+- Added `BLOGPOST_DRAFT.md`.
+- Draft preserves the topic-first arc: simple loop, autonomy as control plane, industry convergence, Kubernetes workload framing, KAOS v0.4.0 case study, build-it-yourself primitives, and production lessons.

@@ -8,7 +8,7 @@
 - [x] Research autonomous-agent industry landscape and Kubernetes deployment opportunity.
 - [x] Define writing style and article positioning.
 - [x] Create comprehensive outline and visual plan.
-- [ ] Draft the full article.
+- [x] Draft the full article.
 - [ ] Review and revise for factual accuracy and style.
 - [ ] Finalize publish-ready package.
 
