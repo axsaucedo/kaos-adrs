@@ -35,3 +35,19 @@ Core thesis:
 
 > Autonomous agents are becoming long-running operational workloads, not just smarter chat sessions. Once agents can loop, call tools, remember context, and act without a user waiting on the request, the engineering problem shifts from prompt design to lifecycle control: goals, budgets, cancellation, memory, task state, tool permissions, observability, and deployment substrate.
 
+## Milestone Commits
+
+| Commit | Milestone |
+| --- | --- |
+| `18ff135` | Scaffold research package. |
+| `21eee67` | Capture v0.4.0 implementation context. |
+| `9e44864` | Synthesize KAOS autonomous architecture. |
+| `0cef9b9` | Add autonomous agents industry research. |
+| `8f976eb` | Define article style and positioning. |
+| `ebe86f5` | Outline autonomous agents article. |
+| `ffe78e9` | Draft autonomous agents article. |
+| `c7ae2f5` | Review autonomous agents draft. |
+
+## Final Output
+
+Use `BLOGPOST_COMPLETE.md` as the publish-ready article. Use `OUTLINE_COMPREHENSIVE.md`, `IMAGE_PLAN.md`, and the research files as supporting material for edits, visuals, or future derivative posts.

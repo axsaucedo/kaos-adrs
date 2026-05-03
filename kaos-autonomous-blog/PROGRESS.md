@@ -14,7 +14,16 @@ Create a full publish-ready article package for a topic-first blog post about pr
 
 ## Commit Log
 
-Commits will be appended as each milestone is completed.
+| Commit | Milestone |
+| --- | --- |
+| `18ff135` | Scaffold research package |
+| `21eee67` | Capture v0.4.0 implementation context |
+| `9e44864` | Synthesize KAOS autonomous architecture |
+| `0cef9b9` | Add autonomous agents industry research |
+| `8f976eb` | Define article style and positioning |
+| `ebe86f5` | Outline autonomous agents article |
+| `ffe78e9` | Draft autonomous agents article |
+| `c7ae2f5` | Review autonomous agents draft |
 
 ### Milestone 2: Release Context Extraction
 
@@ -57,3 +66,10 @@ Commits will be appended as each milestone is completed.
 - Added `BLOGPOST_REVIEWED.md`.
 - Expanded the article with a stronger task-contract section, budgets-as-safety framing, cancellation details, task state vs memory separation, and clearer debugging/human-control discussion.
 - Reviewed claim language to avoid overpromising Kubernetes or external framework maturity.
+
+### Milestone 9: Final Package
+
+- Added `BLOGPOST_COMPLETE.md` as the publish-ready article.
+- Added final sections for "When Not to Make It Autonomous," deployment checklist, lessons, and references.
+- Updated `README.md` with milestone commits and final output guidance.
+- Completed all checklist items in `TODO.md`.
