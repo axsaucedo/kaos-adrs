@@ -24,6 +24,7 @@ Create a full publish-ready article package for a topic-first blog post about pr
 | `ebe86f5` | Outline autonomous agents article |
 | `ffe78e9` | Draft autonomous agents article |
 | `c7ae2f5` | Review autonomous agents draft |
+| `08625a4` | Finalize autonomous agents blog package |
 
 ### Milestone 2: Release Context Extraction
 
@@ -73,3 +74,11 @@ Create a full publish-ready article package for a topic-first blog post about pr
 - Added final sections for "When Not to Make It Autonomous," deployment checklist, lessons, and references.
 - Updated `README.md` with milestone commits and final output guidance.
 - Completed all checklist items in `TODO.md`.
+
+### Milestone 10: V2 Review Update
+
+- Added `WRITING_STYLE.md` to capture the style target from the provided HackerNoon reference posts.
+- Added `BLOGPOST_COMPLETE_V2.md` as the preferred publish-ready article.
+- Moved OpenClaw and the broader autonomous-agent framework moment into the opening section.
+- Reframed the article around the primary use case of scaling always-on autonomous agents into fleets that need orchestration.
+- Tightened the prose to be more practitioner-led, less generic, and closer to the reference posts' question-driven technical style.

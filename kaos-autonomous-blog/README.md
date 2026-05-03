@@ -20,11 +20,13 @@ The article uses KAOS v0.4.0 as the practical case study, but the main subject i
 | `AGENTIC_LOOP_BASICS.md` | Reader-oriented baseline: simple loop to production autonomy. |
 | `KAOS_AUTONOMOUS_OVERVIEW.md` | KAOS v0.4.0 case-study architecture. |
 | `STYLE_GUIDE.md` | Writing style and positioning guide. |
+| `WRITING_STYLE.md` | V2 style analysis based on the provided HackerNoon references. |
 | `OUTLINE_COMPREHENSIVE.md` | Detailed article outline. |
 | `IMAGE_PLAN.md` | Diagrams, screenshots, and visual asset plan. |
 | `BLOGPOST_DRAFT.md` | First complete article draft. |
 | `BLOGPOST_REVIEWED.md` | Revised draft after technical/style review. |
 | `BLOGPOST_COMPLETE.md` | Final publish-ready article. |
+| `BLOGPOST_COMPLETE_V2.md` | Revised publish-ready article with OpenClaw/industry framing up front and closer authorial style alignment. |
 | `images/` | Screenshots, diagrams, and optional GIFs. |
 
 ## Editorial Direction
@@ -47,7 +49,8 @@ Core thesis:
 | `ebe86f5` | Outline autonomous agents article. |
 | `ffe78e9` | Draft autonomous agents article. |
 | `c7ae2f5` | Review autonomous agents draft. |
+| `08625a4` | Finalize autonomous agents blog package. |
 
 ## Final Output
 
-Use `BLOGPOST_COMPLETE.md` as the publish-ready article. Use `OUTLINE_COMPREHENSIVE.md`, `IMAGE_PLAN.md`, and the research files as supporting material for edits, visuals, or future derivative posts.
+Use `BLOGPOST_COMPLETE_V2.md` as the preferred publish-ready article. It addresses the review feedback by opening with OpenClaw and the broader autonomous-agent framework moment, then using KAOS v0.4.0 as the concrete Kubernetes-native implementation. Use `BLOGPOST_COMPLETE.md` as the prior complete version and `OUTLINE_COMPREHENSIVE.md`, `IMAGE_PLAN.md`, and the research files as supporting material for edits, visuals, or future derivative posts.

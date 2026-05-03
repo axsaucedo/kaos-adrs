@@ -11,6 +11,8 @@
 - [x] Draft the full article.
 - [x] Review and revise for factual accuracy and style.
 - [x] Finalize publish-ready package.
+- [x] Create V2 article with OpenClaw/industry framing up front.
+- [x] Capture reference writing style rules.
 
 ## Quality Checks
 
@@ -22,4 +24,5 @@
 - [x] Includes current industry survey and primary-source citations where possible.
 - [x] Includes Kubernetes deployment/scaling implications.
 - [x] Includes visual plan for diagrams/screenshots.
+- [x] V2 avoids generic AI prose and follows the provided authorial style more closely.
 - [x] Final files are committed in `kaos-ai-docs`.
