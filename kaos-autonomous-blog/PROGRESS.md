@@ -28,3 +28,9 @@ Commits will be appended as each milestone is completed.
 - Added `AGENTIC_LOOP_BASICS.md` to explain the simple agentic loop, autonomous extension, task model, budgets, cancellation, and memory/state separation in reader-reusable terms.
 - Added `COMMIT_FLOW_FULL.md` to turn v0.4.0 commits into a coherent implementation narrative.
 - Added `KAOS_AUTONOMOUS_OVERVIEW.md` to summarize the KAOS case-study architecture: continuous CRD mode, A2A async task mode, task/memory boundary, UI/CLI debugging, and Kubernetes-native lessons.
+
+### Milestone 4: Industry and Kubernetes Research
+
+- Added `INDUSTRY_RESEARCH.md` covering agentic loops, autonomy, budgets, cancellation, memory/state separation, human-in-the-loop, tool permissions, and observability.
+- Added `FRAMEWORK_SURVEY.md` with primary-source notes for OpenClaw, LangGraph, CrewAI, OpenAI Agents SDK, Google ADK, Microsoft/Semantic Kernel, LlamaIndex, and Haystack.
+- Added `KUBERNETES_AUTONOMOUS_AGENTS.md` covering CRDs, operators, RBAC, secrets, state, autoscaling, observability, and Agent Sandbox-style abstractions.

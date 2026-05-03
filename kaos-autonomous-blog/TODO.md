@@ -5,7 +5,7 @@
 - [ ] Scaffold blog package.
 - [x] Capture KAOS v0.4.0 release context, commits, and diffs.
 - [x] Synthesize reader-oriented agentic loop basics and KAOS autonomous architecture.
-- [ ] Research autonomous-agent industry landscape and Kubernetes deployment opportunity.
+- [x] Research autonomous-agent industry landscape and Kubernetes deployment opportunity.
 - [ ] Define writing style and article positioning.
 - [ ] Create comprehensive outline and visual plan.
 - [ ] Draft the full article.
