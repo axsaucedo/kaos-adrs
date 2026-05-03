@@ -40,3 +40,9 @@ Commits will be appended as each milestone is completed.
 - Added `STYLE_GUIDE.md`.
 - Locked the article balance: autonomous-agent engineering first, industry context second, KAOS as worked example, and build-it-yourself patterns as reusable takeaway.
 - Captured tone and structure based on the KAOS OTel post: production problem, simple mental model, concrete use case, implementation deep dive, operations, lessons.
+
+### Milestone 6: Outline and Visual Plan
+
+- Added `OUTLINE_COMPREHENSIVE.md` with the full topic-first article structure.
+- Added `IMAGE_PLAN.md` with five Mermaid diagrams, optional screenshots, and an optional UI GIF plan.
+- The outline now leads with the simple agentic loop, then autonomy, production controls, industry convergence, Kubernetes, KAOS, and build-it-yourself basics.
