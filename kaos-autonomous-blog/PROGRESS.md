@@ -34,3 +34,9 @@ Commits will be appended as each milestone is completed.
 - Added `INDUSTRY_RESEARCH.md` covering agentic loops, autonomy, budgets, cancellation, memory/state separation, human-in-the-loop, tool permissions, and observability.
 - Added `FRAMEWORK_SURVEY.md` with primary-source notes for OpenClaw, LangGraph, CrewAI, OpenAI Agents SDK, Google ADK, Microsoft/Semantic Kernel, LlamaIndex, and Haystack.
 - Added `KUBERNETES_AUTONOMOUS_AGENTS.md` covering CRDs, operators, RBAC, secrets, state, autoscaling, observability, and Agent Sandbox-style abstractions.
+
+### Milestone 5: Style and Positioning
+
+- Added `STYLE_GUIDE.md`.
+- Locked the article balance: autonomous-agent engineering first, industry context second, KAOS as worked example, and build-it-yourself patterns as reusable takeaway.
+- Captured tone and structure based on the KAOS OTel post: production problem, simple mental model, concrete use case, implementation deep dive, operations, lessons.
