@@ -51,3 +51,9 @@ Commits will be appended as each milestone is completed.
 
 - Added `BLOGPOST_DRAFT.md`.
 - Draft preserves the topic-first arc: simple loop, autonomy as control plane, industry convergence, Kubernetes workload framing, KAOS v0.4.0 case study, build-it-yourself primitives, and production lessons.
+
+### Milestone 8: Reviewed Draft
+
+- Added `BLOGPOST_REVIEWED.md`.
+- Expanded the article with a stronger task-contract section, budgets-as-safety framing, cancellation details, task state vs memory separation, and clearer debugging/human-control discussion.
+- Reviewed claim language to avoid overpromising Kubernetes or external framework maturity.
