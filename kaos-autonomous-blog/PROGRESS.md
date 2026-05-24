@@ -83,3 +83,11 @@ Create a full publish-ready article package for a topic-first blog post about pr
 - Moved OpenClaw and the broader autonomous-agent framework moment into the opening section.
 - Reframed the article around the primary use case of scaling always-on autonomous agents into fleets that need orchestration.
 - Tightened the prose to be more practitioner-led, less generic, and closer to the reference posts' question-driven technical style.
+
+### Milestone 11: V3 Cleanup and References
+
+- Cleaned `BLOGPOST_COMPLETE_V3.md` in place.
+- Removed malformed heading markers, copied code-toolbar artifacts, and extra spacer lines inside lists.
+- Added language tags to obvious code fences.
+- Added inline citations from authoritative sources, including OpenClaw, Anthropic, agent research papers, framework docs, A2A, MCP, Kubernetes, Agent Sandbox, OTel GenAI, OWASP, NIST, and the companion HackerNoon observability post.
+- Updated `README.md` to mark V3 as the preferred publish-ready article.

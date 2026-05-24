@@ -27,6 +27,7 @@ The article uses KAOS v0.4.0 as the practical case study, but the main subject i
 | `BLOGPOST_REVIEWED.md` | Revised draft after technical/style review. |
 | `BLOGPOST_COMPLETE.md` | Final publish-ready article. |
 | `BLOGPOST_COMPLETE_V2.md` | Revised publish-ready article with OpenClaw/industry framing up front and closer authorial style alignment. |
+| `BLOGPOST_COMPLETE_V3.md` | Current preferred article version, cleaned and strengthened with authoritative inline references. |
 | `images/` | Screenshots, diagrams, and optional GIFs. |
 
 ## Editorial Direction
@@ -54,4 +55,4 @@ Core thesis:
 
 ## Final Output
 
-Use `BLOGPOST_COMPLETE_V2.md` as the preferred publish-ready article. It addresses the review feedback by opening with OpenClaw and the broader autonomous-agent framework moment, then using KAOS v0.4.0 as the concrete Kubernetes-native implementation. Use `BLOGPOST_COMPLETE.md` as the prior complete version and `OUTLINE_COMPREHENSIVE.md`, `IMAGE_PLAN.md`, and the research files as supporting material for edits, visuals, or future derivative posts.
+Use `BLOGPOST_COMPLETE_V3.md` as the preferred publish-ready article. It preserves the V3 prose direction while cleaning Markdown export artifacts and adding authoritative inline references across the industry, research, Kubernetes, security, and observability claims. Use `BLOGPOST_COMPLETE_V2.md` and `BLOGPOST_COMPLETE.md` as prior complete versions, and use `OUTLINE_COMPREHENSIVE.md`, `IMAGE_PLAN.md`, and the research files as supporting material for edits, visuals, or future derivative posts.

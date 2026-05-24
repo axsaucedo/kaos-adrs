@@ -13,6 +13,8 @@
 - [x] Finalize publish-ready package.
 - [x] Create V2 article with OpenClaw/industry framing up front.
 - [x] Capture reference writing style rules.
+- [x] Clean V3 Markdown export artifacts.
+- [x] Add authoritative references to V3 with minimal prose changes.
 
 ## Quality Checks
 
@@ -25,4 +27,5 @@
 - [x] Includes Kubernetes deployment/scaling implications.
 - [x] Includes visual plan for diagrams/screenshots.
 - [x] V2 avoids generic AI prose and follows the provided authorial style more closely.
+- [x] V3 includes cleaned headings, list formatting, code fences, and inline authoritative citations.
 - [x] Final files are committed in `kaos-ai-docs`.
