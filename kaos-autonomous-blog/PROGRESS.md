@@ -26,6 +26,7 @@ Create a full publish-ready article package for a topic-first blog post about pr
 | `c7ae2f5` | Review autonomous agents draft |
 | `08625a4` | Finalize autonomous agents blog package |
 | `44bd8ed` | Add V2 autonomous agents article |
+| `72f3d44` | Clean and reference V3 article |
 
 ### Milestone 2: Release Context Extraction
 
