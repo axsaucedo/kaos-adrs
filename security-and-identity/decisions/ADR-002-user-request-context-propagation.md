@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Requires host decisions before acceptance.
+Deferred. This depends on ADR-003 enforcement topology.
 
 ## Context
 
@@ -391,4 +391,4 @@ Provisional recommendation:
 
 ## Decision status
 
-Awaiting host answers.
+Deferred until ADR-003 decides the initial Gateway/sidecar/native enforcement topology.
