@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed, pending final host decision on logical identity format.
+Proposed final, ready for review.
 
 ## Context
 
@@ -66,11 +66,11 @@ Implication:
 
 ### CRD surface
 
-Start with first-class spec fields, not annotations.
+Start with first-class spec fields, not annotations. Use `spec.security.<values>` as the target CRD surface rather than a standalone `spec.identity` section.
 
 Implication:
 
-- The target picture may propose a `spec.identity` or similar section.
+- The target picture may propose a `spec.security` section.
 - Initial implementation can still be phased, but the target contract should be schema-backed and documented.
 
 ### KAOS/AIB synchronization
@@ -101,11 +101,53 @@ Implication:
 - Autonomous runs use Agent identity plus run/session correlation initially.
 - Run-bound grants or run-scoped identities are deferred to approval/consent research.
 
-## Open question: logical identity format
+## Decision: logical identity format
 
-The main unresolved point is whether KAOS logical identity should be derived from namespace/name, generated as a UUID, or user-configurable.
+KAOS logical identity should be user-configurable through `spec.security.id`, with a simple namespace/name default when no explicit ID is provided.
 
-This matters because grants are intended to survive delete/recreate and because the host may want the same logical identifier to be usable across namespaces.
+Resolved identity format:
+
+| Case | Resolved external identity |
+|---|---|
+| `spec.security.id` omitted | `kaos://{kind}/{namespace}/{name}` |
+| `spec.security.id` provided | `kaos://{kind}/{id}` |
+
+Examples:
+
+```yaml
+# Default identity
+apiVersion: kaos.tools/v1alpha1
+kind: Agent
+metadata:
+  namespace: default
+  name: researcher
+```
+
+resolves to:
+
+```text
+kaos://agent/default/researcher
+```
+
+```yaml
+# Explicit stable identity
+apiVersion: kaos.tools/v1alpha1
+kind: Agent
+metadata:
+  namespace: staging
+  name: researcher-v2
+spec:
+  security:
+    id: researcher
+```
+
+resolves to:
+
+```text
+kaos://agent/researcher
+```
+
+This allows users to keep the default Kubernetes namespace/name identity when they do not care about a separate stable security identity, while also allowing namespace-independent grant continuity when `spec.security.id` is explicitly set.
 
 ## Options for logical identity
 
@@ -139,13 +181,13 @@ Best fit:
 - Single namespace or namespace-as-security-boundary deployments.
 - Users expect grants/policy to be tied to the Kubernetes resource location.
 
-### Option B: user-configurable stable logical ID with namespace/name default
+### Option B: user-configurable stable security ID with namespace/name default
 
 Example CRD shape:
 
 ```yaml
 spec:
-  identity:
+  security:
     id: researcher
 ```
 
@@ -155,7 +197,7 @@ External identity:
 kaos://agent/researcher
 ```
 
-If omitted, default could be:
+If omitted, default is:
 
 ```text
 kaos://agent/default/researcher
@@ -174,7 +216,7 @@ Cons:
 - Requires uniqueness and collision rules.
 - If two resources use the same identity, they may share grants/policy intentionally or accidentally.
 - Needs validation/defaulting behavior.
-- The system must define whether `spec.identity.id` is global per kind, per namespace, or allowed to alias multiple resources.
+- The system must define whether `spec.security.id` is global per kind, per namespace, or allowed to alias multiple resources.
 
 Best fit:
 
@@ -185,17 +227,17 @@ Key design choice inside this option:
 
 | Variant | Meaning | Tradeoff |
 |---|---|---|
-| Global per kind | `kaos://agent/researcher` must be unique across namespaces | Prevents accidental sharing but blocks same identity in multiple namespaces |
+| Global per kind | `kaos://agent/researcher` must be unique across namespaces | Prevents accidental sharing but blocks concurrent same identity in multiple namespaces |
 | Shared alias allowed | Multiple resources can intentionally use `researcher` | Enables portability but must be treated as a powerful trust decision |
 | Scoped plus alias | Resource has unique identity and optional alias/group | More precise but more complex |
 
-### Option C: generated KAOS UUID stored in spec
+### Option C: generated KAOS UUID stored in `spec.security.id`
 
 Example:
 
 ```yaml
 spec:
-  identity:
+  security:
     id: 4efc3a8b-...
 ```
 
@@ -260,15 +302,15 @@ Assessment:
 
 - Not recommended as the KAOS logical identity.
 
-## Recommended resolution for Q1
+## Resolution for Q1
 
-Use a first-class, user-configurable KAOS logical identity with a simple default.
+Use a first-class, user-configurable KAOS security identity with a simple namespace/name default.
 
 Proposed model:
 
 ```yaml
 spec:
-  identity:
+  security:
     id: researcher
 ```
 
@@ -298,61 +340,15 @@ However, this requires a policy for collisions/aliases.
 The safest initial rule is:
 
 ```text
-spec.identity.id must be unique per resource kind within a KAOS cluster.
+spec.security.id should be unique per resource kind within a KAOS cluster, unless shared identity/adoption is explicitly supported.
 ```
 
-If users want the same logical identity across namespaces, that means they are intentionally representing the same identity. This should either:
+If users want the same logical identity across namespaces, that means they are intentionally representing the same security identity. This should either:
 
 1. be allowed only if the old resource no longer exists, or
 2. require an explicit shared-identity/adoption flag later.
 
-## Remaining host choice
-
-Choose one of these Q1 variants:
-
-### Q1-A: Simple namespace/name identity
-
-Use:
-
-```text
-kaos://{kind}/{namespace}/{name}
-```
-
-Best if namespace should remain part of identity.
-
-### Q1-B: User-configurable identity with namespace/name default
-
-Use:
-
-```text
-spec.identity.id: researcher
-external_id: kaos://agent/researcher
-```
-
-Default:
-
-```text
-kaos://agent/{namespace}/{name}
-```
-
-Best if users may want namespace-independent identities.
-
-### Q1-C: Generated UUID identity
-
-Use:
-
-```text
-spec.identity.id: <uuid>
-external_id: kaos://agent/<uuid>
-```
-
-Best if opaque uniqueness matters more than readability.
-
-## Current preferred answer
-
-Prefer **Q1-B: user-configurable identity with namespace/name default**.
-
-This best matches:
+This matches:
 
 - grant survival,
 - no cluster identity for now,
@@ -362,9 +358,7 @@ This best matches:
 
 ## Resulting provisional ADR
 
-If Q1-B is accepted:
-
-1. KAOS resources have a first-class `spec.identity.id`.
+1. KAOS resources have a first-class `spec.security.id`.
 2. If omitted, identity defaults to kind/namespace/name.
 3. AIB `external_id` uses the resolved KAOS logical identity.
 4. A separate KAOS-AIB sync service reconciles KAOS resources into AIB records.
@@ -374,6 +368,10 @@ If Q1-B is accepted:
 8. Agent, MCPServer, and ModelAPI remain in the identity target picture, subject to later enforcement-topology validation.
 9. Autonomous run identity remains Agent-level plus correlation for now.
 
-## Decision status
+## Review notes
 
-Pending host answer on Q1 variant.
+This ADR is now complete enough for target-picture review. The main design point to validate later is collision handling for explicit `spec.security.id` values:
+
+- reject duplicate active identities per kind,
+- allow adoption only when the previous resource is gone, or
+- support explicit shared identity as a future advanced feature.
