@@ -86,6 +86,39 @@ Implication:
 - AIB is well suited to be authoritative for user-delegated grants from a principal to an agent.
 - Grant survival across KAOS Agent delete/recreate is possible if the KAOS-AIB sync service preserves the same AIB agent record for the same `external_id`.
 
+### KAOS CRD wiring is not authorization
+
+Source files:
+
+- `operator/api/v1alpha1/agent_types.go`
+- `operator/controllers/agent_controller.go`
+
+KAOS Agent CRDs can reference:
+
+- `spec.modelAPI`,
+- `spec.mcpServers`,
+- `spec.agentNetwork.access`.
+
+Current behavior:
+
+- The operator resolves these references and injects service URLs into the Agent runtime.
+- These fields define topology and runtime wiring.
+- They do not currently create grants, user consent, scoped authorization, or AIB PermissionSets.
+
+Implication:
+
+- In the security target picture, CRD wiring should remain necessary but not sufficient for authorization.
+- Deploying an Agent connected to an MCPServer or ModelAPI must not automatically grant user-delegated access.
+- When security is enabled, the default posture should be **no permissions by default**.
+- A future `spec.security` section may declare requested permissions or required permission sets, but these declarations are not grants.
+
+Principle:
+
+```text
+wired != authorized
+declared != granted
+```
+
 ### AIB consent service
 
 Source file:
@@ -324,6 +357,18 @@ Tradeoff:
 
 - Clean fit with current AIB model, but MCP/ModelAPI authorization remains outside AIB initially.
 
+### Q3a. Should CRD wiring automatically create grants or permissions?
+
+Recommended answer:
+
+- No. Agent-to-MCPServer and Agent-to-ModelAPI references should remain topology/wiring.
+- AIB sync may mirror declared requested permissions into AIB Agent metadata, but must not auto-grant user delegated access.
+- Security-enabled deployments should use no-permission-by-default semantics.
+
+Tradeoff:
+
+- This avoids accidental privilege escalation from merely wiring an Agent to an MCPServer, but requires explicit admin/user grant flows before protected actions succeed.
+
 ### Q4. Should AIB issue KAOS runtime/session tokens in 1.0?
 
 Recommended answer:
@@ -382,11 +427,13 @@ Tradeoff:
 2. AIB is authoritative for user delegated grants and third-party OAuth sessions.
 3. KAOS remains authoritative for CRDs, topology, resource identity, and runtime orchestration.
 4. AIB PermissionSets initially represent third-party service scopes only.
-5. AIB does not issue KAOS runtime/session tokens in 1.0.
-6. SDK-native AIB calls are the first integration path.
-7. AIB ExtProc is deferred to the GatewayAPI 1.1 resource-boundary extension.
-8. AIB does not replace Keycloak/Dex/OIDC for human authentication.
-9. OPA/Rego integration is deferred to the authorization-policy decision.
+5. KAOS CRD connections are wiring/topology only; they do not automatically grant access.
+6. Security-enabled deployments use no-permission-by-default semantics.
+7. AIB does not issue KAOS runtime/session tokens in 1.0.
+8. SDK-native AIB calls are the first integration path.
+9. AIB ExtProc is deferred to the GatewayAPI 1.1 resource-boundary extension.
+10. AIB does not replace Keycloak/Dex/OIDC for human authentication.
+11. OPA/Rego integration is deferred to the authorization-policy decision.
 
 ## Decision status
 
