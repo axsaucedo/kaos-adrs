@@ -1,6 +1,6 @@
 # ADR-008: AIB, IdP, OPA, Gateway, and mesh responsibility matrix
 
-**Status**: Proposed. Requires host decisions before acceptance.
+**Status**: Accepted.
 **Date**: 2026-06-20
 
 ---
@@ -186,7 +186,7 @@ Best fit:
 
 ---
 
-## Provisional recommendation
+## Decision
 
 Adopt **Option C: Layered responsibility matrix**.
 
@@ -233,11 +233,11 @@ Adopt **Option C: Layered responsibility matrix**.
 
 ---
 
-## Host questions required to finalize ADR-008
+## Host questions resolved for ADR-008
 
 ### Q1. Should KAOS use a layered responsibility matrix instead of making AIB the all-purpose security platform?
 
-Recommended answer:
+Decision:
 
 - Yes. AIB should stay focused on KAOS resource grants, user delegated grants, consent, and token exchange.
 
@@ -247,7 +247,7 @@ Tradeoff:
 
 ### Q2. Should Keycloak/Dex remain human identity/SSO only in 1.0?
 
-Recommended answer:
+Decision:
 
 - Yes. Keycloak/Dex/OIDC should authenticate humans and provide claims/groups. Keycloak Authorization Services remains optional future work.
 
@@ -257,7 +257,7 @@ Tradeoff:
 
 ### Q3. Should OPA/Rego remain optional and deferred?
 
-Recommended answer:
+Decision:
 
 - Yes. OPA is useful if simple grants become insufficient, but should not be mandatory for 1.0.
 
@@ -267,7 +267,7 @@ Tradeoff:
 
 ### Q4. Should LiteLLM remain the ModelAPI internal policy owner?
 
-Recommended answer:
+Decision:
 
 - Yes. AIB may decide root ModelAPI access, but LiteLLM should own model-level allowlists, budgets, and provider auth.
 
@@ -277,7 +277,7 @@ Tradeoff:
 
 ### Q5. Should Gateway/NetworkPolicy be explicitly 1.1, not 1.0?
 
-Recommended answer:
+Decision:
 
 - Yes. Bundle Gateway resource-boundary enforcement and NetworkPolicy bypass prevention into 1.1.
 
@@ -287,7 +287,7 @@ Tradeoff:
 
 ### Q6. Which features should be upstreamed to AIB?
 
-Recommended answer:
+Decision:
 
 - Upstream generic agent-identity broker features: first-class resource grants, resource-grant approval lifecycle, generic SDK client pieces, and token-exchange/consent improvements.
 
@@ -297,7 +297,7 @@ Tradeoff:
 
 ---
 
-## Proposed ADR-008 decision if host agrees
+## Accepted ADR-008 decision
 
 1. KAOS adopts a layered responsibility matrix rather than an AIB-centered or enterprise-platform-centered security model.
 2. KAOS owns resource existence, topology, logical identity, requested access edges, and runtime wiring.
@@ -313,4 +313,4 @@ Tradeoff:
 
 ## Decision status
 
-Awaiting host answers.
+Accepted.
