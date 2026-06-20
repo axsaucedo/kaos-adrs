@@ -62,7 +62,7 @@ Keep Agent, MCPServer, and ModelAPI in the target identity model for now.
 Implication:
 
 - Treat all three as KAOS-managed service identities conceptually.
-- Revisit after enforcement topology decisions, because sidecar/Gateway/native enforcement choices may change how useful MCPServer/ModelAPI identities are in the first implementation.
+- ADR-002 keeps Agent and MCPServer enforcement SDK-first for 1.0, and treats ModelAPI root access as AIB-manageable while leaving model/budget internals to LiteLLM.
 
 ### CRD surface
 
@@ -99,7 +99,7 @@ Keep autonomous identity simple for now.
 Implication:
 
 - Autonomous runs use Agent identity plus run/session correlation initially.
-- Run-bound grants or run-scoped identities are deferred to approval/consent research.
+- Run-bound grants or run-scoped identities are deferred beyond the ADR-006 approval/consent model.
 
 ## Decision
 
@@ -199,7 +199,7 @@ This matches:
 - Grants survive delete/recreate when the resolved logical identity is the same.
 - ServiceAccounts are excluded from initial implementation.
 - Workload verification is deferred.
-- Agent, MCPServer, and ModelAPI remain in the identity target picture, subject to later enforcement-topology validation.
+- Agent, MCPServer, and ModelAPI remain in the identity target picture. ADR-002 uses those identities for SDK-first Agent/MCPServer enforcement and ModelAPI root access decisions.
 - Autonomous run identity remains Agent-level plus correlation for now.
 
 ## Follow-up

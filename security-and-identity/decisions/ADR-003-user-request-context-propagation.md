@@ -168,4 +168,4 @@ Capture principal/session context but do not propagate or enforce it.
    - AIB client hooks.
 2. Define which fields are safe to persist.
 3. Define token redaction and logging rules.
-4. Revisit approval/pause/resume behavior in a later ADR.
+4. Use ADR-006's fail-with-URL-and-retry behavior for 1.0 consent and re-authentication, while leaving durable pause/resume to future task approval work.

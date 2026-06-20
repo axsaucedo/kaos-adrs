@@ -408,4 +408,4 @@ This may be useful for enterprise deployments, but 1.0 benefits from keeping KAO
 15. AIB ExtProc is deferred to the GatewayAPI 1.1 resource-boundary extension.
 16. AIB does not replace Keycloak/Dex/OIDC for human authentication.
 17. Kubernetes ServiceAccount/SPIFFE workload binding remains deferred from ADR-001.
-18. OPA/Rego and Keycloak Authorization Services integration are deferred to the authorization-policy decision.
+18. OPA/Rego and Keycloak Authorization Services integration are deferred by ADR-005.

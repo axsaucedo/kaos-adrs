@@ -198,7 +198,7 @@ Adopt **Option C: Layered responsibility matrix**.
 | User delegated third-party grants | AIB | AIB | UserGrant + PermissionSet domain. |
 | Third-party OAuth sessions/token vault | AIB | AIB | Not KAOS runtime state. |
 | Token exchange for third-party APIs | AIB | AIB ExtProc/Gateway integration later | SDK-first in 1.0, Gateway path later. |
-| SDK request context propagation | KAOS/AIB SDK | Upstreamable AIB SDK core + KAOS adapters | Detailed in later SDK ADR. |
+| SDK request context propagation | KAOS/AIB SDK | Upstreamable AIB SDK core + KAOS adapters | Upstream scope is fixed by ADR-009; concrete SDK shape is fixed by ADR-010. |
 | Agent/MCPServer root authorization | AIB grant checks through SDK | Gateway/NetworkPolicy enforcement in 1.1 | Resource-level, not tool-level. |
 | MCP tool/argument authorization | Deferred | Future KAOS tool permission model + AIB/OPA approval | Not modeled in 1.0. |
 | ModelAPI root authorization | AIB resource grants | Gateway resource-boundary enforcement | Root access only. |
@@ -241,4 +241,3 @@ Adopt **Option C: Layered responsibility matrix**.
 9. cert-manager, native service TLS, SPIFFE, and service mesh are transport/workload hardening layers, not AIB responsibilities.
 10. KAOS-specific orchestration wiring is built in KAOS first.
 11. Generic AIB concepts should be upstreamed to AIB when they are not KAOS-specific, especially first-class resource grants and reusable SDK/client pieces.
-
