@@ -7,7 +7,9 @@
 
 ## Decision
 
-Use AIB as the **authorization and delegated-token broker** for KAOS 1.0, but not as the owner of all security concerns.
+Use AIB as the **authorization and delegated-token broker** for KAOS, as the baseline of the target architecture, but not as the owner of all security concerns.
+
+Deployment profiles combine complementary enforcement layers: the **baseline profile** uses SDK-native enforcement with external TLS and direct ClusterIP access; the **Gateway resource-boundary profile** adds Gateway routing, Envoy `ext_authz`, AIB ExtProc token exchange, and NetworkPolicy bypass prevention; the **advanced/hardened profile** adds optional mTLS/SPIFFE/service mesh/workload identity hardening.
 
 AIB owns two grant domains:
 
@@ -40,7 +42,7 @@ Admin/platform grant exists     -> resource access allowed
 User delegated grant exists     -> user third-party access allowed
 ```
 
-Current AIB does not yet have a clean first-class model for platform/resource grants or a request/approval workflow for those grants. The accepted target therefore has two layers:
+Current AIB does not yet have a clean first-class model for platform/resource grants or a request/approval workflow for those grants. The accepted target therefore has two AIB resource-grant modeling tracks:
 
 1. **Target model**: AIB gets a first-class platform/resource grant concept and an admin approval lifecycle for requested KAOS access edges.
 2. **Bootstrap model**: early implementations may encode KAOS resource access with a synthetic internal AIB service plus custom PermissionSet scopes, or a synthetic platform principal, while keeping that representation explicitly temporary.
@@ -67,8 +69,8 @@ The workaround must not make requested CRD wiring an approved grant automaticall
 | AIB | KAOS logical resource grants, user delegated grants, third-party services, PermissionSets, consent, token vault, token exchange |
 | External IdP such as Keycloak/Dex/OIDC | Human authentication and user identity source |
 | LiteLLM | ModelAPI internals: model access, provider keys, budgets, rate limits |
-| GatewayAPI 1.1 | Resource-boundary enforcement, JWT validation, bypass prevention with NetworkPolicy |
-| OPA/Keycloak AuthZ | Future optional PDP integration if requirements outgrow AIB's initial policy model |
+| GatewayAPI (Gateway resource-boundary profile) | Resource-boundary enforcement, JWT validation, bypass prevention with NetworkPolicy |
+| OPA/Keycloak AuthZ | Optional advanced PDP integration if requirements outgrow AIB's baseline policy model |
 
 ### Keycloak boundary
 
@@ -93,9 +95,9 @@ AIB does not replace Keycloak/Dex/OIDC for human authentication.
 
 ### Runtime and workload identity boundary
 
-For 1.0, AIB validates logical identities and grants, not cryptographic workload bindings.
+By default, AIB validates logical identities and grants, not cryptographic workload bindings.
 
-The 1.0 request context should carry:
+The SDK-native baseline request context should carry:
 
 ```text
 user principal X
@@ -105,29 +107,29 @@ target KAOS logical identity Z
 
 AIB can decide whether `Y -> Z` is authorized and whether `X -> Y -> third-party permission set` is granted.
 
-ADR-001 already excludes Kubernetes ServiceAccounts and SPIFFE/SPIRE from the initial implementation. Therefore 1.0 does not prove that the physical pod making the request is cryptographically bound to the claimed KAOS identity.
+ADR-001 already excludes Kubernetes ServiceAccounts and SPIFFE/SPIRE from the baseline implementation. Therefore the baseline profile does not prove that the physical pod making the request is cryptographically bound to the claimed KAOS identity.
 
-That hardening is deferred to later Gateway+NetworkPolicy, Kubernetes ServiceAccount, or SPIFFE/SPIRE work.
+That hardening belongs to the Gateway resource-boundary profile for Gateway+NetworkPolicy and to the advanced/hardened profile for Kubernetes ServiceAccount or SPIFFE/SPIRE workload binding.
 
 ### AIB token issuance boundary
 
 AIB **does** issue or return delegated third-party access tokens through token exchange.
 
-AIB **does not** become the general issuer of internal KAOS runtime identity/delegation tokens in 1.0.
+AIB **does not** become the general issuer of internal KAOS runtime identity/delegation tokens by default.
 
 This means:
 
 - AIB can return GitHub/Slack/Google/etc. access tokens after grant/session validation.
-- AIB should not be required to mint every internal Agent-to-Agent, Agent-to-MCPServer, or Agent-to-ModelAPI caller token in 1.0.
-- Internal KAOS caller identity may initially come from trusted inbound user tokens, SDK-carried context, Gateway-normalized headers, or future workload identity.
+- AIB should not be required to mint every internal Agent-to-Agent, Agent-to-MCPServer, or Agent-to-ModelAPI caller token by default.
+- Internal KAOS caller identity may come from trusted inbound user tokens, SDK-carried context, Gateway-normalized headers in the Gateway resource-boundary profile, or optional workload identity in the advanced/hardened profile.
 
 ### Autonomous agents
 
 Autonomous runs split into two cases:
 
-| Autonomous case | Initial treatment |
+| Autonomous case | Profile treatment |
 |---|---|
-| Agent acts only as itself/service | AIB is not required; future options include robot users, service credentials, Kubernetes ServiceAccounts, or workload identity |
+| Agent acts only as itself/service | AIB is not required; optional advanced options include robot users, service credentials, Kubernetes ServiceAccounts, or workload identity |
 | Agent acts on behalf of a user's third-party account | AIB is in scope through durable user-delegated grants and token vault/session refresh |
 
 Example:
@@ -146,7 +148,7 @@ AIB should store Alice's delegated grant and Google OAuth session, then return a
 
 [ADR-003](./ADR-003-user-request-context-propagation.md) establishes an SDK-first request context propagation layer for Agents and MCPServers.
 
-[ADR-002](./ADR-002-enforcement-topology.md) establishes an SDK-first 1.0 topology, LiteLLM as the preferred ModelAPI auth surface, GatewayAPI as a 1.1 resource-boundary extension, and sidecars as deferred.
+[ADR-002](./ADR-002-enforcement-topology.md) establishes the SDK-native baseline topology, LiteLLM as the preferred ModelAPI auth surface, the Gateway resource-boundary profile, and sidecars as optional hardening.
 
 This ADR defines what AIB owns within that architecture.
 
@@ -327,7 +329,7 @@ AIB ExtProc:
 Implication:
 
 - ExtProc fits Gateway or sidecar token exchange.
-- Per ADR-002, this is a later Gateway/resource-boundary integration, not required for SDK-first 1.0.
+- Per ADR-002, this is part of the Gateway resource-boundary profile, not required for the SDK-native baseline.
 
 ---
 
@@ -347,7 +349,7 @@ However, current AIB does not yet expose this as a first-class model, so impleme
 
 AIB would own all authorization, policy language, approval workflows, ModelAPI policies, MCP tool/argument rules, runtime token issuance, and token exchange.
 
-Rejected for 1.0.
+Rejected as the baseline target.
 
 This overextends AIB beyond its current implementation and risks duplicating Keycloak, OPA, LiteLLM, and Gateway responsibilities. It also forces AIB to understand detailed MCP tool schemas, ModelAPI budgets, and Gateway route mechanics too early.
 
@@ -355,9 +357,9 @@ This overextends AIB beyond its current implementation and risks duplicating Key
 
 Keycloak Authorization Services or OPA could model KAOS resources, scopes, permissions, and policies.
 
-Deferred.
+Not selected for the baseline profile.
 
-This may be useful for enterprise deployments, but 1.0 benefits from keeping KAOS-native logical resource grants close to AIB, because AIB already understands agents, grants, token exchange, and delegated access. Keycloak remains the user identity source; OPA/Keycloak AuthZ can be revisited in the later authorization-policy ADR.
+This may be useful for enterprise deployments, but the baseline profile benefits from keeping KAOS-native logical resource grants close to AIB, because AIB already understands agents, grants, token exchange, and delegated access. Keycloak remains the user identity source; OPA/Keycloak AuthZ can be handled as optional advanced integration under ADR-005.
 
 ---
 
@@ -370,28 +372,28 @@ This may be useful for enterprise deployments, but 1.0 benefits from keeping KAO
 - Gives AIB a coherent authorization role for KAOS logical resource grants and user-delegated third-party grants.
 - Keeps Keycloak focused on human identity/SSO.
 - Keeps LiteLLM focused on ModelAPI model access, budgets, and rate limits.
-- Keeps MCP tool/argument-level authorization deferred until KAOS models those concepts explicitly.
+- Keeps MCP tool/argument-level authorization optional until KAOS models those concepts explicitly.
 
 ### Negative
 
 - AIB needs a resource-grant concept beyond its current user grant and PermissionSet model.
 - Until that exists, any PermissionSet-based resource-grant encoding is a temporary workaround and must be documented as such.
 - AIB also needs a request/approval lifecycle for KAOS resource grants if requested CRD access edges are to be reviewed before approval.
-- 1.0 logical identity validation does not cryptographically prove workload identity.
-- Gateway/NetworkPolicy bypass prevention remains a 1.1 hardening layer.
+- The baseline profile's logical identity validation does not cryptographically prove workload identity.
+- Gateway/NetworkPolicy bypass prevention is part of the Gateway resource-boundary profile.
 - ModelAPI root access can be AIB-managed, but detailed model/budget enforcement remains in LiteLLM.
 
 ### Risks
 
 - If requested edges are mistaken for approved grants, deployments could become over-permissive. Documentation and API naming must distinguish requested vs approved.
-- If workload identity is not added later, malicious in-cluster workloads could spoof logical identity headers/context in weakly isolated clusters.
+- If workload identity is not enabled in advanced/hardened deployments, malicious in-cluster workloads could spoof logical identity headers/context in weakly isolated clusters.
 - AIB resource grants and AIB user-delegated grants must be modeled distinctly to avoid mixing platform access with user OAuth consent.
 
 ---
 
 ## Final decision
 
-1. AIB is the authorization and delegated-token broker for KAOS 1.0.
+1. AIB is the authorization and delegated-token broker for KAOS.
 2. AIB is authoritative for KAOS logical resource grants such as Agent-to-MCPServer, Agent-to-ModelAPI, and Agent-to-Agent.
 3. AIB is authoritative for user delegated grants and third-party OAuth sessions.
 4. KAOS remains authoritative for CRDs, topology, resource identity, runtime orchestration, and requested access edges.
@@ -403,9 +405,9 @@ This may be useful for enterprise deployments, but 1.0 benefits from keeping KAO
 10. AIB PermissionSets remain primarily third-party service-scope bundles in the target model.
 11. Do not force MCP tool names, MCP arguments, ModelAPI model allowlists, ModelAPI budgets, or Gateway route rules into AIB PermissionSets as the long-term model.
 12. ModelAPI root resource access may be AIB-managed; ModelAPI internals remain LiteLLM-owned.
-13. AIB returns delegated third-party access tokens through token exchange, but does not become the general issuer of internal KAOS runtime identity/delegation tokens in 1.0.
+13. AIB returns delegated third-party access tokens through token exchange, but does not become the general issuer of internal KAOS runtime identity/delegation tokens by default.
 14. SDK-native AIB calls are the first integration path.
-15. AIB ExtProc is deferred to the GatewayAPI 1.1 resource-boundary extension.
+15. AIB ExtProc belongs to the Gateway resource-boundary profile and is not required for the baseline profile.
 16. AIB does not replace Keycloak/Dex/OIDC for human authentication.
-17. Kubernetes ServiceAccount/SPIFFE workload binding remains deferred from ADR-001.
-18. OPA/Rego and Keycloak Authorization Services integration are deferred by ADR-005.
+17. Kubernetes ServiceAccount/SPIFFE workload binding remains optional advanced/hardened profile work from ADR-001.
+18. OPA/Rego and Keycloak Authorization Services integration remain optional advanced integrations under ADR-005.

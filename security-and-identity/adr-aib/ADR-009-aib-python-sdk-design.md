@@ -1,6 +1,6 @@
 # ADR-009: AIB Python SDK design
 
-**Status**: Proposed.
+**Status**: Proposed
 **Date**: 2026-06-20
 
 ---

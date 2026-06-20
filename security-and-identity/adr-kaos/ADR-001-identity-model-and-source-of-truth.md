@@ -1,6 +1,6 @@
 # ADR-001: Identity model and source of truth
 
-**Status**: Accepted.
+**Status**: Accepted
 
 ---
 
@@ -151,7 +151,7 @@ Keep Agent, MCPServer, and ModelAPI in the target identity model for now.
 Implication:
 
 - Treat all three as KAOS-managed service identities conceptually.
-- ADR-002 keeps Agent and MCPServer enforcement SDK-first for 1.0, and treats ModelAPI root access as AIB-manageable while leaving model/budget internals to LiteLLM.
+- ADR-002 keeps Agent and MCPServer enforcement SDK-native in the baseline profile, and treats ModelAPI root access as AIB-manageable while leaving model/budget internals to LiteLLM.
 
 ### CRD surface
 
@@ -199,7 +199,7 @@ Implication:
 - Grants survive delete/recreate when the resolved logical identity is the same.
 - ServiceAccounts are excluded from initial implementation.
 - Workload verification is deferred.
-- Agent, MCPServer, and ModelAPI remain in the identity target picture. ADR-002 uses those identities for SDK-first Agent/MCPServer enforcement and ModelAPI root access decisions.
+- Agent, MCPServer, and ModelAPI remain in the identity target picture. ADR-002 uses those identities for SDK-native Agent/MCPServer enforcement and ModelAPI root access decisions.
 - Autonomous run identity remains Agent-level plus correlation for now.
 
 ## Follow-up

@@ -73,7 +73,7 @@ The sync service may live in a separate repository, an AIB-adjacent integration 
 
 [ADR-004](./ADR-004-aib-responsibility-boundary.md) establishes that KAOS CRDs define requested access edges, and that AIB may store the broker-side grants and records used for authorization and delegated-token flows.
 
-[ADR-009](../adr-aib/ADR-009-aib-python-sdk-design.md) establishes that SDK/native calls are the first integration path for runtime AIB use.
+[ADR-009](../adr-aib/ADR-009-aib-python-sdk-design.md) establishes that SDK/native calls are the baseline integration path for runtime AIB use.
 
 The remaining architecture question is operational: whether AIB should become a KAOS-managed control-plane dependency, an embedded KAOS component, or an external service with a synchronization bridge.
 
@@ -177,7 +177,7 @@ The Docker Compose setup runs:
 - mock MCP server,
 - agentgateway.
 
-This provides a local AIB end-to-end development topology. ExtProc remains a separate deployment unit and is deferred from the SDK-first baseline by [ADR-002](./ADR-002-enforcement-topology.md).
+This provides a local AIB end-to-end development topology. ExtProc remains a separate deployment unit for the Gateway resource-boundary profile rather than part of the SDK-native baseline described by [ADR-002](./ADR-002-enforcement-topology.md).
 
 ### AIB admin API surfaces useful for synchronization
 
@@ -269,7 +269,7 @@ KAOS Kubernetes API
   -> AIB admin API
 ```
 
-The sync service watches KAOS resources and mirrors desired AIB records. It may be a simple Deployment with Kubernetes watch permissions and AIB admin credentials. A full Kubernetes operator with CRDs and status resources is not required for the initial architecture.
+The sync service watches KAOS resources and mirrors desired AIB records. It may be a simple Deployment with Kubernetes watch permissions and AIB admin credentials. A full Kubernetes operator with CRDs and status resources is not required for the target architecture.
 
 ### Runtime integration
 
@@ -281,7 +281,7 @@ Agent / MCPServer runtime
   -> AIB token exchange / access checks
 ```
 
-ExtProc remains optional and later-stage:
+ExtProc remains optional as part of Gateway resource-boundary deployments:
 
 ```text
 Gateway / ExtProc
@@ -368,4 +368,4 @@ Manual administration is useful for simple or early deployments, but it does not
 9. CRD references are requested access edges, not approved grants.
 10. AIB remains authoritative for user-delegated grants, third-party sessions, token exchange, and target platform/resource grants once the AIB model supports them.
 11. Bootstrap encoding through synthetic services or PermissionSets is allowed only as an explicit temporary compatibility layer.
-12. ExtProc remains optional and later-stage; SDK/native calls remain the initial runtime integration path.
+12. ExtProc remains optional in Gateway resource-boundary deployments; SDK/native calls remain the baseline runtime integration path.

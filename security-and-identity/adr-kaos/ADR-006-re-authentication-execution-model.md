@@ -1,6 +1,6 @@
 # ADR-006: Re-authentication execution model
 
-**Status**: Accepted.
+**Status**: Accepted
 **Date**: 2026-06-20
 
 ---
@@ -11,19 +11,19 @@ Adopt a **fail-with-re-auth-URL-and-retry** model for third-party OAuth2 session
 
 Current AIB does not provide a runtime-created admin approval queue; it provides admin configuration, end-user grant management, third-party OAuth2 sessions, and token exchange.
 
-KAOS 1.0 must treat these outcomes separately:
+The SDK-native baseline must treat these outcomes separately:
 
-| Case | 1.0 behavior |
+| Case | Behavior |
 |---|---|
 | Missing KAOS resource grant | Fail closed with `platform_grant_missing`; no user action URL is returned. |
 | Missing or expired user delegated grant | Fail closed with `user_grant_required`; the user must re-grant through the existing AIB grant UI/API and retry. |
 | Missing/unusable third-party OAuth2 session | Fail with `third_party_reauth_required` and a third-party authorization URL; the user reconnects the service and retries. |
 | Runtime-created admin approval request | Deferred; not implemented in current AIB. |
-| MCP tool/argument approval | Deferred; not modeled in 1.0. |
+| MCP tool/argument approval | Deferred; not modeled in the SDK-native baseline. |
 | A2A task pause/resume via `input-required` | Deferred; KAOS has the state but not the durable resume workflow. |
 | Autonomous run needs a user action | Stop/skip the protected action and record a structured event; do not block indefinitely or auto-grant. |
 
-This keeps 1.0 simple:
+This keeps the model simple:
 
 - no blocking waits,
 - no durable pause/resume stack,
@@ -45,7 +45,7 @@ This keeps 1.0 simple:
 - user-delegated third-party grants,
 - delegated third-party token exchange.
 
-[ADR-005](./ADR-005-authorization-and-policy-model.md) accepts a simple grant-table model for 1.0:
+[ADR-005](./ADR-005-authorization-and-policy-model.md) accepts a simple grant-table model for the SDK-native baseline:
 
 - KAOS CRD references are requested access edges only.
 - AIB owns approved KAOS resource grants.
@@ -62,7 +62,7 @@ This ADR decides what happens operationally when an agent action cannot proceed 
 | Concept | Meaning | Example | Current implementation status |
 |---|---|---|---|
 | Admin/platform configuration | Admin defines agents, services, permission sets, credentials, and signing keys | Admin creates `github-issues-reader` permission set | Implemented by AIB admin APIs |
-| Platform resource grant | Permission for one KAOS logical resource to use another KAOS logical resource | `agent://researcher` may call `mcp://github` | Target 1.0 AIB/KAOS grant model; runtime approval queue not implemented |
+| Platform resource grant | Permission for one KAOS logical resource to use another KAOS logical resource | `agent://researcher` may call `mcp://github` | Target AIB/KAOS grant model; runtime approval queue not implemented |
 | User delegated grant | User allows an agent to use third-party permission sets on their behalf | Alice allows researcher to use a GitHub issues permission set | Implemented by AIB end-user grant APIs/UI and `user_grants` |
 | Third-party OAuth2 session | User has connected a third-party account and AIB stores encrypted access/refresh tokens | Alice connected GitHub through OAuth2 | Implemented by AIB OAuth2 session APIs and `user_sessions` |
 | Runtime human approval | Human approves a specific action or continuation during a run | "Approve sending this email" | Deferred |
@@ -87,7 +87,7 @@ Implication:
 
 - KAOS must not rely on current AIB to create a pending admin approval request when a runtime access edge is missing.
 - Missing platform resource grants should fail closed.
-- Any future admin approval queue would require new durable server-side state, admin APIs, UI, expiry, auditing, and retry/resume semantics.
+- Any admin approval queue would require new durable server-side state, admin APIs, UI, expiry, auditing, and retry/resume semantics.
 
 ### User delegated grants are implemented
 
@@ -184,7 +184,7 @@ deny:
   action: call
 ```
 
-The runtime should not return a user action URL. Current AIB does not implement a pending admin approval request queue for this case. KAOS 1.0 should therefore fail closed and rely on pre-existing approved grants or explicit bootstrap/dev auto-grant behavior.
+The runtime should not return a user action URL. Current AIB does not implement a pending admin approval request queue for this case. The SDK-native baseline should therefore fail closed and rely on pre-existing approved grants or explicit bootstrap/dev auto-grant behavior.
 
 ### Missing or expired user delegated grant
 
@@ -249,7 +249,7 @@ The detailed policy for pausing/resuming autonomous runs is deferred until KAOS 
 
 ---
 
-## A2A `input-required` is not the 1.0 mechanism
+## A2A `input-required` is not the baseline mechanism
 
 Source file:
 
@@ -266,8 +266,8 @@ Relevant facts:
 
 Implication:
 
-- KAOS has a useful lifecycle state for future pause/resume.
-- Treating `input-required` as the 1.0 approval mechanism would require task persistence, resume APIs, approval payloads, UI support, and security context preservation.
+- KAOS has a useful lifecycle state for durable pause/resume.
+- Treating `input-required` as the baseline approval mechanism would require task persistence, resume APIs, approval payloads, UI support, and security context preservation.
 
 ---
 
@@ -287,7 +287,7 @@ Relevant facts:
 Implication:
 
 - Third-party session state must live in AIB grant/session state, not hidden KAOS memory events.
-- Future admin/runtime approval state would need a dedicated durable model.
+- Admin/runtime approval state would need a dedicated durable model.
 
 ---
 
@@ -303,7 +303,7 @@ Rejected. It hides the implemented AIB distinction between `user_grants` and `us
 
 This option lets execution begin when platform/resource access is allowed, but if third-party re-authentication is required, the protected call fails with a structured action URL. After the user completes the flow, the user retries the request or tool call.
 
-Accepted for KAOS 1.0 because it matches current AIB capabilities and avoids building durable pause/resume now.
+Accepted for the SDK-native baseline because it matches current AIB capabilities and avoids building durable pause/resume now.
 
 ### Option C: Pause the A2A task with `input-required`
 
@@ -330,7 +330,7 @@ Rejected as the production/default security behavior. It conflicts with no-permi
 
 ### Negative
 
-- Missing platform resource grants do not get an automatic admin approval request in 1.0.
+- Missing platform resource grants do not get an automatic admin approval request by default.
 - Missing/expired user grants do not get a dedicated URL field from the runtime SDK.
 - Users may need to retry after re-authentication.
 - Long-running tasks cannot yet pause and resume seamlessly around re-authentication.
@@ -339,19 +339,19 @@ Rejected as the production/default security behavior. It conflicts with no-permi
 
 - If clients label every outcome as "approval required", users and operators may misunderstand who must act.
 - If missing grants and missing sessions are collapsed, KAOS may leak third-party session state or show the wrong URL.
-- If future admin approval state is added without durable storage and audit, it may become unreliable or insecure.
+- If admin approval state is added without durable storage and audit, it may become unreliable or insecure.
 
 ---
 
 ## Decision summary
 
-1. KAOS 1.0 separates platform resource grants, user delegated grants, third-party OAuth2 sessions, and runtime human approvals.
+1. The SDK-native baseline separates platform resource grants, user delegated grants, third-party OAuth2 sessions, and runtime human approvals.
 2. Current AIB supports admin configuration, user grants, OAuth2 sessions, and token exchange; it does not currently support runtime-created admin approval requests.
 3. Missing platform resource grants fail closed with `platform_grant_missing`; no user action URL should be returned for that case.
 4. Missing or expired user delegated grants fail with `user_grant_required`; current AIB token exchange does not expose a dedicated grant-renewal URL field.
 5. Missing/unusable third-party OAuth2 sessions use AIB OAuth2 session flow and fail with `third_party_reauth_required` plus `reauth_url`.
 6. Expired third-party access tokens should be refreshed by AIB when a valid refresh token/session exists.
-7. Synchronous requests must not block while waiting for re-authentication or future approval.
+7. Synchronous requests must not block while waiting for re-authentication or additional approval.
 8. A2A `input-required` pause/resume is deferred until KAOS has durable tasks, resume APIs, approval payloads, and UI support.
 9. Runtime human approval for specific tool actions is deferred until KAOS models tool/argument permissions or approval policies explicitly.
 10. Autonomous runs must not wait indefinitely; they should record structured user-action-required events and stop/skip protected actions.

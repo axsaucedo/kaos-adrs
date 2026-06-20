@@ -92,7 +92,7 @@ MCPServer custom code is broader than Agent custom code. MCP runtimes may need t
 | `spec.security.id` omitted | `kaos://{kind}/{namespace}/{name}` |
 | `spec.security.id` provided | `kaos://{kind}/{id}` |
 
-KAOS now needs a way for authenticated request context to survive agent execution, A2A delegation, MCP calls, async tasks, autonomous runs, and future AIB grant/token-exchange flows.
+KAOS needs a way for authenticated request context to survive agent execution, A2A delegation, MCP calls, async tasks, autonomous runs, and AIB grant/token-exchange flows.
 
 Current source behavior:
 
@@ -115,13 +115,13 @@ Gateway/Envoy/AIB ExtProc validates or exchanges tokens and forwards requests up
 
 **Rejected as the only propagation mechanism** because Gateway only sees individual HTTP hops. It does not understand agent run state, A2A delegation semantics, tool intent, or autonomous task correlation unless the application passes that context.
 
-Gateway remains useful as a later resource-boundary enforcement layer; see ADR-002.
+Gateway remains useful as the optional resource-boundary enforcement layer; see ADR-002.
 
 ### Sidecar-only propagation
 
 A sidecar receives local Agent/MCP traffic, validates/exchanges tokens, and forwards requests.
 
-**Rejected for the initial implementation** because sidecars add deployment complexity and still require the Agent runtime to pass user/request context to the sidecar. Sidecars may become useful later for production internal enforcement or egress token injection.
+**Rejected for the initial implementation** because sidecars add deployment complexity and still require the Agent runtime to pass user/request context to the sidecar. Sidecars remain an optional hardening mechanism for production internal enforcement or egress token injection.
 
 ### Minimal context capture only
 
@@ -138,7 +138,7 @@ Capture principal/session context but do not propagate or enforce it.
 - Keeps the first implementation focused on code paths KAOS owns directly.
 - Provides the semantic context that Gateway or sidecars cannot infer.
 - Establishes a reusable SDK boundary that can be contributed upstream and used outside KAOS.
-- Allows Agent and MCPServer security to evolve without mandating Gateway or sidecars in the 1.0 scope.
+- Allows Agent and MCPServer security to evolve without mandating Gateway or sidecars in the baseline profile.
 - Provides the foundation for AIB grant checks, token exchange, user-grant-required responses, third-party re-auth-required responses, and audit metadata.
 
 ### Negative
@@ -152,7 +152,7 @@ Capture principal/session context but do not propagate or enforce it.
 
 - Raw tokens could leak into logs or memory if the SDK boundary is not strict. Mitigation: persist non-secret metadata only and provide explicit redaction helpers.
 - Context propagation could diverge between Agent, A2A, MCP, and ModelAPI if header/claim conventions are not centralized.
-- Treating Gateway as optional in 1.0 means resource-boundary enforcement is weaker until ADR-002's Gateway extension is implemented.
+- Treating Gateway as optional by default means resource-boundary enforcement is weaker unless the Gateway profile is enabled.
 
 ---
 
@@ -167,4 +167,4 @@ Capture principal/session context but do not propagate or enforce it.
    - AIB client hooks.
 2. Define which fields are safe to persist.
 3. Define token redaction and logging rules.
-4. Use ADR-006's fail-with-URL-and-retry behavior for 1.0 consent and re-authentication, while leaving durable pause/resume to future task approval work.
+4. Use ADR-006's fail-with-URL-and-retry behavior for consent and re-authentication in the baseline profile, while leaving durable pause/resume to optional task approval work.

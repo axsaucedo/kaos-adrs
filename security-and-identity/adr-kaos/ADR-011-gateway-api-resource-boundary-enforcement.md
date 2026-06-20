@@ -55,7 +55,7 @@ Pure Gateway + AIB enforcement is possible only for coarse resource-level `requi
 
 ## Context
 
-[ADR-002](./ADR-002-enforcement-topology.md) accepts SDK-first security for 1.0 and defers Gateway API resource-boundary enforcement to a later extension.
+[ADR-002](./ADR-002-enforcement-topology.md) accepts SDK-native security as the baseline profile and Gateway API resource-boundary enforcement as a complementary profile.
 
 [ADR-003](./ADR-003-user-request-context-propagation.md) defines propagated context headers such as:
 
@@ -70,9 +70,9 @@ x-aib-scopes
 authorization
 ```
 
-[ADR-007](./ADR-007-transport-security-and-hardening-baseline.md) defers Gateway + NetworkPolicy boundary hardening from the minimal 1.0 transport baseline.
+[ADR-007](./ADR-007-transport-security-and-hardening-baseline.md) places Gateway + NetworkPolicy boundary hardening in the Gateway resource-boundary profile rather than the minimal transport baseline.
 
-This ADR defines the scope of that Gateway extension and the integration modes KAOS must consider.
+This ADR defines the scope of that Gateway resource-boundary profile and the integration modes KAOS must consider.
 
 ---
 
@@ -124,7 +124,7 @@ Current KAOS Gateway facts:
 
 Implication:
 
-KAOS already has the basic HTTPRoute substrate, but gateway-default resource access requires changes to URL injection/status endpoints and new policy objects or implementation-specific Gateway extensions.
+KAOS already has the basic HTTPRoute substrate, but gateway-default resource access requires changes to URL injection/status endpoints and new policy objects or implementation-specific Gateway policy resources.
 
 ### Current NetworkPolicy support
 
@@ -213,7 +213,7 @@ Current AIB ExtProc behavior has important constraints:
    - It does not inject `x-principal`, `x-actor`, `x-aib-*`, or AIB decision headers.
 
 4. **Body semantics are not inspected**
-   - MCP tool-level and argument-level authorization still require SDK/runtime checks or a future MCP-aware proxy.
+   - MCP tool-level and argument-level authorization still require SDK/runtime checks or an optional MCP-aware proxy.
 
 5. **Gateway API portability varies**
    - Standard `HTTPRoute` covers routing, filters such as URL rewrite and request header modification, backend refs, and timeouts.
@@ -273,7 +273,7 @@ The user-token verification remains AIB's responsibility. AIB should validate th
 
 ### Mode 0: SDK-only direct service mode
 
-Current 1.0 baseline:
+SDK-native baseline profile:
 
 ```text
 Agent -> direct ClusterIP -> MCPServer/ModelAPI/Agent
@@ -285,7 +285,7 @@ Properties:
 - Simple.
 - Works without Gateway or NetworkPolicy.
 - Does not prevent direct ClusterIP bypass.
-- Required for local/dev and initial SDK rollout.
+- Required for local/dev and the baseline profile.
 
 ### Mode 1: Gateway routing only
 
@@ -396,7 +396,7 @@ deny Agent -> Agent direct ClusterIP
 
 Properties:
 
-- This is the first mode that materially reduces direct ClusterIP bypass.
+- This is the Gateway integration mode that materially reduces direct ClusterIP bypass.
 - Depends on CNI NetworkPolicy enforcement.
 - Requires careful labels, namespace selectors, health/probe exceptions, and AIB/Gateway egress rules.
 - Should be opt-in until tested across supported local and production clusters.
@@ -416,7 +416,7 @@ SDK/native semantic checks inside Agent/MCPServer
 
 Properties:
 
-- Strongest Gateway-based KAOS extension.
+- Strongest Gateway-based KAOS profile mode.
 - Default application path is Gateway.
 - Direct ClusterIP application calls are blocked where NetworkPolicy supports it.
 - Gateway handles coarse resource boundary; SDK handles semantics.
@@ -549,9 +549,9 @@ This does not mean keeping all ClusterIP traffic open. The intended target is th
 
 ### Option A: Keep ClusterIP direct access as the only internal mode
 
-Rejected for the Gateway extension.
+Rejected for the Gateway resource-boundary profile.
 
-This keeps the system simple, but it cannot provide a strong resource boundary or bypass prevention. It remains the 1.0 SDK-first baseline and local/dev mode.
+This keeps the system simple, but it cannot provide a strong resource boundary or bypass prevention. It remains the SDK-native baseline profile and local/dev mode.
 
 ### Option B: Gateway routing without NetworkPolicy
 
@@ -575,7 +575,7 @@ Envoy `ext_authz` is the right native contract for route-level allow/deny. AIB s
 
 Rejected as complete enforcement.
 
-Gateway-level `require_access` is appropriate for coarse route/resource access, but Gateway does not understand every application semantic. It cannot decide MCP tool arguments, agent run/session state, or multi-step re-authentication retry behavior without pushing application semantics into the Gateway extension.
+Gateway-level `require_access` is appropriate for coarse route/resource access, but Gateway does not understand every application semantic. It cannot decide MCP tool arguments, agent run/session state, or multi-step re-authentication retry behavior without pushing application semantics into the Gateway layer.
 
 ### Option D: Gateway plus NetworkPolicy plus SDK checks
 
@@ -595,7 +595,7 @@ Sidecars can help for local egress token injection or runtimes that cannot route
 
 ### Positive
 
-- Gives KAOS a clear path from SDK-only enforcement to Gateway-enforced resource boundaries.
+- Shows how the Gateway resource-boundary profile layers on SDK-native enforcement.
 - Makes Gateway the default application access path for protected resources when enabled.
 - Reduces direct ClusterIP bypass when paired with NetworkPolicy.
 - Allows Envoy `ext_authz` to provide fail-closed AIB route authorization where Envoy-compatible Gateway support exists.
@@ -624,7 +624,7 @@ Sidecars can help for local egress token injection or runtimes that cannot route
 
 ## Decision summary
 
-1. Add a Gateway API resource-boundary mode as the next hardening layer after SDK-first security.
+1. Define a Gateway API resource-boundary profile as a complementary layer on top of SDK-native baseline security.
 2. In this mode, protected runtime URLs should use Gateway routes by default instead of direct ClusterIP service URLs.
 3. Gateway routing alone is not strict enforcement; strict mode requires NetworkPolicy bypass prevention where supported.
 4. Gateway should enforce coarse resource boundary, route-level `require_access` where AIB supports it, auth-required policy, token exchange, normalized headers, and audit at the request boundary.
