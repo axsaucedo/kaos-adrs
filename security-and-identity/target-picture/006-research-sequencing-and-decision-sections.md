@@ -179,20 +179,20 @@ Decision output:
 - Required operator/runtime changes.
 - What is explicitly not enforced initially.
 
-### 6. Consent and re-authentication execution model
+### 6. Re-authentication execution model
 
 Core question:
 
-- How should KAOS handle cases where an agent action needs user delegated consent, third-party re-authentication, a missing platform grant, or future runtime human approval?
+- How should KAOS handle cases where an agent action needs a user delegated grant, third-party re-authentication, a missing platform grant, or future runtime human approval?
 
 Sub-questions:
 
 - Which flows need pre-existing platform grants?
-- Which flows should fail with consent or re-auth URL and retry?
+- Which flows should fail with re-auth URL and retry?
 - Is blocking wait acceptable for synchronous chat requests?
 - Can current A2A `input-required` state support pause/resume, or does it need new methods and durable storage?
-- Can KAOS UI/admin UI present consent/re-auth outcomes and support retry reliably?
-- How should multi-agent delegation preserve context after consent/re-auth?
+- Can KAOS UI/admin UI present grant/re-auth outcomes and support retry reliably?
+- How should multi-agent delegation preserve context after grant/re-auth?
 - How should autonomous runs be bounded by run expiry or grant expiry?
 
 Evidence needed:
@@ -330,7 +330,7 @@ The order matters because later decisions depend on earlier ones.
    - Define how permissions, grants, and policies are represented.
    - This depends on the identity model and AIB boundary.
 
-6. **Consent and re-authentication execution model**
+6. **Re-authentication execution model**
    - Decide preflight vs fail/retry vs pause/resume.
    - This depends on authorization model and KAOS task/runtime capabilities.
 

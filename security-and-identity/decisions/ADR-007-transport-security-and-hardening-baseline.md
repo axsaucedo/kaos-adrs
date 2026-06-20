@@ -32,7 +32,7 @@ The 1.0 target should require:
 
 [ADR-005](./ADR-005-authorization-and-policy-model.md) accepts simple AIB grant tables for 1.0 and defers OPA/Rego, Keycloak Authorization Services, and MCP tool/argument policy.
 
-[ADR-006](./ADR-006-approval-and-consent-execution-model.md) accepts fail-closed resource grants and fail-with-URL-and-retry for user consent and third-party re-authentication.
+[ADR-006](./ADR-006-re-authentication-execution-model.md) accepts fail-closed resource grants, user-grant-required outcomes, and fail-with-URL-and-retry for third-party re-authentication.
 
 This ADR decides the baseline hardening model for TLS, network boundaries, and optional network-level hardening layers.
 

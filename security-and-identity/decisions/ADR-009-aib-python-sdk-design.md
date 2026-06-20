@@ -24,7 +24,7 @@ The SDK must not depend on KAOS resource types, KAOS CRDs, KAOS identity formats
 
 ## Context
 
-AIB is useful to agentic runtimes when agents need request context propagation, delegated authorization, third-party OAuth session access, token exchange, and consistent consent/re-authentication handling. Those needs are not unique to KAOS.
+AIB is useful to agentic runtimes when agents need request context propagation, delegated authorization, third-party OAuth session access, token exchange, and consistent grant/re-authentication handling. Those needs are not unique to KAOS.
 
 The SDK should therefore be a general-purpose Python package for agent frameworks, HTTP services, and MCP servers. It should provide primitives usable by:
 
@@ -102,7 +102,7 @@ AIB server interaction API:
 client = aib.Client(...)
 ```
 
-The SDK should expose a small framework-agnostic client surface for access checks, consent/re-authentication handling, and delegated token retrieval. Framework integrations can wrap these calls later, but the core interface should work in plain Python code.
+The SDK should expose a small framework-agnostic client surface for access checks, re-authentication handling, and delegated token retrieval. Framework integrations can wrap these calls later, but the core interface should work in plain Python code.
 
 ---
 
@@ -575,8 +575,6 @@ decision = client.check_access(
 
 if decision.allowed:
     ...
-elif decision.consent_url:
-    ...
 else:
     ...
 ```
@@ -597,7 +595,6 @@ class AccessDecision:
     allowed: bool
     reason: str | None
     grant_id: str | None
-    consent_url: str | None
     reauth_url: str | None
     expires_at: datetime | None
     metadata: dict[str, object]
@@ -607,12 +604,11 @@ Expected exceptions:
 
 ```python
 aib.AccessDenied
-aib.ConsentRequired
 aib.ReauthenticationRequired
 aib.AIBUnavailable
 ```
 
-`ConsentRequired` and `ReauthenticationRequired` should expose the relevant URL and structured decision details so callers can return a retryable response to the user.
+`ReauthenticationRequired` should expose the relevant URL and structured decision details so callers can return a retryable response to the user. Missing or expired user grants should be represented as an access-denied or user-grant-required outcome, because current AIB token exchange does not expose a dedicated grant-renewal URL field.
 
 ### Delegated token retrieval
 
@@ -638,7 +634,7 @@ class TokenResult:
     metadata: dict[str, object]
 ```
 
-`get_token` should return a token only when AIB has a valid grant/session and the current principal/actor context is authorized. If user consent or third-party re-authentication is required, it should raise `ConsentRequired` or `ReauthenticationRequired` with a URL.
+`get_token` should return a token only when AIB has a valid grant/session and the current principal/actor context is authorized. If the user grant is missing or expired, it should return/raise an access-denied or user-grant-required outcome. If third-party re-authentication is required, it should raise `ReauthenticationRequired` with a URL.
 
 ### Token exchange
 
@@ -701,7 +697,7 @@ client.require_access(
 )
 ```
 
-If allowed, the request proceeds. If consent or re-authentication is required, the server returns a structured retryable response containing the URL from the SDK exception. If denied, the server returns an authorization failure.
+If allowed, the request proceeds. If re-authentication is required, the server returns a structured retryable response containing the URL from the SDK exception. If denied, the server returns an authorization failure.
 
 ### Flow 2: agent delegates to another agent
 
@@ -744,7 +740,7 @@ token = client.get_token(
 )
 ```
 
-If the user has not consented or the third-party session has expired, the SDK raises `ConsentRequired` or `ReauthenticationRequired` with a URL. The MCP server returns that structured condition to the agent/user rather than silently failing or trying to refresh credentials itself.
+If the user grant is missing/expired, the SDK returns an access-denied or user-grant-required outcome. If the third-party session is missing or unusable, the SDK raises `ReauthenticationRequired` with a URL. The MCP server returns that structured condition to the agent/user rather than silently failing or trying to refresh credentials itself.
 
 If allowed, the tool uses the returned token for the third-party API call and does not persist it.
 
@@ -761,9 +757,9 @@ client.require_access(
 
 If allowed, the ModelAPI's internal controls still apply. Model allowlists, budgets, provider credentials, and rate limits remain LiteLLM or ModelAPI responsibilities rather than AIB SDK responsibilities.
 
-### Flow 6: consent or re-authentication retry
+### Flow 6: re-authentication retry
 
-When `require_access` or `get_token` raises `ConsentRequired` or `ReauthenticationRequired`, the runtime returns the URL to the user through its normal response channel. After the user completes consent or re-authentication, the same request can be retried with the same logical context and should succeed if AIB now has the required grant/session.
+When `require_access` or `get_token` raises `ReauthenticationRequired`, the runtime returns the URL to the user through its normal response channel. After the user completes re-authentication, the same request can be retried with the same logical context and should succeed if AIB now has the required session.
 
 The SDK should make these outcomes explicit and typed. It should not return success-shaped empty tokens or boolean-only denials for flows that require user action.
 
@@ -795,7 +791,7 @@ The SDK should not:
 - Request propagation is automatic across common FastAPI, httpx, requests, Pydantic AI MCP, and FastMCP paths.
 - `aib.ctx` gives a simple override/inspection point without forcing explicit dependency passing.
 - First trusted servers can generate missing request IDs and enrich context from environment defaults or resolver callbacks.
-- A small `Client`/`AsyncClient` surface covers root access checks, consent/re-authentication outcomes, delegated token retrieval, and token exchange without making the SDK a policy engine.
+- A small `Client`/`AsyncClient` surface covers root access checks, re-authentication outcomes, delegated token retrieval, and token exchange without making the SDK a policy engine.
 - KAOS PAIS can integrate with minimal changes and without littering PAIS code with manual header plumbing.
 - KAOS Agent, MCPServer, and ModelAPI flows can share one runtime SDK contract while keeping KAOS-specific resource IDs opaque.
 
@@ -805,7 +801,7 @@ The SDK should not:
 - Instrumenting both `httpx` and `requests` requires maintaining two client hooks.
 - Frameworks or providers that use other HTTP stacks may require manual `to_headers()` or later provider-specific support.
 - A dict-like `aib.ctx` is ergonomic but must still be request-local through `ContextVar`, not a process-global mutable dictionary.
-- Runtime code must handle typed consent/re-authentication outcomes instead of treating authorization as a boolean-only check.
+- Runtime code must handle typed re-authentication outcomes instead of treating authorization as a boolean-only check.
 
 ### Risks
 
