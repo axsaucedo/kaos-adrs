@@ -452,15 +452,15 @@ Cons:
 
 Best fit:
 
-- KAOS 1.0 target architecture if the host wants simple grants now and optional enterprise policy later.
+- Future refinement after the Option A baseline is proven. This should not be selected as the 1.0 recommendation if it causes the SDK/API boundary to become broader than the current grant checks require.
 
 ---
 
 ## Provisional recommendation
 
-Adopt **Option E: Hybrid grant tables plus future external PDP hooks**.
+Adopt **Option A: Simple AIB grant tables for 1.0**.
 
-This means the actual 1.0 behavior is still **Option A: simple AIB grant tables**. The hybrid part is a design constraint: the SDK, Gateway extension, and AIB APIs should shape authorization input so that OPA/Rego or Keycloak Authorization Services can be added later without changing KAOS logical identities or rewriting the grant model.
+Keep the implementation deliberately simple: explicit requested edges, explicit approved resource grants, and explicit user delegated grants. Do not add a generalized external-PDP envelope, policy plugin boundary, or policy abstraction layer in 1.0 just to prepare for OPA/Rego or Keycloak Authorization Services.
 
 Use:
 
@@ -505,7 +505,7 @@ Use CEL only for:
 - simple built-in checks,
 - implementation internals where AIB already uses it.
 
-Do not make OPA/Rego or Keycloak Authorization Services mandatory in 1.0. Treat them as future optional PDP integrations that can consume the same authorization context.
+Do not make OPA/Rego or Keycloak Authorization Services mandatory in 1.0. Treat them as future optional integrations to reconsider only when simple grants are no longer enough.
 
 ---
 
@@ -515,11 +515,11 @@ Do not make OPA/Rego or Keycloak Authorization Services mandatory in 1.0. Treat 
 
 Recommended answer:
 
-- Yes. Use explicit requested edges, approved resource grants, and user delegated grants. Shape the authorization input so a future external PDP can consume it, but do not require one in 1.0.
+- Yes. Use explicit requested edges, approved resource grants, and user delegated grants. Keep the 1.0 check narrow and direct.
 
 Tradeoff:
 
-- Simple and auditable now, with less expressiveness than OPA/Rego or Keycloak AuthZ until a future PDP integration is added.
+- Simple and auditable, but less expressive than OPA/Rego or Keycloak AuthZ.
 
 ### Q2. Should KAOS CRDs declare requested access only?
 
@@ -603,7 +603,7 @@ Tradeoff:
 
 ## Proposed ADR-005 decision if host agrees
 
-1. KAOS 1.0 authorization is data-first and grant-table-based, with authorization context shaped for future external PDP integrations.
+1. KAOS 1.0 authorization is data-first and grant-table-based.
 2. KAOS CRD references define requested access edges only.
 3. AIB owns approved KAOS resource grants.
 4. AIB owns user-delegated third-party grants through UserGrants and PermissionSets.
@@ -614,6 +614,7 @@ Tradeoff:
 9. ModelAPI internal model/budget/rate authorization remains LiteLLM-owned.
 10. MCP tool/argument-level policy is deferred until KAOS models tool permissions explicitly.
 11. Autonomous run-scoped grants are deferred to the approval/consent execution model.
+12. Future external PDP compatibility must not broaden the 1.0 SDK/API surface beyond what direct grant checks require.
 
 ## Decision status
 
