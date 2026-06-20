@@ -24,9 +24,19 @@ The proposed API should support both:
    - `aib.require_access(...)`
 
 2. **Gateway usage**
-   - Envoy `ext_authz`, Envoy ExtProc authorization mode, Gateway implementation-specific authorization policy, or another fail-closed Gateway integration.
+   - Envoy `ext_authz` / External Authorization gRPC for fail-closed route authorization.
 
 The API must return an authorization decision only. It must not perform third-party token exchange, must not require a live third-party OAuth2 session, and must not return third-party access tokens.
+
+Gateway integration and SDK integration should share one internal AIB domain service, but they should not expose the same wire protocol:
+
+| Caller | Wire protocol | Purpose |
+|---|---|---|
+| SDK/application code | HTTP `POST /api/access/check` | Direct programmatic `check_access` / `require_access` calls |
+| Envoy-compatible Gateway | Envoy `envoy.service.auth.v3.Authorization/Check` (`ext_authz`) | Native fail-closed Gateway allow/deny before backend forwarding |
+| Existing AIB ExtProc | Envoy `envoy.service.ext_proc.v3.ExternalProcessor/Process` (`ext_proc`) | Existing token exchange/header mutation, not the primary authorization contract |
+
+The access-check implementation MUST verify the user subject token as part of the decision. AIB must not treat user identity headers or unauthenticated request metadata as proof of the user unless a separately configured trusted boundary has already authenticated and signed/validated that identity.
 
 ---
 
@@ -120,6 +130,29 @@ return allow/deny
 ```
 
 The current `consent.Service.VerifyAgentAccess(principal, agentID)` verifies that a user has an active grant for an agent. It does not by itself verify a target KAOS resource. Token exchange adds target-service logic by looking up a third-party OAuth2 service through `FindByProtectedResource` and checking permission-set/service coverage before returning a token.
+
+### Current AIB user-token verification building blocks
+
+Source files:
+
+- `agentic-identity-broker/internal/domain/tokenexchange/jwt_validator.go`
+- `agentic-identity-broker/internal/domain/tokenexchange/subject_token.go`
+- `agentic-identity-broker/internal/domain/tokenexchange/service.go`
+- `agentic-identity-broker/examples/config/token-exchange.yaml`
+- `agentic-identity-broker/examples/config/jwt-preauth.yaml`
+
+AIB already has relevant authentication-provider integration points:
+
+- Token exchange validates `subject_token` JWTs through a `JWKSProvider`.
+- Validation checks signature, configured issuer, configured audience, expiration, and not-before where applicable.
+- The expected issuer and JWKS URI are supplied from the upstream OAuth2/OIDC provider configuration.
+- Principal extraction is configurable through CEL, for example `subject_token.sub`, `subject_token.email`, or `subject_token.preferred_username`.
+- Actor/agent extraction is configurable through CEL, for example resolving an upstream client ID from `subject_token.azp` or reading a dedicated agent ID claim.
+- AIB also supports JWT pre-auth for end-user UI/API surfaces, where a trusted reverse proxy, API gateway, or service mesh can provide a JWT header verified with JWKS and expected issuer/audience.
+
+Implication:
+
+The access-check API does not need to invent a new user-authentication mechanism. It should reuse the same JWT validation and CEL extraction infrastructure that token exchange already uses, with configuration pointing at Keycloak, Dex, or another OIDC/OAuth2 provider's issuer and JWKS endpoint. Keycloak/Dex remain the authentication/token issuers; AIB verifies their tokens and uses the resulting principal/actor claims for authorization decisions.
 
 ### Current model gap
 
@@ -228,7 +261,7 @@ Given a platform resource grant for `kaos://agent/ns/researcher -> kaos://mcpser
 
 ## API contract
 
-### Endpoint
+### HTTP endpoint for SDK/application callers
 
 Proposed endpoint:
 
@@ -266,6 +299,70 @@ Fields:
 | `actor` | no | Explicit actor/calling agent if not extracted from token |
 | `action` | no | Requested action; default `access` |
 | `context` | no | Non-secret correlation and route metadata |
+
+### Envoy `ext_authz` endpoint for Gateway callers
+
+Gateway integrations should use Envoy External Authorization rather than trying to make Envoy synthesize the SDK JSON request directly.
+
+The Gateway-facing AIB service should implement:
+
+```protobuf
+// envoy.service.auth.v3
+service Authorization {
+  rpc Check(CheckRequest) returns (CheckResponse);
+}
+```
+
+Actual Envoy Gateway configuration should attach a `SecurityPolicy` with `extAuth.grpc` to the generated `HTTPRoute` and pass:
+
+```yaml
+extAuth:
+  grpc:
+    backendRefs:
+      - group: ""
+        kind: Service
+        name: aib-ext-authz
+        port: 9002
+  headersToExtAuth:
+    - authorization
+    - x-request-id
+  contextExtensions:
+    - name: aib.resource
+      value: kaos://mcpserver/default/github
+    - name: aib.action
+      value: access
+  failOpen: false
+  timeout: 500ms
+  statusOnError: 503
+```
+
+The Gateway adapter maps Envoy `CheckRequest` to the same internal access decision request:
+
+| Access decision field | Envoy `CheckRequest` source |
+|---|---|
+| `subject_token` | `attributes.request.http.headers["authorization"]`, after removing `Bearer ` |
+| `resource` | `context_extensions["aib.resource"]`, derived by KAOS from the target route/backend |
+| `action` | `context_extensions["aib.action"]`, default `access` |
+| `actor` | verified token claim via CEL, or trusted Gateway-provided context/header only if configured |
+| `request_id` | `attributes.request.http.headers["x-request-id"]` |
+| HTTP metadata | `attributes.request.http.method`, `path`, `host`, and selected route metadata |
+
+`allowed: true` maps to an Envoy OK response. `allowed: false` maps to a denied response, normally HTTP 403. Authentication/configuration/system errors map to denied or error responses according to the fail-closed Gateway policy.
+
+### Relationship to existing AIB ExtProc
+
+The existing AIB ExtProc service is also gRPC, but it implements a different Envoy API:
+
+```protobuf
+// envoy.service.ext_proc.v3
+service ExternalProcessor {
+  rpc Process(stream ProcessingRequest) returns (stream ProcessingResponse);
+}
+```
+
+That service is appropriate for token exchange and header mutation. It currently reads `Authorization`, builds an HTTP resource URI from `:scheme`, `:authority`, and `:path`, calls RFC 8693 token exchange, and replaces the `Authorization` header with an exchanged token.
+
+It is not the primary Gateway authorization API because current behavior passes no-Bearer requests through and is token-exchange-oriented. AIB may keep ExtProc for token exchange while adding `ext_authz` for authorization decisions.
 
 ### Response: allowed
 
@@ -332,7 +429,7 @@ configuration_error
 ## Functional requirements
 
 - **FR-001**: AIB MUST expose a standalone access-check API that returns allow/deny decisions without issuing tokens.
-- **FR-002**: The API MUST validate `subject_token` using the same JWT validation infrastructure used by token exchange where applicable.
+- **FR-002**: The API MUST validate `subject_token` using the same JWT validation infrastructure used by token exchange where applicable, including signature, issuer, audience, expiration, and not-before checks.
 - **FR-003**: The API MUST extract principal using configurable CEL expression, aligned with token exchange defaults.
 - **FR-004**: The API MUST extract or accept actor identity using configurable CEL expression and/or explicit request field.
 - **FR-005**: The API MUST validate the caller is authorized to request access decisions.
@@ -353,10 +450,11 @@ configuration_error
 
 - **GW-001**: Gateway integration MUST fail closed when no authenticated subject is available.
 - **GW-002**: Gateway integration MUST not rely on current token-exchange ExtProc no-Bearer pass-through behavior for authorization.
-- **GW-003**: Gateway integration MAY use Envoy `ext_authz`, a new ExtProc authorization mode, or Gateway implementation-specific authorization policy.
+- **GW-003**: Gateway integration SHOULD use Envoy `ext_authz` gRPC as the primary fail-closed Gateway authorization contract.
 - **GW-004**: Gateway integration MUST map route/backend target to the `resource` value sent to AIB deterministically.
 - **GW-005**: Gateway integration MUST reject denied decisions before backend forwarding.
 - **GW-006**: Gateway integration SHOULD propagate safe decision metadata to the backend only when useful and non-sensitive.
+- **GW-007**: Existing AIB ExtProc MAY continue to be used for token exchange/header mutation, but MUST NOT be treated as complete Gateway authorization unless it gains fail-closed authorization semantics.
 
 ---
 
