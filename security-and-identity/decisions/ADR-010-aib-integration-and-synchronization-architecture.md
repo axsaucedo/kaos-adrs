@@ -21,7 +21,7 @@ The decision needs to answer:
 
 1. Is AIB a separately managed third-party service, a KAOS-managed control-plane dependency, or an embedded KAOS component?
 2. Should KAOS install and lifecycle-manage AIB, or only connect to an existing AIB endpoint?
-3. Should KAOS-to-AIB synchronization live inside KAOS or inside AIB?
+3. Should KAOS-to-AIB synchronization live inside KAOS, inside AIB, or in a small external integration service?
 4. What exactly does the synchronization service do beyond copying CRD records?
 5. Which AIB artifacts exist today: Docker images, Kubernetes manifests, Helm chart, migration job, ExtProc image, and local development distribution?
 6. What AIB features need upstream extension before the target architecture is complete?
@@ -205,12 +205,12 @@ Implications:
 
 ## Architecture scope
 
-The proposed synchronization service should be broader than a record copier. It should be a **KAOS AIB Integration Controller** with these capabilities:
+The proposed synchronization service should be broader than a record copier, but it should not become a large KAOS subsystem. It should be a **small external AIB synchronization service** with these capabilities:
 
 1. **Discovery**
    - Watch KAOS Agent, MCPServer, and ModelAPI resources.
    - Discover requested access edges from Agent specs.
-   - Discover AIB endpoint/configuration from KAOS control-plane configuration.
+   - Read AIB endpoint/configuration from its own configuration or from KAOS CLI-generated configuration.
 
 2. **Identity projection**
    - Compute canonical KAOS logical IDs from ADR-001.
@@ -232,7 +232,7 @@ The proposed synchronization service should be broader than a record copier. It 
    - Store resulting client credentials in Kubernetes Secrets for the relevant KAOS workload.
 
 6. **Status and drift reporting**
-   - Surface synchronization state in KAOS status conditions.
+   - Surface synchronization state through service logs, metrics, and optionally KAOS annotations/status integration if explicitly configured.
    - Report AIB unreachable, AIB record drift, missing credentials, stale external IDs, and unsupported requested edges.
    - Avoid silently falling back to insecure behavior when synchronization fails.
 
@@ -243,8 +243,21 @@ The proposed synchronization service should be broader than a record copier. It 
 
 8. **Installation integration**
    - Support connecting to an externally managed AIB.
-   - Support KAOS-managed installation of AIB as an optional control-plane dependency using AIB's Helm chart or rendered manifests.
-   - Keep the sync controller in KAOS because it watches KAOS CRDs and understands KAOS topology.
+   - Do not install or lifecycle-manage AIB from KAOS.
+   - Use KAOS CLI only to simplify KAOS-side AIB configuration, for example with an AIB-enabled flag that injects endpoints, credentials references, runtime env vars, and SDK settings.
+   - Keep synchronization out of KAOS core. The service may live in an AIB-adjacent or separate integration repository because it needs KAOS CRD knowledge but should not make KAOS own AIB's lifecycle.
+
+### What "controller" means here
+
+In Kubernetes language, a controller is any loop that watches desired state and reconciles actual state. It does not necessarily mean a full Kubebuilder/operator project, a new CRD, or code embedded in the KAOS operator.
+
+For this ADR, the preferred initial shape is a lightweight external synchronization service:
+
+```text
+watch/list KAOS resources -> compute AIB desired records -> call AIB admin APIs -> report drift/status
+```
+
+It can be implemented in Go, Python, or another language with Kubernetes watch support. A Go controller-runtime implementation is possible, but not required. The important property is reconciliation behavior, not the packaging style.
 
 ---
 
@@ -252,7 +265,7 @@ The proposed synchronization service should be broader than a record copier. It 
 
 ### Option A: Externally managed AIB only
 
-KAOS would require an existing AIB endpoint and credentials. KAOS would not install AIB.
+KAOS would require an existing AIB endpoint and credentials. KAOS would not install AIB. AIB would be installed through its own Helm chart or another AIB-owned distribution path.
 
 Pros:
 
@@ -265,28 +278,47 @@ Cons:
 - Harder local onboarding.
 - KAOS cannot provide a turnkey secure deployment.
 - Users must separately install/configure AIB, database, keys, public URLs, and admin auth.
-- KAOS still needs a sync controller to mirror CRDs into AIB.
+- KAOS still needs configuration hooks for SDK/runtime integration.
+- A separate sync service is still needed if automatic CRD-to-AIB projection is desired.
 
-### Option B: KAOS-managed AIB as an optional control-plane dependency
+### Option B: KAOS CLI-assisted external AIB integration
 
-KAOS can install and manage AIB when enabled, while still allowing an external AIB endpoint.
+KAOS would not install AIB, but the KAOS CLI could provide an AIB-enabled installation/configuration path. For example, `kaos system install --aib-enabled` could configure KAOS runtimes, operator settings, Secrets references, and SDK environment variables to point at an externally installed AIB.
 
 Pros:
 
-- Best fit for KAOS alpha and self-contained demos.
-- Mirrors the KAOS pattern of installing platform dependencies where useful.
-- Allows the operator/CLI to produce a coherent AIB configuration for Agents, MCPServers, and ModelAPIs.
-- Keeps the synchronization controller in KAOS where CRD topology is available.
-- Still supports production deployments that point to an externally managed AIB.
+- Keeps AIB lifecycle outside KAOS.
+- Preserves a simple KAOS user experience.
+- Makes AIB integration discoverable and repeatable.
+- Avoids vendoring the AIB chart or coupling KAOS releases to AIB releases.
+- Matches the way KAOS should integrate with other externally managed platform dependencies.
 
 Cons:
 
-- KAOS takes on lifecycle complexity for an external project.
-- Requires version compatibility management between KAOS and AIB.
-- Requires a production posture for storage, keys, admin auth, and upgrades.
-- May duplicate work if AIB later ships its own Kubernetes operator.
+- Users still need to install AIB separately.
+- The CLI must validate required endpoint and credentials configuration.
+- The CLI must avoid implying that `--aib-enabled` installs AIB.
 
-### Option C: Embed synchronization into AIB
+### Option C: External AIB synchronization service
+
+An external service would watch KAOS CRDs and call AIB admin APIs. It may live in a separate repository or an AIB-adjacent integration repository.
+
+Pros:
+
+- Keeps KAOS core simple.
+- Avoids embedding AIB-specific reconciliation logic in the KAOS operator.
+- Can evolve independently from KAOS release cadence.
+- Can be deployed only by users who want automatic synchronization.
+- Still allows manual AIB administration for simpler deployments.
+
+Cons:
+
+- Adds another component for users who want full automation.
+- Needs Kubernetes API access and AIB admin credentials.
+- Needs version compatibility with both KAOS CRDs and AIB APIs.
+- Status integration into KAOS is weaker unless explicitly added.
+
+### Option D: Embed synchronization into AIB
 
 AIB would include a Kubernetes watcher or plugin that watches KAOS CRDs directly.
 
@@ -302,21 +334,22 @@ Cons:
 - Requires AIB to understand KAOS topology, status, and lifecycle semantics.
 - Conflicts with ADR-004's boundary: KAOS owns resource identity and topology.
 
-### Option D: Build a separate standalone synchronization service outside both KAOS and AIB
+### Option E: Build synchronization into the KAOS operator
 
-A third service would watch KAOS CRDs and call AIB.
+The KAOS operator would watch KAOS resources and call AIB admin APIs directly.
 
 Pros:
 
-- Decoupled deployable unit.
-- Could be reused outside the KAOS operator if it only depends on Kubernetes APIs and AIB APIs.
+- Strong status integration into KAOS resources.
+- No additional sync Deployment.
+- Direct access to KAOS reconciliation context.
 
 Cons:
 
-- Adds another lifecycle component without strong benefit.
-- Splits status ownership away from the KAOS operator/control plane.
-- Still needs KAOS API knowledge and AIB admin credentials.
-- Harder to provide a simple KAOS user experience.
+- Makes KAOS core own AIB-specific lifecycle and drift behavior.
+- Couples the KAOS operator to AIB API availability and versioning.
+- Increases operator complexity for an optional third-party integration.
+- Makes it harder to use AIB as a separately managed platform service.
 
 ---
 
@@ -326,17 +359,30 @@ Cons:
 
 AIB is closer to Keycloak than to a library: it has server ports, storage, keys, admin APIs, end-user APIs, optional ingress, and migrations. Treating it as a deployed service is correct.
 
-The open question is not whether AIB is deployable, but whether KAOS should install it by default, optionally, or never.
+The open question is not whether AIB is deployable, but whether KAOS should own its deployment. The proposed answer is no: AIB should be installed through AIB's own Helm chart or another external platform path, while KAOS only consumes its endpoints and credentials.
 
 ### Synchronization ownership
 
-The synchronization logic is KAOS-specific because it derives identities and requested edges from KAOS CRDs. It should not be embedded into AIB unless AIB intentionally becomes KAOS-aware, which would reduce its value as a generic agent identity broker.
+The synchronization logic is KAOS-specific because it derives identities and requested edges from KAOS CRDs. However, that does not mean it must live in KAOS core. The preferred split is:
+
+```text
+KAOS CLI/runtime/operator:
+  know how to use an AIB endpoint when configured
+
+external sync service:
+  knows both KAOS CRDs and AIB admin APIs
+
+AIB:
+  remains the broker and grant/token authority
+```
+
+This keeps KAOS from lifecycle-managing AIB and keeps AIB from becoming KAOS-specific.
 
 ### Current AIB model gap
 
 AIB can represent Agents, PermissionSets, third-party services, user grants, sessions, token exchange, and credentials. It does not yet provide the target KAOS platform/resource grant model.
 
-Therefore the sync controller has two modes:
+Therefore the sync service has two modes:
 
 ```text
 target mode:
@@ -348,15 +394,16 @@ bootstrap mode:
 
 Bootstrap mode must remain explicit and temporary.
 
-### Installation modes
+### Installation and integration modes
 
-KAOS should not force one operational model. The integration should support:
+KAOS should not install AIB. The integration should support:
 
 | Mode | Description |
 |---|---|
-| External AIB | KAOS points to an existing AIB endpoint and credentials |
-| KAOS-managed AIB | KAOS installs AIB into the KAOS control plane using configured image/chart values |
-| Development AIB | KAOS or developers use local compose/Helm artifacts for testing |
+| External AIB | AIB is installed externally, typically through the AIB Helm chart |
+| CLI-assisted KAOS config | KAOS CLI enables KAOS-side AIB endpoint, credentials, and runtime settings |
+| External sync service | Optional service watches KAOS CRDs and mirrors records into AIB |
+| Development AIB | Developers use AIB compose/Helm artifacts for local testing |
 
 ### Security posture
 
@@ -372,7 +419,7 @@ AIB installation is not only a Deployment. Production integration requires:
 - observability and audit events,
 - backup/restore posture for token-vault state.
 
-If KAOS installs AIB, KAOS must expose these as explicit configuration rather than hiding them behind insecure defaults.
+Because KAOS should not install AIB, these remain AIB installation responsibilities. KAOS documentation and CLI validation should still make the required external AIB configuration explicit so users do not accidentally point KAOS at an insecure evaluation deployment.
 
 ---
 
@@ -381,16 +428,15 @@ If KAOS installs AIB, KAOS must expose these as explicit configuration rather th
 Proposed target recommendation:
 
 1. Treat AIB as a **deployed broker service**, not as a library and not as a Keycloak replacement.
-2. Support two AIB deployment modes:
-   - **external AIB**, where KAOS connects to an existing AIB endpoint;
-   - **KAOS-managed AIB**, where KAOS installs AIB as an optional control-plane dependency.
-3. Place the **KAOS AIB Integration Controller** in KAOS, not inside AIB.
-4. Make the integration controller responsible for identity projection, requested-edge projection, bootstrap PermissionSet/service encoding, credentials reconciliation, status reporting, and drift detection.
-5. Do not let CRD references auto-create approved grants.
-6. Keep AIB as the authoritative broker for user-delegated grants, third-party sessions, token exchange, and target platform/resource grants once the AIB model supports them.
-7. Use AIB's existing Helm chart as the initial managed-installation substrate, but do not assume public images are available until image publication is confirmed.
-8. Keep ExtProc optional and later-stage; SDK/native calls remain the initial path from ADR-002 and ADR-009.
-9. Treat sync service behavior as part of the KAOS control plane, with status conditions and explicit failure modes.
+2. Do **not** install or lifecycle-manage AIB from KAOS.
+3. Require AIB to be installed externally, normally through the AIB Helm chart or an AIB-owned distribution path.
+4. Add KAOS CLI/configuration support for AIB integration, for example an AIB-enabled flag that wires KAOS runtime/operator settings to an existing AIB.
+5. Keep automatic synchronization outside KAOS core as a lightweight external sync service, potentially in a separate or AIB-adjacent repository.
+6. Make the external sync service responsible for identity projection, requested-edge projection, bootstrap PermissionSet/service encoding, credentials reconciliation, status reporting, and drift detection.
+7. Do not let CRD references auto-create approved grants.
+8. Keep AIB as the authoritative broker for user-delegated grants, third-party sessions, token exchange, and target platform/resource grants once the AIB model supports them.
+9. Do not assume public images are available until image publication is confirmed; external AIB installation must provide image repository/tag configuration as needed.
+10. Keep ExtProc optional and later-stage; SDK/native calls remain the initial path from ADR-002 and ADR-009.
 
 ---
 
@@ -401,14 +447,24 @@ The initial implementation plan should likely introduce:
 1. A KAOS-level AIB integration configuration, for example:
 
    ```text
-   security.aib.mode: disabled | external | managed
+   security.aib.enabled: true | false
    security.aib.baseURL
    security.aib.adminURL
    security.aib.adminCredentialsSecretRef
-   security.aib.install.chart/image settings
    ```
 
-2. A KAOS AIB sync/integration controller that watches:
+2. A KAOS CLI flag/config path such as:
+
+   ```text
+   kaos system install --aib-enabled \
+     --aib-base-url ... \
+     --aib-admin-url ... \
+     --aib-admin-credentials-secret ...
+   ```
+
+   This should configure KAOS to use AIB, not install AIB.
+
+3. An optional external AIB sync service that watches:
 
    ```text
    Agent
@@ -416,7 +472,7 @@ The initial implementation plan should likely introduce:
    ModelAPI
    ```
 
-3. Deterministic external IDs:
+4. Deterministic external IDs:
 
    ```text
    kaos://agent/<namespace>/<name>
@@ -424,7 +480,7 @@ The initial implementation plan should likely introduce:
    kaos://modelapi/<namespace>/<name>
    ```
 
-4. Status conditions on KAOS resources or a dedicated integration status object:
+5. Sync service status through logs/metrics and optional Kubernetes status integration:
 
    ```text
    AIBSynced
@@ -434,36 +490,36 @@ The initial implementation plan should likely introduce:
    AIBUnsupportedGrantModel
    ```
 
-5. Explicit bootstrap-mode documentation if using current AIB PermissionSets to encode KAOS resource access.
+6. Explicit bootstrap-mode documentation if using current AIB PermissionSets to encode KAOS resource access.
 
-6. A later migration path from bootstrap encoding to first-class AIB platform/resource grants.
+7. A later migration path from bootstrap encoding to first-class AIB platform/resource grants.
 
 ---
 
 ## Host questions to answer before acceptance
 
-1. Should KAOS **install AIB by default when security is enabled**, or should it only install AIB when explicitly requested?
-2. Should the KAOS-managed AIB installation reuse the upstream AIB Helm chart directly, vendor it, render it through the KAOS operator, or create a dedicated KAOS chart dependency?
-3. Are public AIB images expected to exist, or should KAOS require image repository configuration for every managed install?
-4. Should the AIB sync controller be part of the existing KAOS operator binary, or a separate controller Deployment managed by the operator?
-5. Should KAOS introduce a first-class CRD such as `AIBIntegration`, `SecurityIntegration`, or `IdentityBroker`, or should this remain Helm/CLI configuration only?
-6. In bootstrap mode, are synthetic internal services and PermissionSets acceptable, or should KAOS wait for first-class AIB platform/resource grants?
-7. Should KAOS manage AIB agent client credential generation and rotation, or should credentials remain an external admin responsibility?
-8. Should KAOS expose AIB admin/end-user URLs through its Gateway installation, or should AIB ingress/gateway routes remain independently configured?
-9. What is the minimum production posture for KAOS-managed AIB: PostgreSQL required, memory forbidden, admin JWT required, encryption key required, backups required?
-10. Should ExtProc be packaged with managed AIB immediately, or only enabled when Gateway/resource-boundary enforcement is enabled later?
+1. Should the accepted decision say KAOS **never installs AIB**, and only provides CLI/runtime configuration for an externally installed AIB?
+2. Should `kaos system install --aib-enabled` be the primary UX for enabling KAOS-side AIB integration?
+3. Which AIB values should the KAOS CLI require: base URL, admin URL, admin credentials Secret, token-exchange audience, JWKS/issuer, runtime env vars, or SDK settings?
+4. Should the synchronization service live in an AIB-adjacent repository, a standalone KAOS/AIB integration repository, or remain only as documented sample code initially?
+5. Should the synchronization service be a simple Deployment with Kubernetes watch permissions, or a full Kubernetes operator with its own CRDs and status resources?
+6. Should sync status be written back to KAOS resource annotations/status, or should logs/metrics be enough initially?
+7. In bootstrap mode, are synthetic internal services and PermissionSets acceptable, or should KAOS wait for first-class AIB platform/resource grants?
+8. Should the external sync service manage AIB agent client credential generation and rotation, or should credentials remain an external admin responsibility?
+9. Should AIB admin/end-user URLs remain independently configured through AIB's Helm chart/Ingress, rather than through KAOS Gateway?
+10. Should ExtProc stay out of scope until Gateway/resource-boundary enforcement is enabled later?
 
 ---
 
 ## Deferred items
 
-- Exact KAOS CRD/API shape for configuring AIB.
-- Exact operator implementation plan.
+- Exact KAOS CLI/config shape for enabling AIB.
+- Exact external sync service implementation plan.
 - Exact AIB admin authentication mechanism for KAOS sync.
 - Public image coordinates and release compatibility matrix.
 - Bootstrap PermissionSet naming convention.
 - Migration from bootstrap encoding to first-class AIB platform/resource grants.
-- Whether a future AIB Kubernetes operator should replace KAOS-managed Helm installation.
+- Whether the external sync service should be a full Kubernetes operator or a simpler Deployment with watch permissions.
 - Whether AIB should upstream a generic Kubernetes sync plugin independent of KAOS.
 
 ---
