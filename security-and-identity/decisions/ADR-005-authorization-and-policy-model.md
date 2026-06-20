@@ -1,6 +1,6 @@
 # ADR-005: Authorization and policy model
 
-**Status**: Proposed. Requires host decisions before acceptance.
+**Status**: Accepted.
 **Date**: 2026-06-20
 
 ---
@@ -456,7 +456,7 @@ Best fit:
 
 ---
 
-## Provisional recommendation
+## Decision
 
 Adopt **Option A: Simple AIB grant tables for 1.0**.
 
@@ -509,7 +509,7 @@ Do not make OPA/Rego or Keycloak Authorization Services mandatory in 1.0. Treat 
 
 ---
 
-## Host questions required to finalize ADR-005
+## Host questions resolved for ADR-005
 
 ### Q1. Should the 1.0 authorization model be grant-table/data-first rather than policy-language-first?
 
@@ -601,7 +601,7 @@ Tradeoff:
 
 ---
 
-## Proposed ADR-005 decision if host agrees
+## Accepted ADR-005 decision
 
 1. KAOS 1.0 authorization is data-first and grant-table-based.
 2. KAOS CRD references define requested access edges only.
@@ -618,4 +618,4 @@ Tradeoff:
 
 ## Decision status
 
-Awaiting host answers.
+Accepted.
