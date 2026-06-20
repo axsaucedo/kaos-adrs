@@ -5,6 +5,59 @@
 
 ---
 
+## Decision
+
+Adopt **Option A: Simple AIB grant tables for 1.0**.
+
+Keep the implementation deliberately simple: explicit requested edges, explicit approved resource grants, and explicit user delegated grants. Do not add a generalized external-PDP envelope, policy plugin boundary, or policy abstraction layer in 1.0 just to prepare for OPA/Rego or Keycloak Authorization Services.
+
+Use:
+
+| Authorization domain | 1.0 model |
+|---|---|
+| Agent -> MCPServer | AIB resource grant |
+| Agent -> ModelAPI root access | AIB resource grant |
+| Agent -> Agent delegation | AIB resource grant |
+| User -> Agent third-party delegation | AIB UserGrant + PermissionSet |
+| MCP tool-level auth | Deferred; future CRD/schema model required |
+| MCP argument-level auth | Deferred; future policy/approval model required |
+| ModelAPI model allowlist/budget/rate limit | LiteLLM |
+| Gateway route auth | GatewayAPI 1.1 + AIB resource grant |
+| Human login/groups/roles | Keycloak/Dex/OIDC |
+| Complex enterprise policy | Future OPA/Rego or Keycloak AuthZ integration |
+
+Policy should be represented as data first:
+
+```text
+requested edge:
+  source: kaos://agent/researcher
+  target: kaos://mcpserver/github
+  action: call
+
+approved resource grant:
+  source: kaos://agent/researcher
+  target: kaos://mcpserver/github
+  action: call
+  status: approved
+
+delegated user grant:
+  principal: keycloak://kaos/alice
+  agent: kaos://agent/researcher
+  permission_set: github-issues-reader
+  valid_until: ...
+```
+
+Use CEL only for:
+
+- claim extraction,
+- token claim shaping,
+- simple built-in checks,
+- implementation internals where AIB already uses it.
+
+Do not make OPA/Rego or Keycloak Authorization Services mandatory in 1.0. Treat them as future optional integrations to reconsider only when simple grants are no longer enough.
+
+---
+
 ## Context
 
 [ADR-001](./ADR-001-identity-model-and-source-of-truth.md) defines KAOS logical identities.
@@ -451,59 +504,6 @@ Best fit:
 
 ---
 
-## Decision
-
-Adopt **Option A: Simple AIB grant tables for 1.0**.
-
-Keep the implementation deliberately simple: explicit requested edges, explicit approved resource grants, and explicit user delegated grants. Do not add a generalized external-PDP envelope, policy plugin boundary, or policy abstraction layer in 1.0 just to prepare for OPA/Rego or Keycloak Authorization Services.
-
-Use:
-
-| Authorization domain | 1.0 model |
-|---|---|
-| Agent -> MCPServer | AIB resource grant |
-| Agent -> ModelAPI root access | AIB resource grant |
-| Agent -> Agent delegation | AIB resource grant |
-| User -> Agent third-party delegation | AIB UserGrant + PermissionSet |
-| MCP tool-level auth | Deferred; future CRD/schema model required |
-| MCP argument-level auth | Deferred; future policy/approval model required |
-| ModelAPI model allowlist/budget/rate limit | LiteLLM |
-| Gateway route auth | GatewayAPI 1.1 + AIB resource grant |
-| Human login/groups/roles | Keycloak/Dex/OIDC |
-| Complex enterprise policy | Future OPA/Rego or Keycloak AuthZ integration |
-
-Policy should be represented as data first:
-
-```text
-requested edge:
-  source: kaos://agent/researcher
-  target: kaos://mcpserver/github
-  action: call
-
-approved resource grant:
-  source: kaos://agent/researcher
-  target: kaos://mcpserver/github
-  action: call
-  status: approved
-
-delegated user grant:
-  principal: keycloak://kaos/alice
-  agent: kaos://agent/researcher
-  permission_set: github-issues-reader
-  valid_until: ...
-```
-
-Use CEL only for:
-
-- claim extraction,
-- token claim shaping,
-- simple built-in checks,
-- implementation internals where AIB already uses it.
-
-Do not make OPA/Rego or Keycloak Authorization Services mandatory in 1.0. Treat them as future optional integrations to reconsider only when simple grants are no longer enough.
-
----
-
 ## Decision summary
 
 1. KAOS 1.0 authorization is data-first and grant-table-based.
@@ -518,4 +518,3 @@ Do not make OPA/Rego or Keycloak Authorization Services mandatory in 1.0. Treat 
 10. MCP tool/argument-level policy is deferred until KAOS models tool permissions explicitly.
 11. Autonomous run-scoped grants are deferred to the approval/consent execution model.
 12. Future external PDP compatibility must not broaden the 1.0 SDK/API surface beyond what direct grant checks require.
-

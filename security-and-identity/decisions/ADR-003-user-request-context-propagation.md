@@ -2,31 +2,6 @@
 
 **Status**: Accepted
 **Date**: 2026-06-19
-
----
-
-## Context
-
-[ADR-001](./ADR-001-identity-model-and-source-of-truth.md) defines stable KAOS security identities through `spec.security.id`, resolving to:
-
-| Case | Resolved identity |
-|---|---|
-| `spec.security.id` omitted | `kaos://{kind}/{namespace}/{name}` |
-| `spec.security.id` provided | `kaos://{kind}/{id}` |
-
-KAOS now needs a way for authenticated request context to survive agent execution, A2A delegation, MCP calls, async tasks, autonomous runs, and future AIB approval/token-exchange flows.
-
-Current source behavior:
-
-- Agent `/v1/chat/completions` reads `X-Session-ID` and OpenTelemetry headers, but does not extract user principal, authorization token, scopes, approval context, or delegation chain.
-- Memory currently records static actor values such as `app_name="agent"` and `user_id="user"`.
-- `AgentDeps` contains only `session_id` and `memory`.
-- A2A `RemoteAgent` injects tracing headers only and sends metadata `{"delegation": true}`.
-- Agent-to-MCP uses `MCPServerStreamableHTTP(mcp_url)` with no headers or dynamic per-request context.
-- Startup autonomous runs are created from `AUTONOMOUS_GOAL` with metadata `{"trigger":"startup"}` and no user request context.
-
-This means KAOS currently has session/correlation context, not security context.
-
 ---
 
 ## Decision
@@ -105,6 +80,30 @@ MCPServer custom code is broader than Agent custom code. MCP runtimes may need t
 - authorize tool calls against scopes/grants,
 - call AIB for token exchange or approval checks,
 - expose delegated third-party tokens safely to tool code.
+
+---
+
+## Context
+
+[ADR-001](./ADR-001-identity-model-and-source-of-truth.md) defines stable KAOS security identities through `spec.security.id`, resolving to:
+
+| Case | Resolved identity |
+|---|---|
+| `spec.security.id` omitted | `kaos://{kind}/{namespace}/{name}` |
+| `spec.security.id` provided | `kaos://{kind}/{id}` |
+
+KAOS now needs a way for authenticated request context to survive agent execution, A2A delegation, MCP calls, async tasks, autonomous runs, and future AIB approval/token-exchange flows.
+
+Current source behavior:
+
+- Agent `/v1/chat/completions` reads `X-Session-ID` and OpenTelemetry headers, but does not extract user principal, authorization token, scopes, approval context, or delegation chain.
+- Memory currently records static actor values such as `app_name="agent"` and `user_id="user"`.
+- `AgentDeps` contains only `session_id` and `memory`.
+- A2A `RemoteAgent` injects tracing headers only and sends metadata `{"delegation": true}`.
+- Agent-to-MCP uses `MCPServerStreamableHTTP(mcp_url)` with no headers or dynamic per-request context.
+- Startup autonomous runs are created from `AUTONOMOUS_GOAL` with metadata `{"trigger":"startup"}` and no user request context.
+
+This means KAOS currently has session/correlation context, not security context.
 
 ---
 

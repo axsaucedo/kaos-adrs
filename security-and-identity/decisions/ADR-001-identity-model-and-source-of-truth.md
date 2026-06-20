@@ -1,8 +1,97 @@
 # ADR-001: Identity model and source of truth
 
-## Status
+**Status**: Accepted.
 
-Accepted.
+---
+
+## Decision
+
+Use a first-class, user-configurable KAOS security identity through `spec.security.id`, with a simple namespace/name default when no explicit ID is provided.
+
+Resolved identity format:
+
+| Case | Resolved external identity |
+|---|---|
+| `spec.security.id` omitted | `kaos://{kind}/{namespace}/{name}` |
+| `spec.security.id` provided | `kaos://{kind}/{id}` |
+
+Examples:
+
+```yaml
+# Default identity
+apiVersion: kaos.tools/v1alpha1
+kind: Agent
+metadata:
+  namespace: default
+  name: researcher
+```
+
+resolves to:
+
+```text
+kaos://agent/default/researcher
+```
+
+```yaml
+# Explicit stable identity
+apiVersion: kaos.tools/v1alpha1
+kind: Agent
+metadata:
+  namespace: staging
+  name: researcher-v2
+spec:
+  security:
+    id: researcher
+```
+
+resolves to:
+
+```text
+kaos://agent/researcher
+```
+
+This allows users to keep the default Kubernetes namespace/name identity when they do not care about a separate stable security identity, while also allowing namespace-independent grant continuity when `spec.security.id` is explicitly set.
+
+Target CRD model:
+
+```yaml
+spec:
+  security:
+    id: researcher
+```
+
+External AIB identity:
+
+```text
+kaos://agent/researcher
+```
+
+Default if omitted:
+
+```text
+kaos://agent/{namespace}/{name}
+```
+
+This gives:
+
+- simple defaults,
+- user-controlled continuity,
+- namespace-independent identity when desired,
+- grant survival across delete/recreate,
+- human-readable IDs,
+- a clean value for AIB `external_id`.
+
+Explicit `spec.security.id` values should be unique per resource kind within a KAOS cluster unless a future shared-identity/adoption feature is explicitly introduced.
+
+If users want the same logical identity across namespaces, that means they are intentionally representing the same security identity. The initial implementation should prevent accidental active duplicates and only allow safe adoption when the previous resource no longer exists.
+
+This matches:
+
+- grant survival,
+- no cluster identity for now,
+- first-class spec fields,
+- AIB `external_id` mapping,
+- the requirement that users may intentionally reuse the same logical identifier across namespaces.
 
 ## Context
 
@@ -100,95 +189,6 @@ Implication:
 
 - Autonomous runs use Agent identity plus run/session correlation initially.
 - Run-bound grants or run-scoped identities are deferred beyond the ADR-006 approval/consent model.
-
-## Decision
-
-Use a first-class, user-configurable KAOS security identity through `spec.security.id`, with a simple namespace/name default when no explicit ID is provided.
-
-Resolved identity format:
-
-| Case | Resolved external identity |
-|---|---|
-| `spec.security.id` omitted | `kaos://{kind}/{namespace}/{name}` |
-| `spec.security.id` provided | `kaos://{kind}/{id}` |
-
-Examples:
-
-```yaml
-# Default identity
-apiVersion: kaos.tools/v1alpha1
-kind: Agent
-metadata:
-  namespace: default
-  name: researcher
-```
-
-resolves to:
-
-```text
-kaos://agent/default/researcher
-```
-
-```yaml
-# Explicit stable identity
-apiVersion: kaos.tools/v1alpha1
-kind: Agent
-metadata:
-  namespace: staging
-  name: researcher-v2
-spec:
-  security:
-    id: researcher
-```
-
-resolves to:
-
-```text
-kaos://agent/researcher
-```
-
-This allows users to keep the default Kubernetes namespace/name identity when they do not care about a separate stable security identity, while also allowing namespace-independent grant continuity when `spec.security.id` is explicitly set.
-
-Target CRD model:
-
-```yaml
-spec:
-  security:
-    id: researcher
-```
-
-External AIB identity:
-
-```text
-kaos://agent/researcher
-```
-
-Default if omitted:
-
-```text
-kaos://agent/{namespace}/{name}
-```
-
-This gives:
-
-- simple defaults,
-- user-controlled continuity,
-- namespace-independent identity when desired,
-- grant survival across delete/recreate,
-- human-readable IDs,
-- a clean value for AIB `external_id`.
-
-Explicit `spec.security.id` values should be unique per resource kind within a KAOS cluster unless a future shared-identity/adoption feature is explicitly introduced.
-
-If users want the same logical identity across namespaces, that means they are intentionally representing the same security identity. The initial implementation should prevent accidental active duplicates and only allow safe adoption when the previous resource no longer exists.
-
-This matches:
-
-- grant survival,
-- no cluster identity for now,
-- first-class spec fields,
-- AIB `external_id` mapping,
-- the requirement that users may intentionally reuse the same logical identifier across namespaces.
 
 ## Consequences
 

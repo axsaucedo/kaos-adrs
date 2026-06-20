@@ -1,7 +1,19 @@
 # ADR-009: Upstream contribution scope
 
-**Status**: Accepted.
+**Status**: Proposed.
 **Date**: 2026-06-20
+
+---
+
+## Decision
+
+Proposed decision: adopt a **split upstream model**:
+
+1. **Contribute generic broker capabilities upstream to AIB** when they are useful for agentic runtimes beyond KAOS.
+2. **Keep KAOS-specific adapters in KAOS** when they depend on KAOS CRDs, Kubernetes reconciliation, Gateway route generation, Helm chart behavior, or KAOS runtime conventions.
+3. **Do not move responsibilities into AIB** when a mature component already owns the concern, such as IdP/OIDC for human authentication, LiteLLM for model internals, Gateway/NetworkPolicy for traffic boundaries, or service mesh/SPIFFE for workload identity.
+
+The upstream boundary should optimize for reuse without blocking KAOS delivery. KAOS can implement a thin local integration first, then upstream generic pieces once the contract is proven.
 
 ---
 
@@ -16,18 +28,6 @@ ADR-001 through ADR-008 establish a layered KAOS security model:
 - OPA, Keycloak Authorization Services, cert-manager, native TLS, SPIFFE, and service mesh remain optional/future integrations in their natural domains.
 
 That boundary creates a contribution question: KAOS should not permanently fork generic agent-identity-broker capabilities, but it also should not upstream KAOS-specific CRD, operator, or deployment behavior into AIB.
-
----
-
-## Decision
-
-Adopt a **split upstream model**:
-
-1. **Contribute generic broker capabilities upstream to AIB** when they are useful for agentic runtimes beyond KAOS.
-2. **Keep KAOS-specific adapters in KAOS** when they depend on KAOS CRDs, Kubernetes reconciliation, Gateway route generation, Helm chart behavior, or KAOS runtime conventions.
-3. **Do not move responsibilities into AIB** when a mature component already owns the concern, such as IdP/OIDC for human authentication, LiteLLM for model internals, Gateway/NetworkPolicy for traffic boundaries, or service mesh/SPIFFE for workload identity.
-
-The upstream boundary should optimize for reuse without blocking KAOS delivery. KAOS can implement a thin local integration first, then upstream generic pieces once the contract is proven.
 
 ---
 

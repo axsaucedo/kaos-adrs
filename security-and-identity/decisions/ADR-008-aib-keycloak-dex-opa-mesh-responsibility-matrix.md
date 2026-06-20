@@ -5,6 +5,53 @@
 
 ---
 
+## Decision
+
+Adopt **Option C: Layered responsibility matrix**.
+
+### Responsibility matrix
+
+| Concern | 1.0 owner | Future/optional owner | Notes |
+|---|---|---|---|
+| KAOS resource existence | KAOS CRDs/operator | N/A | Kubernetes remains source of truth for resources. |
+| KAOS logical identity | KAOS CRDs/operator | N/A | `spec.security.id` / default logical identity from ADR-001. |
+| Requested access edges | KAOS CRDs/operator | KAOS-AIB sync service mirrors to AIB | CRD wiring is request, not approval. |
+| Approved KAOS resource grants | AIB | AIB first-class resource grant model | Bootstrap may use synthetic internal PermissionSet encoding. |
+| User authentication | Keycloak/Dex/OIDC provider | Enterprise IdP | AIB does not replace SSO. |
+| User claims/groups | Keycloak/Dex/OIDC provider | Enterprise IdP | AIB may consume claims/context, not own identity. |
+| User delegated third-party grants | AIB | AIB | UserGrant + PermissionSet domain. |
+| Third-party OAuth sessions/token vault | AIB | AIB | Not KAOS runtime state. |
+| Token exchange for third-party APIs | AIB | AIB ExtProc/Gateway integration later | SDK-first in 1.0, Gateway path later. |
+| SDK request context propagation | KAOS/AIB SDK | Upstreamable AIB SDK core + KAOS adapters | Upstream scope is fixed by ADR-009; concrete SDK shape is fixed by ADR-010. |
+| Agent/MCPServer root authorization | AIB grant checks through SDK | Gateway/NetworkPolicy enforcement in 1.1 | Resource-level, not tool-level. |
+| MCP tool/argument authorization | Deferred | Future KAOS tool permission model + AIB/OPA approval | Not modeled in 1.0. |
+| ModelAPI root authorization | AIB resource grants | Gateway resource-boundary enforcement | Root access only. |
+| ModelAPI model/budget/rate policy | LiteLLM | LiteLLM/enterprise controls | Not AIB PermissionSets. |
+| Gateway routes | KAOS GatewayAPI integration | Gateway + NetworkPolicy in 1.1 | AIB does not own route config. |
+| Human approval/pause-resume | Deferred | KAOS task/UI approval model | A2A `input-required` future. |
+| General policy language/PDP | Simple AIB grant lookup | OPA/Rego or Keycloak AuthZ optional | Not mandatory in 1.0. |
+| Transport TLS | Deployment ingress/Gateway/reverse proxy | Gateway TLS/cert-manager/native TLS | ADR-007. |
+| Network bypass prevention | Deferred | Gateway + NetworkPolicy 1.1 | Not solved by AIB. |
+| Workload identity/mTLS | Deferred | SPIFFE/service mesh/K8s SA binding | Advanced profile. |
+
+### Adopt/build/upstream recommendations
+
+| Area | Recommendation |
+|---|---|
+| KAOS logical identity and requested-edge extraction | Build in KAOS |
+| KAOS-AIB sync service | Build in KAOS initially; upstream generic AIB reconciliation patterns only if reusable |
+| AIB first-class resource grants | Upstream/build in AIB |
+| AIB user consent and token exchange | Adopt from AIB |
+| AIB SDK generic client pieces | Upstream to AIB where generic |
+| KAOS runtime SDK adapters | Build in KAOS |
+| Gateway/NetworkPolicy enforcement | Build in KAOS 1.1 |
+| LiteLLM model/budget integration | Adopt LiteLLM; build KAOS config wiring only |
+| Keycloak/Dex OIDC integration | Adopt existing IdP tooling |
+| OPA/Keycloak AuthZ PDP integration | Defer; optional enterprise extension |
+| Native TLS/service mesh/SPIFFE | Defer; optional hardening profile |
+
+---
+
 ## Context
 
 ADR-001 through ADR-007 establish the core KAOS security target:
@@ -178,53 +225,6 @@ Cons:
 Best fit:
 
 - KAOS 1.0 target architecture.
-
----
-
-## Decision
-
-Adopt **Option C: Layered responsibility matrix**.
-
-### Responsibility matrix
-
-| Concern | 1.0 owner | Future/optional owner | Notes |
-|---|---|---|---|
-| KAOS resource existence | KAOS CRDs/operator | N/A | Kubernetes remains source of truth for resources. |
-| KAOS logical identity | KAOS CRDs/operator | N/A | `spec.security.id` / default logical identity from ADR-001. |
-| Requested access edges | KAOS CRDs/operator | KAOS-AIB sync service mirrors to AIB | CRD wiring is request, not approval. |
-| Approved KAOS resource grants | AIB | AIB first-class resource grant model | Bootstrap may use synthetic internal PermissionSet encoding. |
-| User authentication | Keycloak/Dex/OIDC provider | Enterprise IdP | AIB does not replace SSO. |
-| User claims/groups | Keycloak/Dex/OIDC provider | Enterprise IdP | AIB may consume claims/context, not own identity. |
-| User delegated third-party grants | AIB | AIB | UserGrant + PermissionSet domain. |
-| Third-party OAuth sessions/token vault | AIB | AIB | Not KAOS runtime state. |
-| Token exchange for third-party APIs | AIB | AIB ExtProc/Gateway integration later | SDK-first in 1.0, Gateway path later. |
-| SDK request context propagation | KAOS/AIB SDK | Upstreamable AIB SDK core + KAOS adapters | Upstream scope is fixed by ADR-009; concrete SDK shape is fixed by ADR-010. |
-| Agent/MCPServer root authorization | AIB grant checks through SDK | Gateway/NetworkPolicy enforcement in 1.1 | Resource-level, not tool-level. |
-| MCP tool/argument authorization | Deferred | Future KAOS tool permission model + AIB/OPA approval | Not modeled in 1.0. |
-| ModelAPI root authorization | AIB resource grants | Gateway resource-boundary enforcement | Root access only. |
-| ModelAPI model/budget/rate policy | LiteLLM | LiteLLM/enterprise controls | Not AIB PermissionSets. |
-| Gateway routes | KAOS GatewayAPI integration | Gateway + NetworkPolicy in 1.1 | AIB does not own route config. |
-| Human approval/pause-resume | Deferred | KAOS task/UI approval model | A2A `input-required` future. |
-| General policy language/PDP | Simple AIB grant lookup | OPA/Rego or Keycloak AuthZ optional | Not mandatory in 1.0. |
-| Transport TLS | Deployment ingress/Gateway/reverse proxy | Gateway TLS/cert-manager/native TLS | ADR-007. |
-| Network bypass prevention | Deferred | Gateway + NetworkPolicy 1.1 | Not solved by AIB. |
-| Workload identity/mTLS | Deferred | SPIFFE/service mesh/K8s SA binding | Advanced profile. |
-
-### Adopt/build/upstream recommendations
-
-| Area | Recommendation |
-|---|---|
-| KAOS logical identity and requested-edge extraction | Build in KAOS |
-| KAOS-AIB sync service | Build in KAOS initially; upstream generic AIB reconciliation patterns only if reusable |
-| AIB first-class resource grants | Upstream/build in AIB |
-| AIB user consent and token exchange | Adopt from AIB |
-| AIB SDK generic client pieces | Upstream to AIB where generic |
-| KAOS runtime SDK adapters | Build in KAOS |
-| Gateway/NetworkPolicy enforcement | Build in KAOS 1.1 |
-| LiteLLM model/budget integration | Adopt LiteLLM; build KAOS config wiring only |
-| Keycloak/Dex OIDC integration | Adopt existing IdP tooling |
-| OPA/Keycloak AuthZ PDP integration | Defer; optional enterprise extension |
-| Native TLS/service mesh/SPIFFE | Defer; optional hardening profile |
 
 ---
 

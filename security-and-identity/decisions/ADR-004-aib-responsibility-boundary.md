@@ -5,6 +5,141 @@
 
 ---
 
+## Decision
+
+Use AIB as the **authorization and delegated-token broker** for KAOS 1.0, but not as the owner of all security concerns.
+
+AIB owns two grant domains:
+
+1. **Platform/resource grants**
+   - Whether a KAOS logical caller may access a KAOS logical target.
+   - Examples:
+
+     ```text
+     kaos://agent/researcher -> kaos://mcpserver/github
+     kaos://agent/researcher -> kaos://modelapi/gpt
+     kaos://agent/lead -> kaos://agent/worker
+     ```
+
+2. **User-delegated third-party grants**
+   - Whether a principal has delegated a third-party OAuth/service permission set to an agent.
+   - Example:
+
+     ```text
+     keycloak://kaos/alice -> kaos://agent/researcher -> github-issues-reader
+     ```
+
+KAOS CRD references define requested access edges. The KAOS-AIB sync service may mirror those requested edges into AIB records, but those requests are not automatically approved grants.
+
+Security-enabled deployments are **no permission by default**:
+
+```text
+Agent references MCPServer      -> requested edge
+Agent references ModelAPI       -> requested edge
+Admin/platform grant exists     -> resource access allowed
+User delegated grant exists     -> user third-party access allowed
+```
+
+Current AIB does not yet have a clean first-class model for platform/resource grants or a request/approval workflow for those grants. The accepted target therefore has two layers:
+
+1. **Target model**: AIB gets a first-class platform/resource grant concept and an admin approval lifecycle for requested KAOS access edges.
+2. **Bootstrap model**: early implementations may encode KAOS resource access with a synthetic internal AIB service plus custom PermissionSet scopes, or a synthetic platform principal, while keeping that representation explicitly temporary.
+
+Bootstrap encoding must preserve the distinction between:
+
+```text
+platform/resource grant:
+  kaos://agent/researcher -> kaos://mcpserver/github
+
+user delegated grant:
+  keycloak://kaos/alice -> kaos://agent/researcher -> github-issues-reader
+```
+
+The workaround must not make requested CRD wiring an approved grant automatically.
+
+### Responsibility split
+
+| Component | Owns |
+|---|---|
+| KAOS CRDs/operator | Resource existence, topology, service wiring, `spec.security.id`, requested access edges |
+| KAOS-AIB sync service | Mirroring KAOS identities and requested access edges into AIB |
+| KAOS/AIB SDK | Runtime context propagation, AIB client calls, SDK-native enforcement hooks |
+| AIB | KAOS logical resource grants, user delegated grants, third-party services, PermissionSets, consent, token vault, token exchange |
+| External IdP such as Keycloak/Dex/OIDC | Human authentication and user identity source |
+| LiteLLM | ModelAPI internals: model access, provider keys, budgets, rate limits |
+| GatewayAPI 1.1 | Resource-boundary enforcement, JWT validation, bypass prevention with NetworkPolicy |
+| OPA/Keycloak AuthZ | Future optional PDP integration if requirements outgrow AIB's initial policy model |
+
+### Keycloak boundary
+
+Keycloak or another IdP answers:
+
+```text
+Who is this human user?
+Can this user authenticate to KAOS?
+What roles/groups/claims does this user have?
+```
+
+AIB answers:
+
+```text
+Has this principal delegated third-party access to this agent?
+Is this agent allowed to call this KAOS logical resource?
+Does the user have a live third-party OAuth session?
+Can a scoped third-party token be returned now?
+```
+
+AIB does not replace Keycloak/Dex/OIDC for human authentication.
+
+### Runtime and workload identity boundary
+
+For 1.0, AIB validates logical identities and grants, not cryptographic workload bindings.
+
+The 1.0 request context should carry:
+
+```text
+user principal X
+calling KAOS logical identity Y
+target KAOS logical identity Z
+```
+
+AIB can decide whether `Y -> Z` is authorized and whether `X -> Y -> third-party permission set` is granted.
+
+ADR-001 already excludes Kubernetes ServiceAccounts and SPIFFE/SPIRE from the initial implementation. Therefore 1.0 does not prove that the physical pod making the request is cryptographically bound to the claimed KAOS identity.
+
+That hardening is deferred to later Gateway+NetworkPolicy, Kubernetes ServiceAccount, or SPIFFE/SPIRE work.
+
+### AIB token issuance boundary
+
+AIB **does** issue or return delegated third-party access tokens through token exchange.
+
+AIB **does not** become the general issuer of internal KAOS runtime identity/delegation tokens in 1.0.
+
+This means:
+
+- AIB can return GitHub/Slack/Google/etc. access tokens after grant/session validation.
+- AIB should not be required to mint every internal Agent-to-Agent, Agent-to-MCPServer, or Agent-to-ModelAPI caller token in 1.0.
+- Internal KAOS caller identity may initially come from trusted inbound user tokens, SDK-carried context, Gateway-normalized headers, or future workload identity.
+
+### Autonomous agents
+
+Autonomous runs split into two cases:
+
+| Autonomous case | Initial treatment |
+|---|---|
+| Agent acts only as itself/service | AIB is not required; future options include robot users, service credentials, Kubernetes ServiceAccounts, or workload identity |
+| Agent acts on behalf of a user's third-party account | AIB is in scope through durable user-delegated grants and token vault/session refresh |
+
+Example:
+
+```text
+Daily email summarizer acts for Alice's Gmail
+```
+
+AIB should store Alice's delegated grant and Google OAuth session, then return a Google access token to the autonomous Agent when the grant and session are valid.
+
+---
+
 ## Context
 
 [ADR-001](./ADR-001-identity-model-and-source-of-truth.md) establishes that KAOS owns resource identity and topology, while AIB can mirror KAOS identities through `external_id`.
@@ -193,141 +328,6 @@ Implication:
 
 - ExtProc fits Gateway or sidecar token exchange.
 - Per ADR-002, this is a later Gateway/resource-boundary integration, not required for SDK-first 1.0.
-
----
-
-## Decision
-
-Use AIB as the **authorization and delegated-token broker** for KAOS 1.0, but not as the owner of all security concerns.
-
-AIB owns two grant domains:
-
-1. **Platform/resource grants**
-   - Whether a KAOS logical caller may access a KAOS logical target.
-   - Examples:
-
-     ```text
-     kaos://agent/researcher -> kaos://mcpserver/github
-     kaos://agent/researcher -> kaos://modelapi/gpt
-     kaos://agent/lead -> kaos://agent/worker
-     ```
-
-2. **User-delegated third-party grants**
-   - Whether a principal has delegated a third-party OAuth/service permission set to an agent.
-   - Example:
-
-     ```text
-     keycloak://kaos/alice -> kaos://agent/researcher -> github-issues-reader
-     ```
-
-KAOS CRD references define requested access edges. The KAOS-AIB sync service may mirror those requested edges into AIB records, but those requests are not automatically approved grants.
-
-Security-enabled deployments are **no permission by default**:
-
-```text
-Agent references MCPServer      -> requested edge
-Agent references ModelAPI       -> requested edge
-Admin/platform grant exists     -> resource access allowed
-User delegated grant exists     -> user third-party access allowed
-```
-
-Current AIB does not yet have a clean first-class model for platform/resource grants or a request/approval workflow for those grants. The accepted target therefore has two layers:
-
-1. **Target model**: AIB gets a first-class platform/resource grant concept and an admin approval lifecycle for requested KAOS access edges.
-2. **Bootstrap model**: early implementations may encode KAOS resource access with a synthetic internal AIB service plus custom PermissionSet scopes, or a synthetic platform principal, while keeping that representation explicitly temporary.
-
-Bootstrap encoding must preserve the distinction between:
-
-```text
-platform/resource grant:
-  kaos://agent/researcher -> kaos://mcpserver/github
-
-user delegated grant:
-  keycloak://kaos/alice -> kaos://agent/researcher -> github-issues-reader
-```
-
-The workaround must not make requested CRD wiring an approved grant automatically.
-
-### Responsibility split
-
-| Component | Owns |
-|---|---|
-| KAOS CRDs/operator | Resource existence, topology, service wiring, `spec.security.id`, requested access edges |
-| KAOS-AIB sync service | Mirroring KAOS identities and requested access edges into AIB |
-| KAOS/AIB SDK | Runtime context propagation, AIB client calls, SDK-native enforcement hooks |
-| AIB | KAOS logical resource grants, user delegated grants, third-party services, PermissionSets, consent, token vault, token exchange |
-| External IdP such as Keycloak/Dex/OIDC | Human authentication and user identity source |
-| LiteLLM | ModelAPI internals: model access, provider keys, budgets, rate limits |
-| GatewayAPI 1.1 | Resource-boundary enforcement, JWT validation, bypass prevention with NetworkPolicy |
-| OPA/Keycloak AuthZ | Future optional PDP integration if requirements outgrow AIB's initial policy model |
-
-### Keycloak boundary
-
-Keycloak or another IdP answers:
-
-```text
-Who is this human user?
-Can this user authenticate to KAOS?
-What roles/groups/claims does this user have?
-```
-
-AIB answers:
-
-```text
-Has this principal delegated third-party access to this agent?
-Is this agent allowed to call this KAOS logical resource?
-Does the user have a live third-party OAuth session?
-Can a scoped third-party token be returned now?
-```
-
-AIB does not replace Keycloak/Dex/OIDC for human authentication.
-
-### Runtime and workload identity boundary
-
-For 1.0, AIB validates logical identities and grants, not cryptographic workload bindings.
-
-The 1.0 request context should carry:
-
-```text
-user principal X
-calling KAOS logical identity Y
-target KAOS logical identity Z
-```
-
-AIB can decide whether `Y -> Z` is authorized and whether `X -> Y -> third-party permission set` is granted.
-
-ADR-001 already excludes Kubernetes ServiceAccounts and SPIFFE/SPIRE from the initial implementation. Therefore 1.0 does not prove that the physical pod making the request is cryptographically bound to the claimed KAOS identity.
-
-That hardening is deferred to later Gateway+NetworkPolicy, Kubernetes ServiceAccount, or SPIFFE/SPIRE work.
-
-### AIB token issuance boundary
-
-AIB **does** issue or return delegated third-party access tokens through token exchange.
-
-AIB **does not** become the general issuer of internal KAOS runtime identity/delegation tokens in 1.0.
-
-This means:
-
-- AIB can return GitHub/Slack/Google/etc. access tokens after grant/session validation.
-- AIB should not be required to mint every internal Agent-to-Agent, Agent-to-MCPServer, or Agent-to-ModelAPI caller token in 1.0.
-- Internal KAOS caller identity may initially come from trusted inbound user tokens, SDK-carried context, Gateway-normalized headers, or future workload identity.
-
-### Autonomous agents
-
-Autonomous runs split into two cases:
-
-| Autonomous case | Initial treatment |
-|---|---|
-| Agent acts only as itself/service | AIB is not required; future options include robot users, service credentials, Kubernetes ServiceAccounts, or workload identity |
-| Agent acts on behalf of a user's third-party account | AIB is in scope through durable user-delegated grants and token vault/session refresh |
-
-Example:
-
-```text
-Daily email summarizer acts for Alice's Gmail
-```
-
-AIB should store Alice's delegated grant and Google OAuth session, then return a Google access token to the autonomous Agent when the grant and session are valid.
 
 ---
 

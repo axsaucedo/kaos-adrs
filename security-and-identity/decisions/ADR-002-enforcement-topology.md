@@ -2,6 +2,33 @@
 
 **Status**: Accepted
 **Date**: 2026-06-19
+---
+
+## Decision
+
+Adopt a **layered SDK-first topology**:
+
+1. **1.0: SDK-native Agent and MCPServer security**
+   - Implement request context propagation and AIB integration in an application-level SDK.
+   - Use the SDK in KAOS Agents and KAOS-owned FastMCP MCPServer runtimes.
+   - Use native runtime/MCP logic for semantic authorization, tool-level checks, token exchange, and approval-required handling.
+
+2. **1.0: ModelAPI protected through LiteLLM where possible**
+   - Prefer LiteLLM as the identity-aware ModelAPI surface.
+   - Use LiteLLM custom auth, virtual keys, budgets, and model allowlists where they fit.
+   - Treat Ollama as a backend behind LiteLLM or a future KAOS wrapper, not as a direct authz surface.
+
+3. **1.1: GatewayAPI resource-boundary extension**
+   - Add Gateway-based protected routing as an isolated follow-up after MCP/Agent SDK foundations.
+   - When enabled, operator-injected URLs can use Gateway routes as the primary communication path.
+   - Pair Gateway routing with NetworkPolicy where available to block direct ClusterIP bypass.
+   - Gateway enforcement should start at JWT validation and resource-level authorization.
+
+4. **Sidecars are deferred**
+   - Do not make sidecars part of the 1.0 or 1.1 baseline.
+   - Reconsider sidecars only if Gateway hairpinning, egress token injection, or non-SDK runtime support requires local enforcement.
+
+This makes the SDK the primary 1.0 mechanism for Agents and MCPServers, while preserving Gateway as the later resource-boundary control plane for bypass prevention, ModelAPI coverage, and non-SDK/custom runtime protection.
 
 ---
 
@@ -33,34 +60,6 @@ AIB source facts:
 - AIB ExtProc extracts Bearer tokens at a proxy boundary, builds a resource URI, exchanges the token, and replaces the upstream `Authorization` header.
 - AIB ExtProc is resource/header-oriented today, not MCP-tool-aware.
 - AIB token exchange and grant checks are directly useful for SDK-native Agent/MCPServer flows as well as proxy-mediated flows.
-
----
-
-## Decision
-
-Adopt a **layered SDK-first topology**:
-
-1. **1.0: SDK-native Agent and MCPServer security**
-   - Implement request context propagation and AIB integration in an application-level SDK.
-   - Use the SDK in KAOS Agents and KAOS-owned FastMCP MCPServer runtimes.
-   - Use native runtime/MCP logic for semantic authorization, tool-level checks, token exchange, and approval-required handling.
-
-2. **1.0: ModelAPI protected through LiteLLM where possible**
-   - Prefer LiteLLM as the identity-aware ModelAPI surface.
-   - Use LiteLLM custom auth, virtual keys, budgets, and model allowlists where they fit.
-   - Treat Ollama as a backend behind LiteLLM or a future KAOS wrapper, not as a direct authz surface.
-
-3. **1.1: GatewayAPI resource-boundary extension**
-   - Add Gateway-based protected routing as an isolated follow-up after MCP/Agent SDK foundations.
-   - When enabled, operator-injected URLs can use Gateway routes as the primary communication path.
-   - Pair Gateway routing with NetworkPolicy where available to block direct ClusterIP bypass.
-   - Gateway enforcement should start at JWT validation and resource-level authorization.
-
-4. **Sidecars are deferred**
-   - Do not make sidecars part of the 1.0 or 1.1 baseline.
-   - Reconsider sidecars only if Gateway hairpinning, egress token injection, or non-SDK runtime support requires local enforcement.
-
-This makes the SDK the primary 1.0 mechanism for Agents and MCPServers, while preserving Gateway as the later resource-boundary control plane for bypass prevention, ModelAPI coverage, and non-SDK/custom runtime protection.
 
 ---
 

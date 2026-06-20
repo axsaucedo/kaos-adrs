@@ -5,6 +5,25 @@
 
 ---
 
+## Decision
+
+Adopt **Option A: Minimal 1.0 transport hardening with external TLS**.
+
+Use three profiles:
+
+| Profile | Scope | Requirements |
+|---|---|---|
+| Minimal/dev | Local demos and development | HTTP allowed locally |
+| Recommended production | First production target | TLS at external ingress/Gateway/reverse proxy |
+| Advanced future | High-security environments | Gateway resource-boundary enforcement, NetworkPolicy, cert-manager chart support, native intra-service TLS, in-cluster mTLS/SPIFFE/service mesh, workload identity binding |
+
+The 1.0 target should require:
+
+1. External user/client traffic uses TLS in production.
+2. Gateway TLS/cert-manager, native intra-service TLS, NetworkPolicy, service mesh, SPIFFE, and workload identity binding are deferred network hardening layers.
+
+---
+
 ## Context
 
 [ADR-002](./ADR-002-enforcement-topology.md) accepts SDK-first enforcement for KAOS 1.0 and defers GatewayAPI resource-boundary enforcement to a 1.1 extension.
@@ -276,25 +295,6 @@ Best fit:
 
 ---
 
-## Decision
-
-Adopt **Option A: Minimal 1.0 transport hardening with external TLS**.
-
-Use three profiles:
-
-| Profile | Scope | Requirements |
-|---|---|---|
-| Minimal/dev | Local demos and development | HTTP allowed locally |
-| Recommended production | First production target | TLS at external ingress/Gateway/reverse proxy |
-| Advanced future | High-security environments | Gateway resource-boundary enforcement, NetworkPolicy, cert-manager chart support, native intra-service TLS, in-cluster mTLS/SPIFFE/service mesh, workload identity binding |
-
-The 1.0 target should require:
-
-1. External user/client traffic uses TLS in production.
-2. Gateway TLS/cert-manager, native intra-service TLS, NetworkPolicy, service mesh, SPIFFE, and workload identity binding are deferred network hardening layers.
-
----
-
 ## Decision summary
 
 1. KAOS 1.0 uses a minimal hardening baseline, not service mesh or mandatory in-cluster mTLS.
@@ -304,4 +304,3 @@ The 1.0 target should require:
 5. Gateway + NetworkPolicy boundary hardening is bundled into the 1.1 Gateway/resource-boundary work.
 6. Native Agent/MCPServer/ModelAPI TLS is a future configurable hardening layer, not mandatory for 1.0.
 7. SPIFFE, service mesh, and cryptographic workload binding are deferred advanced-profile features.
-

@@ -1,7 +1,18 @@
 # ADR-010: AIB SDK design
 
-**Status**: Accepted.
+**Status**: Proposed.
 **Date**: 2026-06-20
+
+---
+
+## Decision
+
+Proposed decision: adopt a **generic SDK core plus KAOS adapters** design.
+
+1. **AIB SDK core** provides reusable request-context, client, grant-check, token-exchange, error, and redaction primitives that can be upstreamed to AIB.
+2. **KAOS SDK adapters** bind those primitives to KAOS resource identities, CRD-derived requested edges, Pydantic AI/FastAPI runtime hooks, FastMCP runtime hooks, A2A propagation, and ModelAPI/LiteLLM integration.
+3. **KAOS operator/sync code** remains outside the SDK except for shared typed clients or generated configuration contracts.
+4. **The SDK does not own policy definitions**. KAOS CRDs define requested topology, AIB stores approved grants, and future OPA/Keycloak integrations remain optional external PDPs.
 
 ---
 
@@ -10,17 +21,6 @@
 ADR-002 accepts SDK-first Agent/MCPServer enforcement for KAOS 1.0. ADR-003 defines the request security context that must flow through Agent, A2A, MCP, ModelAPI, and autonomous execution paths. ADR-004 through ADR-008 define AIB as the grant, consent, and delegated-token broker, while keeping policy, transport, IdP, and ModelAPI internals in their own layers. ADR-009 splits upstreamable AIB core capabilities from KAOS-local adapters.
 
 The SDK must therefore be a narrow integration layer, not a new policy platform. It should make the accepted architecture easy to implement consistently across KAOS runtimes while keeping reusable broker logic upstreamable.
-
----
-
-## Decision
-
-Adopt a **generic SDK core plus KAOS adapters** design.
-
-1. **AIB SDK core** provides reusable request-context, client, grant-check, token-exchange, error, and redaction primitives that can be upstreamed to AIB.
-2. **KAOS SDK adapters** bind those primitives to KAOS resource identities, CRD-derived requested edges, Pydantic AI/FastAPI runtime hooks, FastMCP runtime hooks, A2A propagation, and ModelAPI/LiteLLM integration.
-3. **KAOS operator/sync code** remains outside the SDK except for shared typed clients or generated configuration contracts.
-4. **The SDK does not own policy definitions**. KAOS CRDs define requested topology, AIB stores approved grants, and future OPA/Keycloak integrations remain optional external PDPs.
 
 ---
 

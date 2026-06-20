@@ -5,6 +5,42 @@
 
 ---
 
+## Decision
+
+Adopt a simple split model:
+
+| Case | 1.0 behavior |
+|---|---|
+| Missing KAOS resource grant | Fail closed with `platform_approval_required`; do not auto-create in production |
+| Missing user delegated grant | Fail fast with AIB consent URL; user retries after consent |
+| Missing/expired third-party session | Fail fast with AIB re-auth URL; user retries after re-auth |
+| Missing MCP tool/argument approval | Deferred; not modeled in 1.0 |
+| Runtime human approval during a task | Deferred; future A2A `input-required` pause/resume |
+| Autonomous run needs new consent/re-auth | Stop or fail the action with structured approval-required event; do not prompt/block indefinitely |
+
+In short:
+
+```text
+Admin/platform approval:
+  pre-approved resource grants only.
+
+User delegated consent and third-party re-auth:
+  fail with actionable URL and retry.
+
+Runtime pause/resume:
+  defer until A2A task persistence, resume APIs, and UI support exist.
+```
+
+This keeps 1.0 aligned with the "keep it simple" principle:
+
+- no blocking waits,
+- no durable pause/resume stack,
+- no auto-granting by default,
+- no hidden approval state in memory,
+- no conflation of admin approval and user consent.
+
+---
+
 ## Context
 
 [ADR-001](./ADR-001-identity-model-and-source-of-truth.md) defines KAOS logical identities.
@@ -356,42 +392,6 @@ Best fit:
 
 ---
 
-## Decision
-
-Adopt a simple split model:
-
-| Case | 1.0 behavior |
-|---|---|
-| Missing KAOS resource grant | Fail closed with `platform_approval_required`; do not auto-create in production |
-| Missing user delegated grant | Fail fast with AIB consent URL; user retries after consent |
-| Missing/expired third-party session | Fail fast with AIB re-auth URL; user retries after re-auth |
-| Missing MCP tool/argument approval | Deferred; not modeled in 1.0 |
-| Runtime human approval during a task | Deferred; future A2A `input-required` pause/resume |
-| Autonomous run needs new consent/re-auth | Stop or fail the action with structured approval-required event; do not prompt/block indefinitely |
-
-In short:
-
-```text
-Admin/platform approval:
-  pre-approved resource grants only.
-
-User delegated consent and third-party re-auth:
-  fail with actionable URL and retry.
-
-Runtime pause/resume:
-  defer until A2A task persistence, resume APIs, and UI support exist.
-```
-
-This keeps 1.0 aligned with the "keep it simple" principle:
-
-- no blocking waits,
-- no durable pause/resume stack,
-- no auto-granting by default,
-- no hidden approval state in memory,
-- no conflation of admin approval and user consent.
-
----
-
 ## Required 1.0 behavior
 
 ### Resource grant missing
@@ -467,4 +467,3 @@ The detailed policy for pausing/resuming autonomous runs is deferred until KAOS 
 9. Autonomous runs must not auto-create consent or wait indefinitely; they should record structured approval-required events and stop/skip protected actions.
 10. CRD references must not auto-create approved resource grants in the production/default security mode.
 11. Optional bootstrap/dev auto-grant behavior may be considered later, but must be explicit and auditable.
-
