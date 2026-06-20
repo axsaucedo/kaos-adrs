@@ -73,7 +73,7 @@ The sync service may live in a separate repository, an AIB-adjacent integration 
 
 [ADR-004](./ADR-004-aib-responsibility-boundary.md) establishes that KAOS CRDs define requested access edges, and that AIB may store the broker-side grants and records used for authorization and delegated-token flows.
 
-[ADR-009](./ADR-009-aib-python-sdk-design.md) establishes that SDK/native calls are the first integration path for runtime AIB use.
+[ADR-009](../adr-aib/ADR-009-aib-python-sdk-design.md) establishes that SDK/native calls are the first integration path for runtime AIB use.
 
 The remaining architecture question is operational: whether AIB should become a KAOS-managed control-plane dependency, an embedded KAOS component, or an external service with a synchronization bridge.
 
@@ -273,7 +273,7 @@ The sync service watches KAOS resources and mirrors desired AIB records. It may 
 
 ### Runtime integration
 
-Runtime calls continue to follow ADR-009:
+Runtime calls continue to follow [ADR-009](../adr-aib/ADR-009-aib-python-sdk-design.md):
 
 ```text
 Agent / MCPServer runtime

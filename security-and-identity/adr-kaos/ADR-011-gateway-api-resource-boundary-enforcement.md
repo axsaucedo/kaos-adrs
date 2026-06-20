@@ -1,6 +1,6 @@
 # ADR-011: Gateway API resource-boundary enforcement
 
-**Status**: Proposed
+**Status**: Accepted
 **Date**: 2026-06-20
 
 ---
@@ -26,7 +26,7 @@ Direct ClusterIP Services remain necessary for Kubernetes mechanics such as serv
 
 Health endpoints must not become a general bypass path. If the cluster/CNI can distinguish probe or platform traffic, health-check access should be narrowed to those actors; otherwise the policy must document the remaining limitation.
 
-Gateway enforcement is a resource-boundary layer. With the AIB access-check API proposed in [ADR-012](./ADR-012-aib-access-check-api.md), it can host the equivalent of `require_access` for coarse resource-level checks such as:
+Gateway enforcement is a resource-boundary layer. With the AIB access-check API accepted in [ADR-012](../adr-aib/ADR-012-aib-access-check-api.md), it can host the equivalent of `require_access` for coarse resource-level checks such as:
 
 ```text
 principal/subject + calling actor -> target KAOS resource

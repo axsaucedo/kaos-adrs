@@ -1,6 +1,6 @@
 # ADR-012: AIB access-check API
 
-**Status**: Proposed
+**Status**: Accepted
 **Date**: 2026-06-20
 
 ---
@@ -17,7 +17,7 @@ Can principal X, acting through agent Y, access resource Z?
 
 This is not supported by current AIB APIs. Current AIB only performs comparable grant checks inside OAuth2/token-exchange flows, and those flows continue into third-party session lookup, token refresh, and token response generation. That is the wrong shape for SDK `require_access` and Gateway API authorization.
 
-The proposed API should support both:
+The API should support both:
 
 1. **SDK usage**
    - `aib.check_access(...)`
@@ -44,7 +44,7 @@ The access-check implementation MUST verify the user subject token as part of th
 
 [ADR-009](./ADR-009-aib-python-sdk-design.md) describes SDK methods such as `check_access` and `require_access`, but current AIB does not expose a matching server API.
 
-[ADR-011](./ADR-011-gateway-api-resource-boundary-enforcement.md) describes Gateway-level resource-boundary enforcement, but Gateway cannot call AIB for a clean resource decision without a standalone AIB access-check API.
+[ADR-011](../adr-kaos/ADR-011-gateway-api-resource-boundary-enforcement.md) describes Gateway-level resource-boundary enforcement, but Gateway cannot call AIB for a clean resource decision without a standalone AIB access-check API.
 
 This ADR defines the AIB-side capability required to make those SDK and Gateway designs real.
 
@@ -263,7 +263,7 @@ Given a platform resource grant for `kaos://agent/ns/researcher -> kaos://mcpser
 
 ### HTTP endpoint for SDK/application callers
 
-Proposed endpoint:
+Endpoint:
 
 ```http
 POST /api/access/check
@@ -528,7 +528,7 @@ Gateway integration is important, but SDKs also need the same decision semantics
 
 ### Option D: Add standalone access-check API
 
-Accepted as the proposed direction.
+Accepted.
 
 It provides a single contract for SDK and Gateway integration, avoids token exchange misuse, and can evolve from bootstrap PermissionSet/service encoding to first-class platform/resource grants.
 

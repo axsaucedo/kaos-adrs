@@ -22,7 +22,7 @@ Adopt **Option C: Layered responsibility matrix**.
 | User delegated third-party grants | AIB | AIB | UserGrant + PermissionSet domain. |
 | Third-party OAuth sessions/token vault | AIB | AIB | Not KAOS runtime state. |
 | Token exchange for third-party APIs | AIB | AIB ExtProc/Gateway integration later | SDK-first in 1.0, Gateway path later. |
-| SDK request context propagation | AIB Python SDK + orchestrator wrappers | Third-party AIB SDK with optional framework helpers | Concrete SDK shape is proposed in ADR-009. |
+| SDK request context propagation | AIB Python SDK + orchestrator wrappers | Third-party AIB SDK with optional framework helpers | Concrete SDK shape is documented in [ADR-009](../adr-aib/ADR-009-aib-python-sdk-design.md). |
 | Agent/MCPServer root authorization | AIB grant checks through SDK | Gateway/NetworkPolicy enforcement in 1.1 | Resource-level, not tool-level. |
 | MCP tool/argument authorization | Deferred | Future KAOS tool permission model + AIB/OPA approval | Not modeled in 1.0. |
 | ModelAPI root authorization | AIB resource grants | Gateway resource-boundary enforcement | Root access only. |
