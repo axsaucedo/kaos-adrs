@@ -269,6 +269,38 @@ Decision output:
 - Adopt/build/upstream recommendations.
 - First implementation boundary.
 
+### 9. AIB SDK design
+
+Core question:
+
+- What should the KAOS-facing AIB SDK provide, where should it be embedded, and how should it keep authorization, request context propagation, token exchange, and delegated-token use consistent across Agent, MCPServer, A2A, and ModelAPI flows?
+
+Sub-questions:
+
+- Should the SDK be a KAOS-specific integration layer first, an upstreamable AIB client library, or both with a small generic core and KAOS adapters?
+- Which responsibilities belong in the SDK versus the Agent runtime, MCP runtimes, Gateway/ExtProc, LiteLLM hooks, and the operator?
+- What abstractions should the SDK expose for `RequestSecurityContext`, resource-grant checks, user-delegated token exchange, re-auth/approval errors, audit metadata, and safe token handling?
+- How should the SDK represent KAOS logical resource identities and requested/approved edges from CRDs?
+- Which languages/runtimes need first-class SDK support initially: Python Agent runtime, Python MCP runtimes, Go operator/sync service, or future TypeScript/UI clients?
+- How should the SDK avoid becoming the source of policy definitions, given that config-as-code should remain in KAOS CRDs and approved grants should remain in AIB?
+
+Evidence needed:
+
+- Finalized decisions from sections 1-8.
+- KAOS Agent runtime request handling, MCP client construction, A2A delegation, and ModelAPI call paths.
+- KAOS MCP runtime patterns and FastMCP auth/header extension points.
+- AIB token exchange, grant, ExtProc, CEL, and admin/client APIs.
+- Existing AIB client/server package boundaries and opportunities for upstream reusable SDK code.
+
+Decision output:
+
+- SDK responsibility boundary.
+- Initial SDK module/package shape.
+- Runtime integration points.
+- Error/result model for denied grants, missing approval, and re-auth required.
+- Token-handling and audit rules.
+- What should be KAOS-local first versus proposed upstream to AIB.
+
 ## Recommended decision sequencing
 
 The order matters because later decisions depend on earlier ones.
@@ -310,6 +342,12 @@ The order matters because later decisions depend on earlier ones.
 8. **AIB vs Keycloak/Dex/OPA/service mesh responsibility matrix**
    - Final comparison should happen after requirements are clear.
    - The output should decide what is in AIB, KAOS, external IdP/PDP, Gateway, or mesh.
+
+### Phase D: implementation-shape decision
+
+9. **AIB SDK design**
+   - Decide the concrete SDK boundary after the architecture responsibilities are clear.
+   - This should translate the target security model into runtime/operator integration surfaces without becoming the policy source of truth.
 
 ## Output format for each decision note
 
