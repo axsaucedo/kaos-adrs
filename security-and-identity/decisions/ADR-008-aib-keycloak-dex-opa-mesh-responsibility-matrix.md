@@ -58,7 +58,7 @@ ADR-007 accepts:
 
 ### LiteLLM remains the ModelAPI internal authorization surface
 
-ADR-003 and ADR-005 accept:
+ADR-002 and ADR-005 accept:
 
 - LiteLLM is the preferred ModelAPI surface for model allowlists, provider credentials, budgets, and rate limits.
 - AIB may authorize root access to a ModelAPI resource, but ModelAPI internals remain LiteLLM-owned.

@@ -7,7 +7,7 @@
 
 ## Context
 
-[ADR-003](./ADR-003-enforcement-topology.md) accepts SDK-first enforcement for KAOS 1.0 and defers GatewayAPI resource-boundary enforcement to a 1.1 extension.
+[ADR-002](./ADR-002-enforcement-topology.md) accepts SDK-first enforcement for KAOS 1.0 and defers GatewayAPI resource-boundary enforcement to a 1.1 extension.
 
 [ADR-004](./ADR-004-aib-responsibility-boundary.md) accepts AIB as the authorization and delegated-token broker, while deferring Kubernetes ServiceAccount/SPIFFE workload binding.
 

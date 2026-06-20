@@ -9,9 +9,9 @@
 
 [ADR-001](./ADR-001-identity-model-and-source-of-truth.md) defines KAOS logical identities.
 
-[ADR-002](./ADR-002-user-request-context-propagation.md) defines SDK-first request context propagation.
+[ADR-003](./ADR-003-user-request-context-propagation.md) defines SDK-first request context propagation.
 
-[ADR-003](./ADR-003-enforcement-topology.md) defines SDK-first enforcement for 1.0 and GatewayAPI as a 1.1 resource-boundary extension.
+[ADR-002](./ADR-002-enforcement-topology.md) defines SDK-first enforcement for 1.0 and GatewayAPI as a 1.1 resource-boundary extension.
 
 [ADR-004](./ADR-004-aib-responsibility-boundary.md) defines AIB as the authorization and delegated-token broker for KAOS 1.0, with:
 

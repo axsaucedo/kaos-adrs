@@ -1,4 +1,4 @@
-# ADR-002: User and request context propagation
+# ADR-003: User and request context propagation
 
 **Status**: Accepted
 **Date**: 2026-06-19
@@ -116,7 +116,7 @@ Gateway/Envoy/AIB ExtProc validates or exchanges tokens and forwards requests up
 
 **Rejected as the only propagation mechanism** because Gateway only sees individual HTTP hops. It does not understand agent run state, A2A delegation semantics, tool intent, or autonomous task correlation unless the application passes that context.
 
-Gateway remains useful as a later resource-boundary enforcement layer; see ADR-003.
+Gateway remains useful as a later resource-boundary enforcement layer; see ADR-002.
 
 ### Sidecar-only propagation
 
@@ -153,7 +153,7 @@ Capture principal/session context but do not propagate or enforce it.
 
 - Raw tokens could leak into logs or memory if the SDK boundary is not strict. Mitigation: persist non-secret metadata only and provide explicit redaction helpers.
 - Context propagation could diverge between Agent, A2A, MCP, and ModelAPI if header/claim conventions are not centralized.
-- Treating Gateway as optional in 1.0 means resource-boundary enforcement is weaker until ADR-003's Gateway extension is implemented.
+- Treating Gateway as optional in 1.0 means resource-boundary enforcement is weaker until ADR-002's Gateway extension is implemented.
 
 ---
 

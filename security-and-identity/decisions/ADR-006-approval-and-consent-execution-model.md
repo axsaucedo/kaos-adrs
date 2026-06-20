@@ -9,7 +9,7 @@
 
 [ADR-001](./ADR-001-identity-model-and-source-of-truth.md) defines KAOS logical identities.
 
-[ADR-002](./ADR-002-user-request-context-propagation.md) defines SDK-first request context propagation.
+[ADR-003](./ADR-003-user-request-context-propagation.md) defines SDK-first request context propagation.
 
 [ADR-004](./ADR-004-aib-responsibility-boundary.md) defines AIB as the owner of:
 

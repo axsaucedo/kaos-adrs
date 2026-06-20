@@ -269,7 +269,33 @@ Decision output:
 - Adopt/build/upstream recommendations.
 - First implementation boundary.
 
-### 9. AIB SDK design
+### 9. Upstream contribution scope
+
+Core question:
+
+- Which security/identity components should KAOS contribute upstream to AIB, which should stay KAOS-local, and which should remain outside both projects?
+
+Sub-questions:
+
+- Which generic broker capabilities are missing in AIB and should be proposed upstream?
+- Which KAOS-specific adapters, CRD mappings, and operator reconciliation behaviors should stay in KAOS?
+- Which SDK components are reusable across agentic runtimes versus specific to KAOS resource identity and topology?
+- Which pieces should not be upstreamed because they belong to Keycloak/Dex, OPA, Gateway, cert-manager, service mesh, or LiteLLM?
+
+Evidence needed:
+
+- Finalized responsibility matrix from section 8.
+- Current AIB server, grant, consent, ExtProc, and token exchange package boundaries.
+- KAOS-specific CRD, operator, runtime, and MCP integration requirements.
+
+Decision output:
+
+- Upstreamable AIB feature list.
+- KAOS-local adapter and operator list.
+- Explicit non-upstream/non-KAOS responsibilities.
+- Sequencing guidance for contributing generic pieces without blocking KAOS integration.
+
+### 10. AIB SDK design
 
 Core question:
 
@@ -286,7 +312,7 @@ Sub-questions:
 
 Evidence needed:
 
-- Finalized decisions from sections 1-8.
+- Finalized decisions from sections 1-9.
 - KAOS Agent runtime request handling, MCP client construction, A2A delegation, and ModelAPI call paths.
 - KAOS MCP runtime patterns and FastMCP auth/header extension points.
 - AIB token exchange, grant, ExtProc, CEL, and admin/client APIs.
@@ -311,27 +337,27 @@ The order matters because later decisions depend on earlier ones.
    - Finalize identity vocabulary and ownership first.
    - Without this, token claims, grants, and policies remain ambiguous.
 
-2. **User/request context propagation**
-   - Decide how identity moves through current KAOS flows.
-   - This informs whether Gateway, runtime, or sidecars need token/header support.
+2. **Enforcement topology**
+   - Decide SDK-first, Gateway, sidecar, and ModelAPI enforcement boundaries.
+   - This constrains where context propagation and AIB integration must be embedded.
 
-3. **Delegated OAuth/token broker boundary**
+3. **User/request context propagation**
+   - Decide how identity moves through the chosen KAOS flows.
+   - This depends on the enforcement topology and informs SDK requirements.
+
+4. **Delegated OAuth/token broker boundary**
    - Decide exactly what AIB owns.
    - This should be based on actual AIB capabilities and the request context model.
 
 ### Phase B: security behavior decisions
 
-4. **Authorization and policy model**
+5. **Authorization and policy model**
    - Define how permissions, grants, and policies are represented.
    - This depends on the identity model and AIB boundary.
 
-5. **Approval and consent execution model**
+6. **Approval and consent execution model**
    - Decide preflight vs fail/retry vs pause/resume.
    - This depends on authorization model and KAOS task/runtime capabilities.
-
-6. **Enforcement topology**
-   - Decide Gateway vs sidecar vs native runtime enforcement.
-   - This should come after knowing what must be enforced and at what granularity.
 
 ### Phase C: platform/security boundary decisions
 
@@ -345,8 +371,12 @@ The order matters because later decisions depend on earlier ones.
 
 ### Phase D: implementation-shape decision
 
-9. **AIB SDK design**
-   - Decide the concrete SDK boundary after the architecture responsibilities are clear.
+9. **Upstream contribution scope**
+   - Decide what should be contributed to AIB versus kept KAOS-local.
+   - This should turn the responsibility matrix into an implementation ownership boundary.
+
+10. **AIB SDK design**
+   - Decide the concrete SDK boundary after architecture responsibilities and upstream scope are clear.
    - This should translate the target security model into runtime/operator integration surfaces without becoming the policy source of truth.
 
 ## Output format for each decision note

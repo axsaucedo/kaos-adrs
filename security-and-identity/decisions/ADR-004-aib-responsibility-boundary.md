@@ -9,9 +9,9 @@
 
 [ADR-001](./ADR-001-identity-model-and-source-of-truth.md) establishes that KAOS owns resource identity and topology, while AIB can mirror KAOS identities through `external_id`.
 
-[ADR-002](./ADR-002-user-request-context-propagation.md) establishes an SDK-first request context propagation layer for Agents and MCPServers.
+[ADR-003](./ADR-003-user-request-context-propagation.md) establishes an SDK-first request context propagation layer for Agents and MCPServers.
 
-[ADR-003](./ADR-003-enforcement-topology.md) establishes an SDK-first 1.0 topology, LiteLLM as the preferred ModelAPI auth surface, GatewayAPI as a 1.1 resource-boundary extension, and sidecars as deferred.
+[ADR-002](./ADR-002-enforcement-topology.md) establishes an SDK-first 1.0 topology, LiteLLM as the preferred ModelAPI auth surface, GatewayAPI as a 1.1 resource-boundary extension, and sidecars as deferred.
 
 This ADR defines what AIB owns within that architecture.
 
@@ -197,7 +197,7 @@ AIB ExtProc:
 Implication:
 
 - ExtProc fits Gateway or sidecar token exchange.
-- Per ADR-003, this is a later Gateway/resource-boundary integration, not required for SDK-first 1.0.
+- Per ADR-002, this is a later Gateway/resource-boundary integration, not required for SDK-first 1.0.
 
 ---
 
