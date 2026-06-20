@@ -15,11 +15,6 @@
 
 This ADR defines what AIB owns within that architecture.
 
-The core question is:
-
-```text
-What authorization and token-broker responsibilities should live in AIB, what remains in KAOS, and what should be delegated to existing security systems?
-```
 
 ---
 
@@ -336,7 +331,7 @@ AIB should store Alice's delegated grant and Google OAuth session, then return a
 
 ---
 
-## Alternatives considered
+## Annex: Alternatives considered
 
 ### Option A: AIB only as delegated OAuth/token broker
 

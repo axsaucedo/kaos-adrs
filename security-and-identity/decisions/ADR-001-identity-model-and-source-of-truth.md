@@ -19,7 +19,7 @@ AIB has its own internal UUID-backed `AgentID`, `ServiceID`, `GrantID`, `Permiss
 
 KAOS needs a target identity model that keeps Kubernetes authoritative for resource existence/topology, lets AIB own grants/consent/token exchange, and avoids overcomplicating the first implementation.
 
-## Accepted constraints from host
+## Accepted constraints
 
 ### Cluster identity
 
@@ -188,7 +188,7 @@ This matches:
 - no cluster identity for now,
 - first-class spec fields,
 - AIB `external_id` mapping,
-- host concern that users may want the same logical identifier in different namespaces.
+- the requirement that users may intentionally reuse the same logical identifier across namespaces.
 
 ## Consequences
 

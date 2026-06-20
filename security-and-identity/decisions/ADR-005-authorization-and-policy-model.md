@@ -25,11 +25,6 @@
 
 This ADR decides how authorization definitions, policy rules, and approval semantics should be represented for the 1.0 target.
 
-The core question is:
-
-```text
-What is the policy model for KAOS 1.0, and when should KAOS use simple grants, AIB CEL, OPA/Rego, or Keycloak Authorization Services?
-```
 
 ---
 
@@ -160,9 +155,9 @@ Implication:
 
 ---
 
-## Decision problem
+## Decision scope
 
-KAOS needs to decide:
+This ADR fixes the following scope:
 
 1. What is the minimum 1.0 authorization data model?
 2. Which permissions are declared in KAOS CRDs as requested access?
@@ -174,7 +169,7 @@ KAOS needs to decide:
 
 ---
 
-## Options
+## Annex: Alternatives considered
 
 ### Option A: Simple AIB grant tables for 1.0
 
@@ -509,99 +504,7 @@ Do not make OPA/Rego or Keycloak Authorization Services mandatory in 1.0. Treat 
 
 ---
 
-## Host questions resolved for ADR-005
-
-### Q1. Should the 1.0 authorization model be grant-table/data-first rather than policy-language-first?
-
-Decision:
-
-- Yes. Use explicit requested edges, approved resource grants, and user delegated grants. Keep the 1.0 check narrow and direct.
-
-Tradeoff:
-
-- Simple and auditable, but less expressive than OPA/Rego or Keycloak AuthZ.
-
-### Q2. Should KAOS CRDs declare requested access only?
-
-Decision:
-
-- Yes. `spec.modelAPI`, `spec.mcpServers`, and `spec.agentNetwork.access` are requested edges. They do not approve themselves.
-
-Tradeoff:
-
-- Avoids permissions-by-default, but requires admin approval flow or bootstrap grant creation.
-
-### Q3. Should AIB CEL be the user-facing policy language?
-
-Decision:
-
-- No. Keep CEL as internal bounded expression support for claim extraction/token checks. Do not expose it as the primary policy authoring language in 1.0.
-
-Tradeoff:
-
-- Avoids arbitrary expression governance in 1.0, but complex policies require later extension.
-
-### Q4. Should OPA/Rego be mandatory in 1.0?
-
-Decision:
-
-- No. Defer OPA/Rego until policy requirements exceed simple grants.
-
-Tradeoff:
-
-- Less enterprise-policy power initially, but avoids adding a second policy platform too early.
-
-### Q5. Should Keycloak Authorization Services own KAOS resource authorization in 1.0?
-
-Decision:
-
-- No. Keep Keycloak/Dex/OIDC as human identity/SSO. Keep KAOS resource grants in AIB.
-
-Tradeoff:
-
-- Avoids syncing dynamic KAOS resources into Keycloak now, but enterprise Keycloak AuthZ integration remains future work.
-
-### Q6. How should admin/platform grants combine with user-delegated grants?
-
-Decision:
-
-- Both must pass when both are relevant.
-
-Example:
-
-```text
-Agent researcher calling MCP github for Alice requires:
-  AIB resource grant: researcher -> github MCPServer
-  AIB user grant: Alice -> researcher -> GitHub permission set
-```
-
-Tradeoff:
-
-- Clear defense-in-depth, but more grant states to explain to users/admins.
-
-### Q7. Should autonomous grants be first-class in this ADR?
-
-Decision:
-
-- Partially. Treat autonomous runs as Agent identity plus correlation for platform grants, and use durable AIB user grants when acting for a user's third-party account. Defer run-scoped grants/expiry to approval/consent execution model.
-
-Tradeoff:
-
-- Keeps this ADR focused while acknowledging autonomous execution.
-
-### Q8. Should MCP tool/argument-level policy be included now?
-
-Decision:
-
-- No. KAOS currently models MCPServer-level references, not tool/argument permissions. Defer until KAOS can discover/model tools and declare permissions as config-as-code.
-
-Tradeoff:
-
-- 1.0 authorization is resource-level, not tool-level.
-
----
-
-## Accepted ADR-005 decision
+## Decision summary
 
 1. KAOS 1.0 authorization is data-first and grant-table-based.
 2. KAOS CRD references define requested access edges only.
@@ -616,6 +519,3 @@ Tradeoff:
 11. Autonomous run-scoped grants are deferred to the approval/consent execution model.
 12. Future external PDP compatibility must not broaden the 1.0 SDK/API surface beyond what direct grant checks require.
 
-## Decision status
-
-Accepted.

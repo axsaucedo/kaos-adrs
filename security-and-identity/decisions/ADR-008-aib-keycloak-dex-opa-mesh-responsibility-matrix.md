@@ -19,11 +19,6 @@ ADR-001 through ADR-007 establish the core KAOS security target:
 
 This ADR consolidates those decisions into a responsibility matrix so KAOS does not overuse AIB for problems better solved by IdPs, Gateway, OPA, LiteLLM, cert-manager, or service mesh.
 
-The core question is:
-
-```text
-Which component owns which part of KAOS security, and where should KAOS adopt, build, upstream, or defer?
-```
 
 ---
 
@@ -66,7 +61,7 @@ ADR-002 and ADR-005 accept:
 
 ---
 
-## Options
+## Annex: Alternatives considered
 
 ### Option A: AIB-centered security platform
 
@@ -233,71 +228,7 @@ Adopt **Option C: Layered responsibility matrix**.
 
 ---
 
-## Host questions resolved for ADR-008
-
-### Q1. Should KAOS use a layered responsibility matrix instead of making AIB the all-purpose security platform?
-
-Decision:
-
-- Yes. AIB should stay focused on KAOS resource grants, user delegated grants, consent, and token exchange.
-
-Tradeoff:
-
-- More integration boundaries, but much less over-engineering.
-
-### Q2. Should Keycloak/Dex remain human identity/SSO only in 1.0?
-
-Decision:
-
-- Yes. Keycloak/Dex/OIDC should authenticate humans and provide claims/groups. Keycloak Authorization Services remains optional future work.
-
-Tradeoff:
-
-- Avoids syncing dynamic KAOS resources into Keycloak in 1.0.
-
-### Q3. Should OPA/Rego remain optional and deferred?
-
-Decision:
-
-- Yes. OPA is useful if simple grants become insufficient, but should not be mandatory for 1.0.
-
-Tradeoff:
-
-- Simpler initial model, less enterprise policy expressiveness.
-
-### Q4. Should LiteLLM remain the ModelAPI internal policy owner?
-
-Decision:
-
-- Yes. AIB may decide root ModelAPI access, but LiteLLM should own model-level allowlists, budgets, and provider auth.
-
-Tradeoff:
-
-- Keeps AIB simpler, but splits ModelAPI root access from ModelAPI internal policy.
-
-### Q5. Should Gateway/NetworkPolicy be explicitly 1.1, not 1.0?
-
-Decision:
-
-- Yes. Bundle Gateway resource-boundary enforcement and NetworkPolicy bypass prevention into 1.1.
-
-Tradeoff:
-
-- 1.0 remains SDK-first; network bypass prevention is not complete until 1.1.
-
-### Q6. Which features should be upstreamed to AIB?
-
-Decision:
-
-- Upstream generic agent-identity broker features: first-class resource grants, resource-grant approval lifecycle, generic SDK client pieces, and token-exchange/consent improvements.
-
-Tradeoff:
-
-- Upstreaming increases reuse but can slow KAOS-specific delivery if done too early.
-
----
-
-## Accepted ADR-008 decision
+## Decision summary
 
 1. KAOS adopts a layered responsibility matrix rather than an AIB-centered or enterprise-platform-centered security model.
 2. KAOS owns resource existence, topology, logical identity, requested access edges, and runtime wiring.
@@ -311,6 +242,3 @@ Tradeoff:
 10. KAOS-specific orchestration wiring is built in KAOS first.
 11. Generic AIB concepts should be upstreamed to AIB when they are not KAOS-specific, especially first-class resource grants and reusable SDK/client pieces.
 
-## Decision status
-
-Accepted.

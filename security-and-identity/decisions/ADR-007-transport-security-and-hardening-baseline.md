@@ -17,11 +17,6 @@
 
 This ADR decides the baseline hardening model for TLS, network boundaries, and optional network-level hardening layers.
 
-The core question is:
-
-```text
-What transport and network security baseline should KAOS target without over-engineering the first AIB integration?
-```
 
 ---
 
@@ -54,9 +49,9 @@ Implication:
 - Requiring Gateway TLS as the only acceptable 1.0 mode would require chart/controller changes.
 - Production hardening should still target external TLS termination, but the initial architecture should not depend on service mesh or in-cluster mTLS.
 
-## Decision problem
+## Decision scope
 
-KAOS needs to decide:
+This ADR fixes the following scope:
 
 1. Whether TLS is required at the Gateway boundary in 1.0.
 2. Whether cert-manager should be mandatory or recommended.
@@ -67,7 +62,7 @@ KAOS needs to decide:
 
 ---
 
-## Options
+## Annex: Alternatives considered
 
 ### Option A: Minimal 1.0 transport hardening with external TLS
 
@@ -300,59 +295,7 @@ The 1.0 target should require:
 
 ---
 
-## Host questions resolved for ADR-007
-
-### Q1. Should external TLS be required for production but not block the initial architecture?
-
-Decision:
-
-- Yes. Production traffic should use TLS at ingress/Gateway/reverse proxy, but AIB integration should not require cert-manager or Gateway TLS chart support in 1.0.
-
-Tradeoff:
-
-- Keeps 1.0 implementable while documenting the production requirement clearly.
-
-### Q2. Should cert-manager be mandatory?
-
-Decision:
-
-- No. cert-manager should be recommended as a Kubernetes-native certificate option, but not mandatory because some deployments terminate TLS at cloud load balancers or corporate ingress layers.
-
-Tradeoff:
-
-- More flexible, but less prescriptive.
-
-### Q3. Should in-cluster mTLS/SPIFFE/service mesh be required in 1.0?
-
-Decision:
-
-- No. Defer to advanced/future profile.
-
-Tradeoff:
-
-- Lower implementation complexity, but in-cluster traffic is not cryptographically bound to workload identity in 1.0.
-
-### Q4. Should NetworkPolicy be mandatory in 1.0?
-
-Decision:
-
-- No. Bundle NetworkPolicy with the 1.1 Gateway/resource-boundary hardening work.
-
-Tradeoff:
-
-- Avoids CNI-dependent complexity, but direct ClusterIP bypass prevention is not solved by default.
-
-### Q5. Should Agent/MCPServer/ModelAPI native TLS be mandatory in 1.0?
-
-Decision:
-
-- No. Add it as a future configurable hardening layer. It is valuable, but requires runtime/operator changes across Agent, MCPServer, ModelAPI, probes, generated endpoints, and certificate configuration.
-
-Tradeoff:
-
-- Keeps 1.0 simpler, but in-cluster runtime-to-runtime traffic remains HTTP unless the deployment provides TLS through other means.
-
-## Accepted ADR-007 decision
+## Decision summary
 
 1. KAOS 1.0 uses a minimal hardening baseline, not service mesh or mandatory in-cluster mTLS.
 2. Production external user/client traffic must use TLS at ingress, Gateway, load balancer, or trusted reverse proxy.
@@ -362,6 +305,3 @@ Tradeoff:
 6. Native Agent/MCPServer/ModelAPI TLS is a future configurable hardening layer, not mandatory for 1.0.
 7. SPIFFE, service mesh, and cryptographic workload binding are deferred advanced-profile features.
 
-## Decision status
-
-Accepted.

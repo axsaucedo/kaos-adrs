@@ -27,11 +27,6 @@
 
 This ADR decides what happens operationally when an agent action cannot proceed because approval, user consent, or re-authentication is missing.
 
-The core question is:
-
-```text
-How should KAOS handle missing admin approval, missing user consent, expired third-party sessions, and runtime human approval without making the 1.0 runtime too complex?
-```
 
 ---
 
@@ -144,9 +139,9 @@ Implication:
 
 ---
 
-## Decision problem
+## Decision scope
 
-KAOS needs to decide:
+This ADR fixes the following scope:
 
 1. Which checks happen before a run starts.
 2. Which failures return an approval/consent/re-auth URL and require retry.
@@ -158,7 +153,7 @@ KAOS needs to decide:
 
 ---
 
-## Options
+## Annex: Alternatives considered
 
 ### Option A: Preflight all approval and consent before execution
 
@@ -459,81 +454,7 @@ The detailed policy for pausing/resuming autonomous runs is deferred until KAOS 
 
 ---
 
-## Host questions resolved for ADR-006
-
-### Q1. Should admin/platform approvals be pre-existing grants rather than runtime prompts?
-
-Decision:
-
-- Yes. Resource grants should be approved before use. Runtime should fail closed if missing.
-
-Tradeoff:
-
-- Simple and safe, but requires an admin approval/bootstrap path.
-
-### Q2. Should user delegated consent use fail-with-consent-URL-and-retry in 1.0?
-
-Decision:
-
-- Yes. Use AIB's consent flow and require retry after consent.
-
-Tradeoff:
-
-- Simpler runtime, but less seamless than pause/resume.
-
-### Q3. Should third-party re-authentication use fail-with-reauth-URL-and-retry in 1.0?
-
-Decision:
-
-- Yes. Preserve AIB's `invalid_grant` + `error_uri` behavior and surface it as a structured KAOS error.
-
-Tradeoff:
-
-- User must retry, but runtime does not block on human login.
-
-### Q4. Should A2A `input-required` be the 1.0 approval mechanism?
-
-Decision:
-
-- No. Keep it as the future direction. Current KAOS has the state but not durable resume semantics.
-
-Tradeoff:
-
-- Defers better UX for async tasks, but avoids a large runtime/UI scope increase.
-
-### Q5. Should synchronous chat requests block while approval or consent is pending?
-
-Decision:
-
-- No.
-
-Tradeoff:
-
-- Requires retry, but avoids timeouts, resource leaks, and unclear cancellation semantics.
-
-### Q6. Should CRD references auto-create approved resource grants?
-
-Decision:
-
-- No for production/default security mode. Optional explicit bootstrap/dev mode can be considered later.
-
-Tradeoff:
-
-- Preserves no-permission-by-default, but requires an approval path.
-
-### Q7. How should autonomous runs handle missing consent or re-authentication?
-
-Decision:
-
-- They should fail or skip the protected action with a structured event. They should not wait indefinitely or create consent automatically.
-
-Tradeoff:
-
-- Safer and simpler, but autonomous tasks may stop until a user/admin resolves the missing grant/session.
-
----
-
-## Accepted ADR-006 decision
+## Decision summary
 
 1. KAOS 1.0 separates admin/platform approval, user delegated consent, third-party re-authentication, and runtime human approval.
 2. Admin/platform resource access requires pre-existing AIB resource grants.
@@ -547,6 +468,3 @@ Tradeoff:
 10. CRD references must not auto-create approved resource grants in the production/default security mode.
 11. Optional bootstrap/dev auto-grant behavior may be considered later, but must be explicit and auditable.
 
-## Decision status
-
-Accepted.

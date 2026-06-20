@@ -7,7 +7,7 @@
 
 ## Context
 
-[ADR-003](./ADR-003-user-request-context-propagation.md) accepts an application-level request security context and propagation SDK. The remaining topology question is where KAOS should enforce authentication, token exchange, and authorization across:
+[ADR-003](./ADR-003-user-request-context-propagation.md) accepts an application-level request security context and propagation SDK. This ADR fixes where KAOS should enforce authentication, token exchange, and authorization across:
 
 - external user to Agent/MCPServer/ModelAPI,
 - Agent to MCPServer,

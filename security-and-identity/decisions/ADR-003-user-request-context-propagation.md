@@ -108,7 +108,7 @@ MCPServer custom code is broader than Agent custom code. MCP runtimes may need t
 
 ---
 
-## Alternatives considered
+## Annex: Alternatives considered
 
 ### Gateway-only propagation
 
