@@ -513,7 +513,7 @@ Do not make OPA/Rego or Keycloak Authorization Services mandatory in 1.0. Treat 
 
 ### Q1. Should the 1.0 authorization model be grant-table/data-first rather than policy-language-first?
 
-Recommended answer:
+Decision:
 
 - Yes. Use explicit requested edges, approved resource grants, and user delegated grants. Keep the 1.0 check narrow and direct.
 
@@ -523,7 +523,7 @@ Tradeoff:
 
 ### Q2. Should KAOS CRDs declare requested access only?
 
-Recommended answer:
+Decision:
 
 - Yes. `spec.modelAPI`, `spec.mcpServers`, and `spec.agentNetwork.access` are requested edges. They do not approve themselves.
 
@@ -533,7 +533,7 @@ Tradeoff:
 
 ### Q3. Should AIB CEL be the user-facing policy language?
 
-Recommended answer:
+Decision:
 
 - No. Keep CEL as internal bounded expression support for claim extraction/token checks. Do not expose it as the primary policy authoring language in 1.0.
 
@@ -543,7 +543,7 @@ Tradeoff:
 
 ### Q4. Should OPA/Rego be mandatory in 1.0?
 
-Recommended answer:
+Decision:
 
 - No. Defer OPA/Rego until policy requirements exceed simple grants.
 
@@ -553,7 +553,7 @@ Tradeoff:
 
 ### Q5. Should Keycloak Authorization Services own KAOS resource authorization in 1.0?
 
-Recommended answer:
+Decision:
 
 - No. Keep Keycloak/Dex/OIDC as human identity/SSO. Keep KAOS resource grants in AIB.
 
@@ -563,7 +563,7 @@ Tradeoff:
 
 ### Q6. How should admin/platform grants combine with user-delegated grants?
 
-Recommended answer:
+Decision:
 
 - Both must pass when both are relevant.
 
@@ -581,7 +581,7 @@ Tradeoff:
 
 ### Q7. Should autonomous grants be first-class in this ADR?
 
-Recommended answer:
+Decision:
 
 - Partially. Treat autonomous runs as Agent identity plus correlation for platform grants, and use durable AIB user grants when acting for a user's third-party account. Defer run-scoped grants/expiry to approval/consent execution model.
 
@@ -591,7 +591,7 @@ Tradeoff:
 
 ### Q8. Should MCP tool/argument-level policy be included now?
 
-Recommended answer:
+Decision:
 
 - No. KAOS currently models MCPServer-level references, not tool/argument permissions. Defer until KAOS can discover/model tools and declare permissions as config-as-code.
 

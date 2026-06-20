@@ -1,6 +1,6 @@
 # ADR-006: Approval and consent execution model
 
-**Status**: Proposed. Requires host decisions before acceptance.
+**Status**: Accepted.
 **Date**: 2026-06-20
 
 ---
@@ -361,7 +361,7 @@ Best fit:
 
 ---
 
-## Provisional recommendation
+## Decision
 
 Adopt a simple split model:
 
@@ -459,11 +459,11 @@ The detailed policy for pausing/resuming autonomous runs is deferred until KAOS 
 
 ---
 
-## Host questions required to finalize ADR-006
+## Host questions resolved for ADR-006
 
 ### Q1. Should admin/platform approvals be pre-existing grants rather than runtime prompts?
 
-Recommended answer:
+Decision:
 
 - Yes. Resource grants should be approved before use. Runtime should fail closed if missing.
 
@@ -473,7 +473,7 @@ Tradeoff:
 
 ### Q2. Should user delegated consent use fail-with-consent-URL-and-retry in 1.0?
 
-Recommended answer:
+Decision:
 
 - Yes. Use AIB's consent flow and require retry after consent.
 
@@ -483,7 +483,7 @@ Tradeoff:
 
 ### Q3. Should third-party re-authentication use fail-with-reauth-URL-and-retry in 1.0?
 
-Recommended answer:
+Decision:
 
 - Yes. Preserve AIB's `invalid_grant` + `error_uri` behavior and surface it as a structured KAOS error.
 
@@ -493,7 +493,7 @@ Tradeoff:
 
 ### Q4. Should A2A `input-required` be the 1.0 approval mechanism?
 
-Recommended answer:
+Decision:
 
 - No. Keep it as the future direction. Current KAOS has the state but not durable resume semantics.
 
@@ -503,7 +503,7 @@ Tradeoff:
 
 ### Q5. Should synchronous chat requests block while approval or consent is pending?
 
-Recommended answer:
+Decision:
 
 - No.
 
@@ -513,7 +513,7 @@ Tradeoff:
 
 ### Q6. Should CRD references auto-create approved resource grants?
 
-Recommended answer:
+Decision:
 
 - No for production/default security mode. Optional explicit bootstrap/dev mode can be considered later.
 
@@ -523,7 +523,7 @@ Tradeoff:
 
 ### Q7. How should autonomous runs handle missing consent or re-authentication?
 
-Recommended answer:
+Decision:
 
 - They should fail or skip the protected action with a structured event. They should not wait indefinitely or create consent automatically.
 
@@ -533,7 +533,7 @@ Tradeoff:
 
 ---
 
-## Proposed ADR-006 decision if host agrees
+## Accepted ADR-006 decision
 
 1. KAOS 1.0 separates admin/platform approval, user delegated consent, third-party re-authentication, and runtime human approval.
 2. Admin/platform resource access requires pre-existing AIB resource grants.
@@ -549,4 +549,4 @@ Tradeoff:
 
 ## Decision status
 
-Awaiting host answers.
+Accepted.
