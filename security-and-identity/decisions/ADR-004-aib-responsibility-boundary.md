@@ -69,6 +69,19 @@ Implication:
 
 - Current PermissionSets are naturally aligned with third-party OAuth/service scopes.
 - They are not currently modeled around MCP tool names, MCP arguments, ModelAPI models, Gateway routes, or LiteLLM budgets.
+- They can temporarily encode KAOS logical resource scopes through a synthetic internal service and custom scope naming convention, but this is a compatibility workaround rather than the target model.
+
+Temporary workaround example:
+
+```text
+service: kaos-internal
+scopes:
+  - kaos:mcpserver:github:call
+  - kaos:modelapi:gpt:invoke
+  - kaos:agent:worker:delegate
+```
+
+This can bootstrap early resource checks through existing AIB data structures, but it should not be treated as the final resource-grant abstraction.
 
 ### AIB UserGrants
 
@@ -86,6 +99,8 @@ Implication:
 
 - AIB is well suited to be authoritative for user-delegated grants from a principal to an agent.
 - Grant survival across KAOS Agent delete/recreate is possible if the KAOS-AIB sync service preserves the same AIB agent record for the same `external_id`.
+- Current `UserGrant` is not a clean model for platform/resource grants, because it is centered on a principal delegating PermissionSets to an agent.
+- A temporary bootstrap could use a synthetic platform principal, but the target model should distinguish platform/resource grants from user-delegated OAuth grants.
 
 ### KAOS CRD wiring
 
@@ -221,6 +236,23 @@ Admin/platform grant exists     -> resource access allowed
 User delegated grant exists     -> user third-party access allowed
 ```
 
+Current AIB does not yet have a clean first-class model for platform/resource grants or a request/approval workflow for those grants. The accepted target therefore has two layers:
+
+1. **Target model**: AIB gets a first-class platform/resource grant concept and an admin approval lifecycle for requested KAOS access edges.
+2. **Bootstrap model**: early implementations may encode KAOS resource access with a synthetic internal AIB service plus custom PermissionSet scopes, or a synthetic platform principal, while keeping that representation explicitly temporary.
+
+Bootstrap encoding must preserve the distinction between:
+
+```text
+platform/resource grant:
+  kaos://agent/researcher -> kaos://mcpserver/github
+
+user delegated grant:
+  keycloak://kaos/alice -> kaos://agent/researcher -> github-issues-reader
+```
+
+The workaround must not make requested CRD wiring an approved grant automatically.
+
 ### Responsibility split
 
 | Component | Owns |
@@ -314,6 +346,8 @@ Rejected as too narrow.
 
 KAOS CRDs already define Agent-to-MCPServer, Agent-to-ModelAPI, and Agent-to-Agent requested access edges. These are natural KAOS logical resource grants. Keeping them outside AIB would either push definitions into dynamic SDK code or require a separate authorization store.
 
+However, current AIB does not yet expose this as a first-class model, so implementation may need an interim PermissionSet/synthetic-service encoding before the proper resource-grant model exists.
+
 ### Option B: AIB as broad all-purpose policy platform
 
 AIB would own all authorization, policy language, approval workflows, ModelAPI policies, MCP tool/argument rules, runtime token issuance, and token exchange.
@@ -346,6 +380,8 @@ This may be useful for enterprise deployments, but 1.0 benefits from keeping KAO
 ### Negative
 
 - AIB needs a resource-grant concept beyond its current user grant and PermissionSet model.
+- Until that exists, any PermissionSet-based resource-grant encoding is a temporary workaround and must be documented as such.
+- AIB also needs a request/approval lifecycle for KAOS resource grants if requested CRD access edges are to be reviewed before approval.
 - 1.0 logical identity validation does not cryptographically prove workload identity.
 - Gateway/NetworkPolicy bypass prevention remains a 1.1 hardening layer.
 - ModelAPI root access can be AIB-managed, but detailed model/budget enforcement remains in LiteLLM.
@@ -366,12 +402,15 @@ This may be useful for enterprise deployments, but 1.0 benefits from keeping KAO
 4. KAOS remains authoritative for CRDs, topology, resource identity, runtime orchestration, and requested access edges.
 5. KAOS CRD references are requested access edges; they do not automatically grant access.
 6. Security-enabled deployments use no-permission-by-default semantics.
-7. AIB PermissionSets initially represent third-party service scopes only.
-8. Do not force MCP tool names, MCP arguments, ModelAPI model allowlists, ModelAPI budgets, or Gateway route rules into AIB PermissionSets in 1.0.
-9. ModelAPI root resource access may be AIB-managed; ModelAPI internals remain LiteLLM-owned.
-10. AIB returns delegated third-party access tokens through token exchange, but does not become the general issuer of internal KAOS runtime identity/delegation tokens in 1.0.
-11. SDK-native AIB calls are the first integration path.
-12. AIB ExtProc is deferred to the GatewayAPI 1.1 resource-boundary extension.
-13. AIB does not replace Keycloak/Dex/OIDC for human authentication.
-14. Kubernetes ServiceAccount/SPIFFE workload binding remains deferred from ADR-001.
-15. OPA/Rego and Keycloak Authorization Services integration are deferred to the authorization-policy decision.
+7. Target AIB needs a first-class platform/resource grant model distinct from user-delegated OAuth grants.
+8. Target AIB needs a request/approval lifecycle for KAOS resource grants.
+9. Until that exists, early implementations may bootstrap resource grants with a synthetic internal service and custom PermissionSet scopes, but this is temporary.
+10. AIB PermissionSets remain primarily third-party service-scope bundles in the target model.
+11. Do not force MCP tool names, MCP arguments, ModelAPI model allowlists, ModelAPI budgets, or Gateway route rules into AIB PermissionSets as the long-term model.
+12. ModelAPI root resource access may be AIB-managed; ModelAPI internals remain LiteLLM-owned.
+13. AIB returns delegated third-party access tokens through token exchange, but does not become the general issuer of internal KAOS runtime identity/delegation tokens in 1.0.
+14. SDK-native AIB calls are the first integration path.
+15. AIB ExtProc is deferred to the GatewayAPI 1.1 resource-boundary extension.
+16. AIB does not replace Keycloak/Dex/OIDC for human authentication.
+17. Kubernetes ServiceAccount/SPIFFE workload binding remains deferred from ADR-001.
+18. OPA/Rego and Keycloak Authorization Services integration are deferred to the authorization-policy decision.
