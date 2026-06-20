@@ -15,12 +15,12 @@
 
 [ADR-006](./ADR-006-approval-and-consent-execution-model.md) accepts fail-closed resource grants and fail-with-URL-and-retry for user consent and third-party re-authentication.
 
-This ADR decides the baseline hardening model around transport security, secrets, token vault protection, telemetry, and optional advanced layers.
+This ADR decides the baseline hardening model for TLS, network boundaries, and optional network-level hardening layers.
 
 The core question is:
 
 ```text
-What hard security baseline should KAOS target without over-engineering the first AIB integration?
+What transport and network security baseline should KAOS target without over-engineering the first AIB integration?
 ```
 
 ---
@@ -54,104 +54,6 @@ Implication:
 - Requiring Gateway TLS as the only acceptable 1.0 mode would require chart/controller changes.
 - Production hardening should still target external TLS termination, but the initial architecture should not depend on service mesh or in-cluster mTLS.
 
-### KAOS operator chart has a basic secure container baseline
-
-Source files:
-
-- `operator/chart/values.yaml`
-- `operator/chart/templates/deployment.yaml`
-
-Relevant facts:
-
-- Operator pod security context sets:
-  - `runAsNonRoot: true`,
-  - `runAsUser: 65532`.
-- Operator container security context sets:
-  - `allowPrivilegeEscalation: false`,
-  - drop all capabilities,
-  - `readOnlyRootFilesystem: true`.
-- The operator ServiceAccount is configurable.
-
-Implication:
-
-- The control plane already has a reasonable container hardening baseline.
-- The same standard should be treated as the target for new AIB-related KAOS components where practical.
-
-### KAOS data plane exposes escape hatches through container and pod overrides
-
-Source files:
-
-- `operator/api/v1alpha1/agent_types.go`
-- `operator/api/v1alpha1/mcpserver_types.go`
-- `operator/api/v1alpha1/modelapi_types.go`
-
-Relevant facts:
-
-- Agent, MCPServer, and ModelAPI all expose `spec.container` and `spec.podSpec`.
-- `spec.container.env` can inject arbitrary environment variables.
-- `spec.podSpec` can override generated pod spec details.
-- MCPServer supports `spec.serviceAccountName`.
-- ModelAPI supports API keys from either direct value or `SecretKeyRef`.
-- ModelAPI custom LiteLLM config can come from literal string or `SecretKeyRef`.
-- Current ModelAPI controller generates a ConfigMap for LiteLLM config and supports direct API key env var values, though secret references are also supported.
-
-Implication:
-
-- KAOS needs secure defaults, but users can intentionally override runtime/container settings.
-- The target security posture should recommend Kubernetes Secrets for credentials and avoid literal secrets in CRDs.
-- A future hardening pass should reduce accidental secret exposure in generated ConfigMaps and plain env values.
-
-### AIB has explicit encryption and signing-key surfaces
-
-Source files:
-
-- `agentic-identity-broker/internal/ports/config.go`
-- `agentic-identity-broker/internal/ports/encryption.go`
-- `agentic-identity-broker/internal/ports/oauth2server.go`
-- `agentic-identity-broker/internal/ports/thirdparty_provider.go`
-
-Relevant facts:
-
-- AIB has an `EncryptionPort` for encrypt/decrypt with additional authenticated data.
-- Production encryption is intended to use envelope encryption with context binding.
-- Third-party OAuth provider secrets are stored encrypted; repositories treat secrets as opaque ciphertext.
-- Encryption supports:
-  - AWS KMS hierarchical keyring backend,
-  - memory/raw AES key backend.
-- AIB local OAuth server mode has signing-key lifecycle ports and signing-key bootstrap coordination.
-- Third-party OAuth state uses a JWE signing key.
-- AIB has security config flags to skip third-party HTTPS validation and CIMD SSRF validation, both explicitly marked development/test only.
-- AIB's authentication config supports reverse-proxy pre-auth and optional JWT validation.
-- CORS defaults are secure by default when allowed origins are empty.
-
-Implication:
-
-- Production AIB deployments should use a real durable encrypted storage backend and managed key material.
-- Development-only skip flags and memory encryption backends should not be part of the production baseline.
-- KAOS should not duplicate AIB token-vault encryption; it should require AIB to be deployed with production-grade encryption and storage.
-
-### KAOS telemetry exists but is optional
-
-Source files:
-
-- `operator/chart/values.yaml`
-- `operator/pkg/util/telemetry.go`
-- `operator/api/v1alpha1/agent_types.go`
-- `operator/api/v1alpha1/modelapi_types.go`
-
-Relevant facts:
-
-- Global telemetry is disabled by default.
-- Agent, MCPServer, and ModelAPI have telemetry configuration surfaces.
-- ModelAPI Hosted/Ollama mode warns that native OTel is not supported.
-
-Implication:
-
-- Audit/security event requirements should be explicit; generic telemetry alone is not enough.
-- Raw tokens and secrets must not be emitted in logs, traces, memory, or events.
-
----
-
 ## Decision problem
 
 KAOS needs to decide:
@@ -159,18 +61,17 @@ KAOS needs to decide:
 1. Whether TLS is required at the Gateway boundary in 1.0.
 2. Whether cert-manager should be mandatory or recommended.
 3. Whether in-cluster mTLS, SPIFFE, or service mesh are required initially.
-4. How secrets, signing keys, and token-vault encryption should be handled.
+4. Whether native Agent/MCPServer/ModelAPI TLS is required initially.
 5. Whether NetworkPolicy is part of the mandatory baseline.
-6. What hardening is required for logs, telemetry, and audit events.
-7. Which advanced security layers are explicitly deferred.
+6. Which advanced network security layers are explicitly deferred.
 
 ---
 
 ## Options
 
-### Option A: Minimal 1.0 hardening with external TLS and AIB-managed secret protection
+### Option A: Minimal 1.0 transport hardening with external TLS
 
-This option keeps the initial KAOS/AIB integration simple. KAOS requires secure handling at the main trust boundaries but does not introduce service mesh, SPIFFE, in-cluster mTLS, or mandatory cert-manager in 1.0.
+This option keeps the initial KAOS/AIB integration simple. KAOS requires TLS at the external production boundary but does not introduce service mesh, SPIFFE, native intra-service TLS, in-cluster mTLS, NetworkPolicy, or mandatory cert-manager in 1.0.
 
 The baseline is:
 
@@ -181,18 +82,6 @@ External user/client traffic:
 KAOS runtime-to-runtime traffic:
   use SDK-level auth/context/grant checks
   keep direct in-cluster HTTP acceptable for 1.0
-
-AIB token vault:
-  production storage + encryption backend
-  no plaintext token persistence outside AIB
-
-Secrets:
-  Kubernetes Secrets or external secret manager
-  no literal production credentials in CRDs
-
-Logs/telemetry:
-  no raw tokens/secrets
-  security decisions recorded as metadata only
 ```
 
 This option accepts that KAOS will not solve every network-level threat in the first iteration. It relies on ADR-002 through ADR-006 for SDK-level context propagation, authorization, and consent behavior. Network-level bypass hardening remains a future GatewayAPI/NetworkPolicy/service-mesh extension.
@@ -201,14 +90,13 @@ Pros:
 
 - Keeps the first implementation small and understandable.
 - Matches current KAOS Gateway and runtime capabilities.
-- Avoids forcing a specific ingress controller, cert-manager setup, service mesh, or cloud KMS provider.
-- Lets AIB own token-vault encryption instead of duplicating secret storage in KAOS.
+- Avoids forcing a specific ingress controller, cert-manager setup, service mesh, or in-cluster certificate model.
 
 Cons:
 
 - Does not cryptographically protect every in-cluster hop.
 - Does not prevent ClusterIP bypass by itself.
-- Requires deployment guidance for production TLS/secrets rather than fully enforcing it in code.
+- Requires deployment guidance for production TLS rather than fully enforcing it in code.
 - Leaves workload identity and service-to-service mTLS for later.
 
 Best fit:
@@ -395,24 +283,20 @@ Best fit:
 
 ## Decision
 
-Adopt **Option A: Minimal 1.0 hardening with external TLS and AIB-managed secret protection**.
+Adopt **Option A: Minimal 1.0 transport hardening with external TLS**.
 
 Use three profiles:
 
 | Profile | Scope | Requirements |
 |---|---|---|
-| Minimal/dev | Local demos and development | HTTP allowed locally, memory/local storage allowed, dev skip flags allowed only for local test |
-| Recommended production | First production target | TLS at external ingress/Gateway/reverse proxy, Kubernetes Secrets/external secret manager, AIB durable storage and encryption backend, no plaintext production credentials in CRDs, no raw tokens in logs/telemetry |
+| Minimal/dev | Local demos and development | HTTP allowed locally |
+| Recommended production | First production target | TLS at external ingress/Gateway/reverse proxy |
 | Advanced future | High-security environments | Gateway resource-boundary enforcement, NetworkPolicy, cert-manager chart support, native intra-service TLS, in-cluster mTLS/SPIFFE/service mesh, workload identity binding |
 
 The 1.0 target should require:
 
 1. External user/client traffic uses TLS in production.
-2. AIB production deployments use durable storage and a production encryption backend.
-3. AIB dev-only skip flags are never enabled in production.
-4. Raw OAuth tokens, AIB exchanged tokens, client secrets, signing keys, and encryption keys are never persisted in KAOS memory/events/logs.
-5. Production credentials are referenced through Kubernetes Secrets or external secret management, not literal CRD fields.
-6. Gateway TLS/cert-manager, native intra-service TLS, NetworkPolicy, service mesh, SPIFFE, and workload identity binding are deferred hardening layers.
+2. Gateway TLS/cert-manager, native intra-service TLS, NetworkPolicy, service mesh, SPIFFE, and workload identity binding are deferred network hardening layers.
 
 ---
 
@@ -468,38 +352,6 @@ Tradeoff:
 
 - Keeps 1.0 simpler, but in-cluster runtime-to-runtime traffic remains HTTP unless the deployment provides TLS through other means.
 
-### Q6. Should KAOS store or cache delegated third-party tokens?
-
-Decision:
-
-- No. AIB owns token vault storage and encryption. KAOS runtimes may use delegated tokens transiently for calls but must not persist raw tokens in memory/events/logs.
-
-Tradeoff:
-
-- Clearer secret ownership, but runtime integrations must carefully avoid leaking transient tokens.
-
-### Q7. Should literal production secrets in CRDs be allowed?
-
-Decision:
-
-- No for production guidance. Existing direct-value fields may remain for compatibility/dev, but production docs and future validation should steer users to Kubernetes Secrets or external secret managers.
-
-Tradeoff:
-
-- Safer operational posture, while preserving current CRD flexibility.
-
-### Q8. What minimum audit/telemetry should be required?
-
-Decision:
-
-- Record security decision metadata: principal identity, source identity, target identity, action, grant/consent decision code, and correlation IDs. Do not record raw tokens, client secrets, signing keys, OAuth authorization codes, or encryption keys.
-
-Tradeoff:
-
-- Provides useful auditability without exposing sensitive material.
-
----
-
 ## Accepted ADR-007 decision
 
 1. KAOS 1.0 uses a minimal hardening baseline, not service mesh or mandatory in-cluster mTLS.
@@ -509,12 +361,6 @@ Tradeoff:
 5. Gateway + NetworkPolicy boundary hardening is bundled into the 1.1 Gateway/resource-boundary work.
 6. Native Agent/MCPServer/ModelAPI TLS is a future configurable hardening layer, not mandatory for 1.0.
 7. SPIFFE, service mesh, and cryptographic workload binding are deferred advanced-profile features.
-8. AIB owns token vault storage and encryption; KAOS must not persist delegated third-party tokens.
-9. AIB production deployments must use durable storage and production-grade encryption/key management.
-10. AIB development skip flags for HTTPS/SSRF validation must not be enabled in production.
-11. Production credentials should be provided through Kubernetes Secrets or external secret management, not literal CRD values.
-12. Security logs/telemetry must include decision metadata and correlation IDs but never raw tokens or secrets.
-13. Existing KAOS operator container hardening remains the baseline pattern for new KAOS-managed security components where practical.
 
 ## Decision status
 
