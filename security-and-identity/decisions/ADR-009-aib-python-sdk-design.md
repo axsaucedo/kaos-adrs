@@ -11,11 +11,12 @@ Proposed decision: design the SDK as a **small third-party Python SDK for AIB in
 
 The SDK should focus first on **automatic request context propagation**, using the same ergonomics as OpenTelemetry propagation:
 
-1. Extract inbound AIB headers at server/framework boundaries.
+1. Extract trusted inbound propagation headers at server/framework boundaries.
 2. Store the current request context in a request-local `ContextVar`.
 3. Inject outbound AIB headers automatically into common Python HTTP clients.
 4. Expose a simple dictionary-like `aib.ctx` for local inspection or overrides.
-5. Keep manual `aib.ctx.to_headers()` as an escape hatch for non-instrumented transports.
+5. Enrich context from instrumentation arguments, resolver callbacks, and environment-variable defaults.
+6. Keep manual `aib.ctx.to_headers()` as an escape hatch for non-instrumented transports.
 
 The SDK must not depend on KAOS resource types, KAOS CRDs, KAOS identity formats, Kubernetes operators, Gateway resources, or LiteLLM configuration. KAOS can use the SDK through its own wrapper/adapters, but those wrappers are downstream integrations and are not part of the core SDK contract.
 
@@ -69,6 +70,7 @@ aib/
 
 - the request-local context mapping,
 - header extraction/injection helpers,
+- environment-derived context defaults,
 - FastAPI instrumentation,
 - httpx instrumentation,
 - requests instrumentation,
@@ -119,6 +121,16 @@ aib.ctx["principal"] = "user://alice"
 aib.ctx["actor"] = "agent://researcher"
 ```
 
+In normal server operation, application code should not need to create the initial context manually. Instrumentation should initialize it per request by:
+
+1. reading trusted inbound headers,
+2. generating a request ID when the inbound request does not provide one,
+3. reading local runtime defaults from environment variables,
+4. applying explicit instrumentation arguments,
+5. applying framework-specific resolver callbacks.
+
+For example, an instrumented first agent server can receive a request with no propagation headers and still produce a context containing a generated `request_id` and a configured local `actor`.
+
 If simple to implement, support normal mapping methods:
 
 ```python
@@ -143,27 +155,92 @@ This supports non-instrumented transports, custom clients, tests, or framework g
 
 ## Header model
 
-Use namespaced default propagation headers to avoid collisions:
+Do not namespace every propagated field as `x-aib-*`. Use generic headers for concepts whose meaning is not owned by AIB, and reserve `x-aib-*` for AIB-owned context.
+
+Default propagation headers:
 
 ```text
-x-aib-request-id
+x-request-id
+x-principal
+x-actor
+x-aib-context-id
 x-aib-session-id
-x-aib-principal
-x-aib-actor
-x-aib-parent-actor
 x-aib-delegation-chain
 x-aib-scopes
 authorization
 ```
 
-The SDK may allow custom header names later, but defaults should be stable.
+`x-request-id` is the request/correlation ID for the call chain. If an inbound request does not provide it, the first instrumented server should generate it. AIB should not create a second AIB-specific request ID by default.
+
+`x-principal` and `x-actor` can be generic because they describe common request context. They must still be treated as trusted only when extracted from configured trusted boundaries, verified authentication, or application resolvers. The SDK should not blindly trust arbitrary client-supplied identity headers in internet-facing deployments.
+
+`x-aib-context-id`, `x-aib-session-id`, `x-aib-delegation-chain`, and `x-aib-scopes` are AIB-specific because their semantics are owned by AIB and may be tied to consent, token exchange, delegation, or AIB server-side state.
+
+The SDK may allow custom header names later, but defaults should be stable and should avoid duplicating generic context as AIB-specific headers.
 
 Precedence:
 
 1. User-provided outbound headers should not be overwritten by default.
 2. Values in `aib.ctx` are the propagation source.
-3. If no current context exists, instrumentors do nothing.
-4. Override behavior can be a configuration option later, not the default.
+3. Inbound trusted headers initialize `aib.ctx`.
+4. If no request ID exists, inbound instrumentation generates one.
+5. Environment defaults initialize local runtime identity when explicit values are not provided.
+6. Explicit instrumentation arguments override environment defaults.
+7. Resolver callbacks can derive request-specific values from verified framework state.
+8. Override behavior for outbound headers can be a configuration option later, not the default.
+
+---
+
+## Context enrichment defaults
+
+The SDK should support context enrichment at instrumentation time because most clients will not know the first agent server's local runtime identity. A typical incoming request may include no request ID, no actor, and no AIB-specific context. The first trusted server should fill the safe defaults.
+
+Default environment variables:
+
+```text
+AIB_ACTOR
+AIB_PRINCIPAL
+AIB_SERVICE
+AIB_CONTEXT_ID
+AIB_SESSION_ID
+```
+
+`AIB_ACTOR` is the most important default for agent servers and MCP servers. It identifies the local runtime actor, for example `agent://researcher` or another deployment-defined opaque string. `AIB_PRINCIPAL` should be optional and is only appropriate when the process has a fixed trusted principal; user-specific principal values should normally come from verified request authentication or a resolver.
+
+Instrumentation should also accept explicit values and resolver callbacks:
+
+```python
+import aib
+
+aib.instrument_fastapi(
+    app,
+    actor="agent://researcher",
+    principal_resolver=get_principal_from_verified_auth,
+)
+```
+
+Equivalent environment-driven setup should work without code-level identity arguments:
+
+```bash
+export AIB_ACTOR="agent://researcher"
+```
+
+```python
+import aib
+
+aib.instrument_fastapi(app)
+aib.instrument_httpx()
+```
+
+Request-time enrichment order should be:
+
+1. extract trusted inbound propagation headers,
+2. generate `request_id` if absent,
+3. apply environment defaults for missing local fields,
+4. apply explicit instrumentation values for missing or configured fields,
+5. apply resolver callbacks for request-specific values.
+
+This keeps simple deployments ergonomic while allowing orchestrators to inject identity through environment variables or explicit wrappers.
 
 ---
 
@@ -171,7 +248,7 @@ Precedence:
 
 ### FastAPI
 
-`instrument_fastapi(app)` should add middleware that extracts inbound AIB headers into `aib.ctx`.
+`instrument_fastapi(app)` should add middleware that extracts trusted inbound propagation headers into `aib.ctx`, generates a request ID when missing, and enriches local context from environment defaults, explicit arguments, and resolver callbacks.
 
 ```python
 import aib
@@ -183,16 +260,17 @@ aib.instrument_fastapi(app)
 
 Application code does not need to thread context through dependencies just for propagation.
 
-Optional local override:
+Optional local configuration:
 
 ```python
-@app.middleware("http")
-async def set_actor(request, call_next):
-    aib.ctx["actor"] = "agent://researcher"
-    return await call_next(request)
+aib.instrument_fastapi(
+    app,
+    actor="agent://researcher",
+    principal_resolver=get_principal_from_verified_auth,
+)
 ```
 
-If useful, `instrument_fastapi(app, actor="agent://researcher")` can provide the same behavior without custom middleware.
+Environment defaults should provide the same simple path without code-level identity arguments when deployment configuration is preferred.
 
 ### httpx
 
@@ -252,7 +330,11 @@ class AgentServer:
         if not self.settings.aib_enabled:
             return
 
-        aib.instrument_fastapi(self.app)
+        aib.instrument_fastapi(
+            self.app,
+            actor=self.settings.aib_actor,
+            principal_resolver=self._resolve_aib_principal,
+        )
         aib.instrument_httpx()
 ```
 
@@ -272,13 +354,12 @@ MCPServerStreamableHTTP(mcp_url)
 
 This is covered because Pydantic AI's streamable MCP transport uses `httpx.AsyncClient`. If global instrumentation is disabled or a future transport bypasses `httpx`, PAIS can still pass an instrumented client explicitly, but that should be a fallback rather than the default path.
 
-KAOS-specific identity mapping remains outside the SDK:
+KAOS-specific identity mapping remains outside the SDK. KAOS can provide the actor explicitly as above or through environment variables injected into the workload:
 
-```python
-@app.middleware("http")
-async def kaos_actor(request, call_next):
-    aib.ctx["actor"] = f"kaos://agent/{namespace}/{name}"
-    return await call_next(request)
+```yaml
+env:
+  - name: AIB_ACTOR
+    value: kaos://agent/default/researcher
 ```
 
 The SDK only sees an opaque `actor` string.
@@ -345,7 +426,7 @@ import aib
 from fasta2a import FastA2A
 
 app = FastA2A()
-aib.instrument_asgi(app)
+aib.instrument_asgi(app, actor="agent://worker")
 aib.instrument_httpx()
 ```
 
@@ -488,6 +569,7 @@ Rejected. The SDK should interoperate with existing frameworks rather than repla
 - AIB gets a small reusable Python developer surface independent of any orchestrator.
 - Request propagation is automatic across common FastAPI, httpx, requests, Pydantic AI MCP, and FastMCP paths.
 - `aib.ctx` gives a simple override/inspection point without forcing explicit dependency passing.
+- First trusted servers can generate missing request IDs and enrich context from environment defaults or resolver callbacks.
 - KAOS PAIS can integrate with minimal changes and without littering PAIS code with manual header plumbing.
 - The package can grow to AIB server interactions later without overcomplicating propagation.
 
@@ -502,6 +584,7 @@ Rejected. The SDK should interoperate with existing frameworks rather than repla
 
 - If instrumentation silently misses a transport, developers may think propagation happened when it did not.
 - If instrumentation overwrites explicit user headers, it may break callers; defaults should avoid overwriting.
+- If identity headers are trusted from untrusted clients, callers can spoof principals or actors; inbound extraction must distinguish trusted boundaries from untrusted client input.
 - If `aib.ctx` is implemented as a real global dict rather than a ContextVar-backed facade, concurrent requests will leak context.
 - If the SDK grows server-interaction and policy APIs before propagation is stable, the API may become too broad.
 
@@ -513,7 +596,9 @@ Rejected. The SDK should interoperate with existing frameworks rather than repla
 2. The initial public API is `aib.ctx`, `instrument_fastapi`, `instrument_httpx`, `instrument_requests`, `instrument_fastmcp`, `instrument_asgi`, and `ctx.to_headers()`.
 3. `aib.ctx` is a dictionary-like request-local mapping backed by `ContextVar`.
 4. Automatic propagation is the default; manual header passing is an escape hatch.
-5. The initial implementation can keep context, propagation, and instrumentors in `instrument.py` and split later only if size/maintainability requires it.
-6. Pydantic AI MCP propagation is expected to work through global `httpx` instrumentation because its streamable HTTP transport uses `httpx.AsyncClient`.
-7. LangChain propagation should rely first on `httpx`/`requests` instrumentation for tools and provider paths that use those clients; optional LangChain middleware can adjust `aib.ctx` around agent execution.
-8. AIB server interactions are intentionally deferred to the next detailed section.
+5. Generic context should use generic headers by default: `x-request-id`, `x-principal`, and `x-actor`; AIB-specific headers are reserved for AIB-owned context such as session, delegation chain, scopes, and context IDs.
+6. Instrumented servers should generate a request ID when missing and enrich local context from environment defaults, explicit arguments, and resolver callbacks.
+7. The initial implementation can keep context, propagation, and instrumentors in `instrument.py` and split later only if size/maintainability requires it.
+8. Pydantic AI MCP propagation is expected to work through global `httpx` instrumentation because its streamable HTTP transport uses `httpx.AsyncClient`.
+9. LangChain propagation should rely first on `httpx`/`requests` instrumentation for tools and provider paths that use those clients; optional LangChain middleware can adjust `aib.ctx` around agent execution.
+10. AIB server interactions are intentionally deferred to the next detailed section.
