@@ -80,7 +80,7 @@ aib/
 
 If `instrument.py` grows near roughly 800 lines or becomes hard to maintain, split it later. Do not start with many public modules such as `aib.context`, `aib.fastapi`, `aib.httpx`, `aib.mcp`, and `aib.propagation`.
 
-Initial public API:
+Initial propagation API:
 
 ```python
 import aib
@@ -96,13 +96,13 @@ aib.instrument_asgi(app)
 aib.ctx.to_headers()
 ```
 
-Future AIB server interaction can add:
+AIB server interaction API:
 
 ```python
-aib.Client(...)
+client = aib.Client(...)
 ```
 
-but this ADR focuses on propagation first.
+The SDK should expose a small framework-agnostic client surface for access checks, consent/re-authentication handling, and delegated token retrieval. Framework integrations can wrap these calls later, but the core interface should work in plain Python code.
 
 ---
 
@@ -500,20 +500,272 @@ The ADR does not assume that every LangChain provider uses `httpx` or `requests`
 
 ---
 
-## AIB server interaction boundary
+## AIB server interaction API
 
-This ADR focuses on request propagation. AIB server interaction should be reviewed separately after the propagation model is accepted.
+The SDK should expose AIB server interactions as a small typed client. The client should use `aib.ctx` by default, so callers do not repeatedly pass principal, actor, request ID, or delegation context.
 
-The later server-interaction section should cover:
+Initial client construction:
 
-- grant/resource checks,
-- user-consent required responses,
-- third-party re-authentication required responses,
-- RFC 8693 token exchange,
-- delegated token handling,
-- structured result types.
+```python
+import aib
 
-Do not overload the propagation design with access-check semantics yet.
+client = aib.Client(
+    base_url="https://aib.example.com",
+    api_key_env="AIB_API_KEY",
+)
+```
+
+Default environment variables:
+
+```text
+AIB_BASE_URL
+AIB_API_KEY
+```
+
+If `base_url` is not passed, the client should read `AIB_BASE_URL`. If an API key or workload credential is not passed, the client should read the configured env var. The SDK should not prescribe the final AIB server authentication mechanism; it should support the current AIB deployment while leaving room for workload identity later.
+
+### Core request types
+
+The client should accept simple strings and small typed request objects. Plain strings keep the first API ergonomic; request objects allow advanced callers to be explicit.
+
+```python
+decision = client.check_access(
+    resource="agent://default/researcher",
+    action="invoke",
+)
+```
+
+Equivalent explicit form:
+
+```python
+decision = client.check_access(
+    aib.AccessRequest(
+        principal=aib.ctx.get("principal"),
+        actor=aib.ctx.get("actor"),
+        resource="agent://default/researcher",
+        action="invoke",
+        request_id=aib.ctx.get("request_id"),
+        scopes=[],
+        metadata={},
+    )
+)
+```
+
+The minimum request fields are:
+
+| Field | Meaning |
+|---|---|
+| `principal` | User or subject on whose behalf the action is requested. Defaults from `aib.ctx`. |
+| `actor` | Local agent/runtime actor performing the action. Defaults from `aib.ctx`. |
+| `resource` | Target logical resource, opaque to the SDK. |
+| `action` | Requested operation such as `invoke`, `call`, `read`, `use`, or `exchange_token`. |
+| `scopes` | Optional third-party or resource scopes. |
+| `request_id` | Request/correlation ID. Defaults from `aib.ctx`. |
+| `metadata` | Optional non-sensitive structured context. |
+
+### Access checks
+
+Use `check_access` when the application wants to inspect the result:
+
+```python
+decision = client.check_access(
+    resource="mcp://default/github",
+    action="call",
+)
+
+if decision.allowed:
+    ...
+elif decision.consent_url:
+    ...
+else:
+    ...
+```
+
+Use `require_access` when the application wants exceptions for non-allowed outcomes:
+
+```python
+client.require_access(
+    resource="modelapi://default/openai",
+    action="use",
+)
+```
+
+Expected result shape:
+
+```python
+class AccessDecision:
+    allowed: bool
+    reason: str | None
+    grant_id: str | None
+    consent_url: str | None
+    reauth_url: str | None
+    expires_at: datetime | None
+    metadata: dict[str, object]
+```
+
+Expected exceptions:
+
+```python
+aib.AccessDenied
+aib.ConsentRequired
+aib.ReauthenticationRequired
+aib.AIBUnavailable
+```
+
+`ConsentRequired` and `ReauthenticationRequired` should expose the relevant URL and structured decision details so callers can return a retryable response to the user.
+
+### Delegated token retrieval
+
+For third-party APIs, callers should ask AIB for a delegated token rather than storing or refreshing third-party tokens locally:
+
+```python
+token = client.get_token(
+    resource="github://repos/acme/payments",
+    scopes=["issues:read"],
+)
+
+headers = {"authorization": f"Bearer {token.access_token}"}
+```
+
+Expected result shape:
+
+```python
+class TokenResult:
+    access_token: str
+    token_type: str
+    expires_at: datetime | None
+    scopes: list[str]
+    metadata: dict[str, object]
+```
+
+`get_token` should return a token only when AIB has a valid grant/session and the current principal/actor context is authorized. If user consent or third-party re-authentication is required, it should raise `ConsentRequired` or `ReauthenticationRequired` with a URL.
+
+### Token exchange
+
+If the AIB server exposes RFC 8693 token exchange directly, the SDK should provide a small explicit method:
+
+```python
+token = client.exchange_token(
+    subject_token=upstream_token,
+    audience="github",
+    scopes=["issues:read"],
+)
+```
+
+This is lower-level than `get_token`. KAOS components should usually use `get_token` for third-party calls and reserve `exchange_token` for cases where they already hold an upstream subject token and need direct exchange semantics.
+
+### Minimal client surface
+
+The initial framework-agnostic API should be:
+
+```python
+client = aib.Client(...)
+
+decision = client.check_access(...)
+client.require_access(...)
+
+token = client.get_token(...)
+token = client.exchange_token(...)
+```
+
+Async equivalents should exist without changing semantics:
+
+```python
+client = aib.AsyncClient(...)
+
+decision = await client.check_access(...)
+await client.require_access(...)
+
+token = await client.get_token(...)
+token = await client.exchange_token(...)
+```
+
+The SDK should not expose a policy language, grant mutation API, resource reconciler, or approval workflow API in this interface. Those are AIB server/admin concerns or orchestrator sync concerns, not runtime SDK primitives.
+
+---
+
+## Framework-agnostic KAOS flows
+
+The following flows define what KAOS needs from the SDK across Agent, MCPServer, and ModelAPI interactions. Framework-specific examples should be added later after this interface is accepted.
+
+### Flow 1: user invokes an agent
+
+An incoming request reaches the first agent server. The SDK instrumentation extracts trusted headers, generates `request_id` if absent, enriches `actor` from `AIB_ACTOR` or explicit configuration, and resolves `principal` from verified user authentication.
+
+The agent server checks root access:
+
+```python
+client.require_access(
+    resource="agent://default/researcher",
+    action="invoke",
+)
+```
+
+If allowed, the request proceeds. If consent or re-authentication is required, the server returns a structured retryable response containing the URL from the SDK exception. If denied, the server returns an authorization failure.
+
+### Flow 2: agent delegates to another agent
+
+The parent agent calls a child agent through an instrumented HTTP client. Propagation adds `x-request-id`, `x-principal`, `x-actor`, and any AIB-owned context.
+
+The child agent enriches its local `actor`, preserving the principal and request ID, then checks whether the principal/actor context can invoke the child:
+
+```python
+client.require_access(
+    resource="agent://default/planner",
+    action="invoke",
+)
+```
+
+The SDK does not need to understand the KAOS resource graph. It sends opaque resource IDs and current propagated context to AIB.
+
+### Flow 3: agent calls an MCP server
+
+Before making the call, the agent runtime can check access to the MCPServer root resource:
+
+```python
+client.require_access(
+    resource="mcp://default/github",
+    action="call",
+)
+```
+
+The outbound MCP request then propagates context automatically. The MCP server can also perform the same root check on receipt. KAOS can choose whether the caller side, callee side, or both perform the check; the SDK supports either placement.
+
+Tool-level and argument-level authorization remain outside the initial SDK contract.
+
+### Flow 4: MCP tool calls a third-party API
+
+The MCP tool asks AIB for a delegated token:
+
+```python
+token = client.get_token(
+    resource="github://repos/acme/payments",
+    scopes=["issues:read"],
+)
+```
+
+If the user has not consented or the third-party session has expired, the SDK raises `ConsentRequired` or `ReauthenticationRequired` with a URL. The MCP server returns that structured condition to the agent/user rather than silently failing or trying to refresh credentials itself.
+
+If allowed, the tool uses the returned token for the third-party API call and does not persist it.
+
+### Flow 5: agent uses a ModelAPI
+
+The agent runtime checks root access to the ModelAPI resource:
+
+```python
+client.require_access(
+    resource="modelapi://default/openai",
+    action="use",
+)
+```
+
+If allowed, the ModelAPI's internal controls still apply. Model allowlists, budgets, provider credentials, and rate limits remain LiteLLM or ModelAPI responsibilities rather than AIB SDK responsibilities.
+
+### Flow 6: consent or re-authentication retry
+
+When `require_access` or `get_token` raises `ConsentRequired` or `ReauthenticationRequired`, the runtime returns the URL to the user through its normal response channel. After the user completes consent or re-authentication, the same request can be retried with the same logical context and should succeed if AIB now has the required grant/session.
+
+The SDK should make these outcomes explicit and typed. It should not return success-shaped empty tokens or boolean-only denials for flows that require user action.
 
 ---
 
@@ -530,35 +782,8 @@ The SDK should not:
 - replace LiteLLM model-level authorization,
 - persist raw third-party tokens,
 - implement durable human approval workflows,
+- mutate AIB grants or resource definitions from runtime request handlers,
 - require application code to manually pass headers in normal FastAPI/httpx/requests/Pydantic AI/FastMCP paths.
-
----
-
-## Annex: Alternatives considered
-
-### Option A: Many public framework modules
-
-This would expose separate public modules such as `aib.context`, `aib.fastapi`, `aib.httpx`, `aib.mcp`, and `aib.propagation`.
-
-Rejected for the initial SDK. It makes the API look larger than the problem. Start with `import aib`, `aib.ctx`, and a few package-level instrumentation functions.
-
-### Option B: Manual header passing only
-
-This would require application code to call `to_headers()` and pass headers into every outbound client.
-
-Rejected. It is too error-prone and unlike successful propagation systems such as OpenTelemetry. Manual `to_headers()` remains only as an escape hatch.
-
-### Option C: Orchestrator-specific SDK
-
-This would make the SDK directly understand one orchestrator's identities, resource graph, and runtime configuration.
-
-Rejected. It would make the SDK less reusable and would move orchestrator-specific concepts into AIB's core developer surface.
-
-### Option D: Full agent runtime framework
-
-This would turn the SDK into an agent runtime with tools, memory, task orchestration, and policy execution.
-
-Rejected. The SDK should interoperate with existing frameworks rather than replacing them.
 
 ---
 
@@ -570,8 +795,9 @@ Rejected. The SDK should interoperate with existing frameworks rather than repla
 - Request propagation is automatic across common FastAPI, httpx, requests, Pydantic AI MCP, and FastMCP paths.
 - `aib.ctx` gives a simple override/inspection point without forcing explicit dependency passing.
 - First trusted servers can generate missing request IDs and enrich context from environment defaults or resolver callbacks.
+- A small `Client`/`AsyncClient` surface covers root access checks, consent/re-authentication outcomes, delegated token retrieval, and token exchange without making the SDK a policy engine.
 - KAOS PAIS can integrate with minimal changes and without littering PAIS code with manual header plumbing.
-- The package can grow to AIB server interactions later without overcomplicating propagation.
+- KAOS Agent, MCPServer, and ModelAPI flows can share one runtime SDK contract while keeping KAOS-specific resource IDs opaque.
 
 ### Negative
 
@@ -579,6 +805,7 @@ Rejected. The SDK should interoperate with existing frameworks rather than repla
 - Instrumenting both `httpx` and `requests` requires maintaining two client hooks.
 - Frameworks or providers that use other HTTP stacks may require manual `to_headers()` or later provider-specific support.
 - A dict-like `aib.ctx` is ergonomic but must still be request-local through `ContextVar`, not a process-global mutable dictionary.
+- Runtime code must handle typed consent/re-authentication outcomes instead of treating authorization as a boolean-only check.
 
 ### Risks
 
@@ -586,19 +813,20 @@ Rejected. The SDK should interoperate with existing frameworks rather than repla
 - If instrumentation overwrites explicit user headers, it may break callers; defaults should avoid overwriting.
 - If identity headers are trusted from untrusted clients, callers can spoof principals or actors; inbound extraction must distinguish trusted boundaries from untrusted client input.
 - If `aib.ctx` is implemented as a real global dict rather than a ContextVar-backed facade, concurrent requests will leak context.
-- If the SDK grows server-interaction and policy APIs before propagation is stable, the API may become too broad.
+- If `Client` grows grant mutation, reconciliation, policy authoring, or approval workflow APIs, the SDK may become too broad.
 
 ---
 
 ## Decision summary
 
 1. The SDK is a small third-party Python SDK for AIB interoperability.
-2. The initial public API is `aib.ctx`, `instrument_fastapi`, `instrument_httpx`, `instrument_requests`, `instrument_fastmcp`, `instrument_asgi`, and `ctx.to_headers()`.
+2. The initial propagation API is `aib.ctx`, `instrument_fastapi`, `instrument_httpx`, `instrument_requests`, `instrument_fastmcp`, `instrument_asgi`, and `ctx.to_headers()`.
 3. `aib.ctx` is a dictionary-like request-local mapping backed by `ContextVar`.
 4. Automatic propagation is the default; manual header passing is an escape hatch.
 5. Generic context should use generic headers by default: `x-request-id`, `x-principal`, and `x-actor`; AIB-specific headers are reserved for AIB-owned context such as session, delegation chain, scopes, and context IDs.
 6. Instrumented servers should generate a request ID when missing and enrich local context from environment defaults, explicit arguments, and resolver callbacks.
-7. The initial implementation can keep context, propagation, and instrumentors in `instrument.py` and split later only if size/maintainability requires it.
-8. Pydantic AI MCP propagation is expected to work through global `httpx` instrumentation because its streamable HTTP transport uses `httpx.AsyncClient`.
-9. LangChain propagation should rely first on `httpx`/`requests` instrumentation for tools and provider paths that use those clients; optional LangChain middleware can adjust `aib.ctx` around agent execution.
-10. AIB server interactions are intentionally deferred to the next detailed section.
+7. The framework-agnostic server API should expose `Client`/`AsyncClient` with `check_access`, `require_access`, `get_token`, and `exchange_token`.
+8. SDK server interactions should use current `aib.ctx` by default and return typed decisions, tokens, and user-action exceptions.
+9. The initial implementation can keep context, propagation, and instrumentors in `instrument.py` and split later only if size/maintainability requires it.
+10. Pydantic AI MCP propagation is expected to work through global `httpx` instrumentation because its streamable HTTP transport uses `httpx.AsyncClient`.
+11. LangChain propagation should rely first on `httpx`/`requests` instrumentation for tools and provider paths that use those clients; optional LangChain middleware can adjust `aib.ctx` around agent execution.
