@@ -269,37 +269,38 @@ Decision output:
 - Adopt/build/upstream recommendations.
 - First implementation boundary.
 
-### 10. AIB SDK design
+### 9. AIB Python SDK design
 
 Core question:
 
-- What should the KAOS-facing AIB SDK provide, where should it be embedded, and how should it keep authorization, request context propagation, token exchange, and delegated-token use consistent across Agent, MCPServer, A2A, and ModelAPI flows?
+- What should a third-party AIB Python SDK provide, where should it integrate with popular Python agentic frameworks, and how should it keep request propagation, AIB grant checks, token exchange, consent, re-authentication, and delegated-token use consistent?
 
 Sub-questions:
 
-- Should the SDK be a KAOS-specific integration layer first, an upstreamable AIB client library, or both with a small generic core and KAOS adapters?
-- Which responsibilities belong in the SDK versus the Agent runtime, MCP runtimes, Gateway/ExtProc, LiteLLM hooks, and the operator?
-- What abstractions should the SDK expose for `RequestSecurityContext`, resource-grant checks, user-delegated token exchange, re-auth/approval errors, audit metadata, and safe token handling?
-- How should the SDK represent KAOS logical resource identities and requested/approved edges from CRDs?
-- Which languages/runtimes need first-class SDK support initially: Python Agent runtime, Python MCP runtimes, Go operator/sync service, or future TypeScript/UI clients?
-- How should the SDK avoid becoming the source of policy definitions, given that config-as-code should remain in KAOS CRDs and approved grants should remain in AIB?
+- What generic request context model should the SDK expose?
+- What canonical propagation headers and redaction behavior should it provide?
+- What AIB server operations should be high-level SDK methods rather than raw HTTP calls?
+- How should expected outcomes distinguish allowed, platform approval required, user consent required, third-party re-authentication required, denied, and misconfigured cases?
+- How should the SDK look in practice with FastAPI, Pydantic AI, FastMCP, and orchestrator wrappers?
+- How should the SDK stay independent of orchestrator-specific resource identities and topology models?
 
 Evidence needed:
 
 - Finalized decisions from sections 1-8.
-- KAOS Agent runtime request handling, MCP client construction, A2A delegation, and ModelAPI call paths.
-- KAOS MCP runtime patterns and FastMCP auth/header extension points.
+- FastAPI request/middleware/dependency patterns.
+- Pydantic AI dependency and tool execution patterns.
+- FastMCP context/auth/header extension points.
 - AIB token exchange, grant, ExtProc, CEL, and admin/client APIs.
-- Existing AIB client/server package boundaries and opportunities for upstream reusable SDK code.
+- Existing AIB client/server package boundaries and opportunities for a standalone Python SDK.
 
 Decision output:
 
 - SDK responsibility boundary.
-- Initial SDK module/package shape.
-- Runtime integration points.
+- Initial Python package/module shape.
+- FastAPI, Pydantic AI, FastMCP, and wrapper examples.
 - Error/result model for denied grants, missing approval, and re-auth required.
 - Token-handling and audit rules.
-- What should be KAOS-local first versus proposed upstream to AIB.
+- Explicit non-goals for the SDK.
 
 ## Recommended decision sequencing
 
@@ -345,9 +346,9 @@ The order matters because later decisions depend on earlier ones.
 
 ### Phase D: implementation-shape decision
 
-10. **AIB SDK design**
-   - Decide the concrete SDK boundary after architecture responsibilities are clear.
-   - This should translate the target security model into runtime/operator integration surfaces without becoming the policy source of truth.
+9. **AIB Python SDK design**
+   - Decide the concrete third-party Python SDK boundary after architecture responsibilities are clear.
+   - This should translate the target security model into framework-neutral request propagation and AIB server interaction surfaces without becoming the policy source of truth.
 
 ## Output format for each decision note
 
