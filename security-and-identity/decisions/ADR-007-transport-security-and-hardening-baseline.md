@@ -1,6 +1,6 @@
 # ADR-007: Transport security and hardening baseline
 
-**Status**: Proposed. Requires host decisions before acceptance.
+**Status**: Accepted.
 **Date**: 2026-06-20
 
 ---
@@ -365,7 +365,7 @@ Cons:
 
 Best fit:
 
-- 1.1 Gateway/resource-boundary hardening.
+- Part of the 1.1 Gateway/resource-boundary hardening work.
 - Production profile when Gateway enforcement is adopted.
 
 ### Option F: Service mesh as default platform baseline
@@ -393,7 +393,7 @@ Best fit:
 
 ---
 
-## Provisional recommendation
+## Decision
 
 Adopt **Option A: Minimal 1.0 hardening with external TLS and AIB-managed secret protection**.
 
@@ -416,11 +416,11 @@ The 1.0 target should require:
 
 ---
 
-## Host questions required to finalize ADR-007
+## Host questions resolved for ADR-007
 
 ### Q1. Should external TLS be required for production but not block the initial architecture?
 
-Recommended answer:
+Decision:
 
 - Yes. Production traffic should use TLS at ingress/Gateway/reverse proxy, but AIB integration should not require cert-manager or Gateway TLS chart support in 1.0.
 
@@ -430,7 +430,7 @@ Tradeoff:
 
 ### Q2. Should cert-manager be mandatory?
 
-Recommended answer:
+Decision:
 
 - No. cert-manager should be recommended as a Kubernetes-native certificate option, but not mandatory because some deployments terminate TLS at cloud load balancers or corporate ingress layers.
 
@@ -440,7 +440,7 @@ Tradeoff:
 
 ### Q3. Should in-cluster mTLS/SPIFFE/service mesh be required in 1.0?
 
-Recommended answer:
+Decision:
 
 - No. Defer to advanced/future profile.
 
@@ -450,9 +450,9 @@ Tradeoff:
 
 ### Q4. Should NetworkPolicy be mandatory in 1.0?
 
-Recommended answer:
+Decision:
 
-- No. Treat NetworkPolicy as part of the Gateway/resource-boundary hardening extension.
+- No. Bundle NetworkPolicy with the 1.1 Gateway/resource-boundary hardening work.
 
 Tradeoff:
 
@@ -460,7 +460,7 @@ Tradeoff:
 
 ### Q5. Should Agent/MCPServer/ModelAPI native TLS be mandatory in 1.0?
 
-Recommended answer:
+Decision:
 
 - No. Add it as a future configurable hardening layer. It is valuable, but requires runtime/operator changes across Agent, MCPServer, ModelAPI, probes, generated endpoints, and certificate configuration.
 
@@ -470,7 +470,7 @@ Tradeoff:
 
 ### Q6. Should KAOS store or cache delegated third-party tokens?
 
-Recommended answer:
+Decision:
 
 - No. AIB owns token vault storage and encryption. KAOS runtimes may use delegated tokens transiently for calls but must not persist raw tokens in memory/events/logs.
 
@@ -480,7 +480,7 @@ Tradeoff:
 
 ### Q7. Should literal production secrets in CRDs be allowed?
 
-Recommended answer:
+Decision:
 
 - No for production guidance. Existing direct-value fields may remain for compatibility/dev, but production docs and future validation should steer users to Kubernetes Secrets or external secret managers.
 
@@ -490,7 +490,7 @@ Tradeoff:
 
 ### Q8. What minimum audit/telemetry should be required?
 
-Recommended answer:
+Decision:
 
 - Record security decision metadata: principal identity, source identity, target identity, action, grant/consent decision code, and correlation IDs. Do not record raw tokens, client secrets, signing keys, OAuth authorization codes, or encryption keys.
 
@@ -500,13 +500,13 @@ Tradeoff:
 
 ---
 
-## Proposed ADR-007 decision if host agrees
+## Accepted ADR-007 decision
 
 1. KAOS 1.0 uses a minimal hardening baseline, not service mesh or mandatory in-cluster mTLS.
 2. Production external user/client traffic must use TLS at ingress, Gateway, load balancer, or trusted reverse proxy.
 3. cert-manager is recommended for Kubernetes-native certificate automation but not mandatory.
 4. Gateway TLS support is a recommended chart/controller enhancement, not a prerequisite for the initial AIB integration.
-5. NetworkPolicy is deferred to the Gateway/resource-boundary hardening extension.
+5. Gateway + NetworkPolicy boundary hardening is bundled into the 1.1 Gateway/resource-boundary work.
 6. Native Agent/MCPServer/ModelAPI TLS is a future configurable hardening layer, not mandatory for 1.0.
 7. SPIFFE, service mesh, and cryptographic workload binding are deferred advanced-profile features.
 8. AIB owns token vault storage and encryption; KAOS must not persist delegated third-party tokens.
@@ -518,4 +518,4 @@ Tradeoff:
 
 ## Decision status
 
-Awaiting host answers.
+Accepted.
