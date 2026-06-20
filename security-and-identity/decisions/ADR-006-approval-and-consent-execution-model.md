@@ -1,4 +1,4 @@
-# ADR-006: Approval and consent execution model
+# ADR-006: Consent and re-authentication execution model
 
 **Status**: Accepted.
 **Date**: 2026-06-20
@@ -7,37 +7,56 @@
 
 ## Decision
 
-Adopt a simple split model:
+Adopt a **fail-with-actionable-user-URL-and-retry** model for AIB-backed user consent and third-party re-authentication.
+
+Do **not** describe current AIB behavior as a generic "approval flow". Current AIB implements:
+
+1. admin/operator configuration of agents, third-party services, permission sets, credentials, and signing keys,
+2. end-user consent grants for agent access to third-party permission sets,
+3. third-party OAuth2 session connection and re-authentication,
+4. token exchange that verifies principal, agent, grant, session, scopes, and target resource before returning a third-party access token.
+
+Current AIB does **not** implement a runtime-created admin approval request queue such as:
+
+```text
+requested -> pending_admin_approval -> approved | denied | expired
+```
+
+Therefore KAOS 1.0 must separate these cases explicitly:
 
 | Case | 1.0 behavior |
 |---|---|
-| Missing KAOS resource grant | Fail closed with `platform_approval_required`; do not auto-create in production |
-| Missing user delegated grant | Fail fast with AIB consent URL; user retries after consent |
-| Missing/expired third-party session | Fail fast with AIB re-auth URL; user retries after re-auth |
-| Missing MCP tool/argument approval | Deferred; not modeled in 1.0 |
-| Runtime human approval during a task | Deferred; future A2A `input-required` pause/resume |
-| Autonomous run needs new consent/re-auth | Stop or fail the action with structured approval-required event; do not prompt/block indefinitely |
+| Missing KAOS resource grant | Fail closed with `platform_grant_missing`; no user consent URL; admin/platform grant must already exist or be bootstrapped explicitly. |
+| Missing or expired user delegated grant | Fail with `user_consent_required` and AIB agent consent URL; user re-grants and retries. |
+| Missing/unusable third-party OAuth2 session | Fail with `third_party_reauth_required` and AIB third-party authorization URL; user reconnects the service and retries. |
+| Runtime-created admin approval request | Not implemented in current AIB; deferred. |
+| MCP tool/argument approval | Deferred; not modeled in 1.0. |
+| A2A task pause/resume via `input-required` | Deferred; KAOS has the state but not the durable resume workflow. |
+| Autonomous run needs consent/re-auth | Stop/skip the protected action and record a structured event; do not block indefinitely or auto-grant. |
 
 In short:
 
 ```text
-Admin/platform approval:
-  pre-approved resource grants only.
+Admin/platform resource grants:
+  pre-existing grant data only; no runtime admin approval queue in 1.0.
 
-User delegated consent and third-party re-auth:
-  fail with actionable URL and retry.
+User delegated consent:
+  AIB consent UI/API creates or refreshes user_grants.
+
+Third-party re-authentication:
+  AIB OAuth2 session flow creates or refreshes encrypted user_sessions.
 
 Runtime pause/resume:
-  defer until A2A task persistence, resume APIs, and UI support exist.
+  deferred until KAOS has durable tasks, resume APIs, and UI support.
 ```
 
-This keeps 1.0 aligned with the "keep it simple" principle:
+This keeps KAOS 1.0 aligned with the "keep it simple" principle:
 
 - no blocking waits,
 - no durable pause/resume stack,
-- no auto-granting by default,
 - no hidden approval state in memory,
-- no conflation of admin approval and user consent.
+- no accidental auto-granting in production,
+- no conflation of admin approval, user delegated consent, and third-party OAuth2 re-authentication.
 
 ---
 
@@ -49,9 +68,9 @@ This keeps 1.0 aligned with the "keep it simple" principle:
 
 [ADR-004](./ADR-004-aib-responsibility-boundary.md) defines AIB as the owner of:
 
-- KAOS logical resource grants,
+- approved KAOS logical resource grants,
 - user-delegated third-party grants,
-- delegated token exchange.
+- delegated third-party token exchange.
 
 [ADR-005](./ADR-005-authorization-and-policy-model.md) accepts a simple grant-table model for 1.0:
 
@@ -61,384 +80,225 @@ This keeps 1.0 aligned with the "keep it simple" principle:
 - no-permission-by-default applies when security is enabled.
 - OPA/Rego, Keycloak Authorization Services, MCP tool/argument policy, and autonomous run-scoped grants are deferred.
 
-This ADR decides what happens operationally when an agent action cannot proceed because approval, user consent, or re-authentication is missing.
+This ADR decides what happens operationally when an agent action cannot proceed because a platform grant, user delegated grant, or third-party OAuth2 session is missing or expired.
 
+The key clarification is that **current AIB user consent and third-party re-authentication are not an admin approval workflow**. They are user-facing flows that update existing AIB grant/session state.
 
 ---
 
 ## Terminology
 
-This ADR separates four concepts that are easy to conflate:
+This ADR separates five concepts that are easy to conflate:
 
-| Concept | Meaning | Example | Primary owner |
+| Concept | Meaning | Example | Current implementation status |
 |---|---|---|---|
-| Admin/platform approval | Approval that one KAOS resource may use another KAOS resource | `kaos://agent/researcher` may call `kaos://mcpserver/github` | AIB resource grants, created by admin/bootstrap flow |
-| User delegated consent | User allows an agent to use a third-party permission set on their behalf | Alice allows researcher to use `github-issues-reader` | AIB UserGrant + PermissionSet |
-| Third-party re-authentication | User has consented, but their third-party OAuth session is absent, expired, or missing required scopes | Alice must reconnect GitHub | AIB OAuth/session flow |
-| Runtime human approval | Human must approve a specific action or continuation during an agent run | "Approve sending this email" | Future KAOS task/UI approval model |
+| Admin/platform configuration | Admin defines agents, services, permission sets, credentials, and signing keys | Admin creates `github-issues-reader` permission set | Implemented by AIB admin APIs |
+| Platform resource grant | Permission for one KAOS logical resource to use another KAOS logical resource | `agent://researcher` may call `mcp://github` | Target 1.0 AIB/KAOS grant model; runtime approval queue not implemented |
+| User delegated consent grant | User allows an agent to use third-party permission sets on their behalf | Alice allows researcher to use GitHub issues permission set | Implemented by AIB consent APIs/UI and `user_grants` |
+| Third-party OAuth2 session | User has connected a third-party account and AIB stores encrypted access/refresh tokens | Alice connected GitHub through OAuth2 | Implemented by AIB OAuth2 session APIs and `user_sessions` |
+| Runtime human approval | Human approves a specific action or continuation during a run | "Approve sending this email" | Deferred |
 
-The 1.0 goal is not to solve all four with one mechanism. The goal is to define a safe and simple behavior for each.
+The 1.0 goal is not to solve all five with one mechanism. The goal is to define a safe and simple behavior for each.
 
 ---
 
-## Source facts
+## Implemented AIB behavior
 
-### KAOS A2A has an `input-required` state but no complete pause/resume workflow
+### Admin configuration exists, but runtime admin approval requests do not
 
-Source file:
+Relevant files:
 
-- `pydantic-ai-server/pais/a2a.py`
+- `agentic-identity-broker/internal/adapters/http/routing/admin.go`
+- `agentic-identity-broker/internal/adapters/http/handlers/admin/permission_sets_handler.go`
+- `agentic-identity-broker/api/admin/openapi.yaml`
 
-Relevant facts:
+AIB admin APIs support CRUD-style configuration for:
 
-- `TaskState.INPUT_REQUIRED = "input-required"` exists.
-- Valid transitions include `WORKING -> INPUT_REQUIRED` and `INPUT_REQUIRED -> WORKING`.
-- The JSON-RPC route supports:
-  - `SendMessage` / `tasks/send`,
-  - `GetTask` / `tasks/get`,
-  - `ListTasks` / `tasks/list`,
-  - `CancelTask` / `tasks/cancel`.
-- There is no explicit resume/continue method that attaches user approval input to an existing `input-required` task.
-- `LocalTaskManager` stores tasks in process memory.
-- Current execution paths transition tasks directly to `COMPLETED` or `FAILED`; they do not surface structured approval requests.
+- agents,
+- third-party OAuth2 services,
+- permission sets,
+- per-agent client credentials,
+- signing keys.
 
-Implication:
-
-- KAOS has a useful lifecycle state for future pause/resume, but it does not yet have a complete durable human-in-the-loop approval mechanism.
-- Treating `input-required` as the 1.0 approval mechanism would require task persistence, resume APIs, approval payloads, UI support, and security context preservation.
-
-### KAOS memory stores conversation/session events, not approval state
-
-Source file:
-
-- `pydantic-ai-server/pais/memory.py`
-
-Relevant facts:
-
-- Memory stores events such as user messages, agent responses, tool calls, tool results, delegation requests, and delegation responses.
-- Memory backends include local, Redis, and null behavior.
-- Memory is suitable for replaying conversation context and tool history.
-- It is not currently an approval ledger or a secure store for raw tokens/security context.
+This is admin/operator configuration, not a runtime approval queue. There is no observed current endpoint/table for `access_requests`, `pending_approvals`, `approve_request`, or `deny_request`.
 
 Implication:
 
-- Approval and consent state should not be hidden in memory events.
-- Missing approval/consent should be represented by explicit task/API errors and AIB grant/session state.
+- KAOS must not rely on current AIB to create a pending admin approval request when a runtime access edge is missing.
+- Missing platform resource grants should fail closed.
+- Any future admin approval queue would require new durable server-side state, admin APIs, UI, expiry, auditing, and retry/resume semantics.
 
-### AIB consent APIs support user grants
+### User delegated consent grants are implemented
 
-Source files:
+Relevant files:
 
-- `agentic-identity-broker/docs/api/consent-endpoints.md`
-- `agentic-identity-broker/docs/api/consent-apis.md`
+- `agentic-identity-broker/internal/adapters/http/routing/enduser.go`
 - `agentic-identity-broker/internal/adapters/http/handlers/consent/grants_handler.go`
+- `agentic-identity-broker/internal/domain/consent/service.go`
+- `agentic-identity-broker/internal/domain/storage/user_grant.go`
+- `agentic-identity-broker/web/src/pages/AgentGrantDetailPage.tsx`
+- `agentic-identity-broker/migrations/003_create_user_grants.up.sql`
+- `agentic-identity-broker/migrations/019_migrate_user_grants_to_permission_sets.up.sql`
 
-Relevant facts:
+AIB consent APIs and SPA allow an authenticated end user to:
 
-- AIB exposes consent APIs for end users to view agent information and manage grants.
-- Consent endpoints require an authenticated principal, currently supplied through trusted reverse-proxy context such as `X-Principal`.
-- Grant creation/update is an upsert on a user+agent grant.
-- Grants include permission-set selections and optional `valid_until`.
-- Grant revocation is supported.
-- Mutating consent requests use CSRF protection.
-- AIB can validate authorization session tokens and return a redirect URL after grant creation when the consent flow is tied to an authorization session.
+- view an agent's requested services and permission sets,
+- select grantable permission sets/services,
+- create or update a user grant,
+- set optional `valid_until`,
+- revoke a grant,
+- return to an authorization-session redirect URL when applicable.
+
+The durable state is `user_grants`, keyed by principal and agent. In the permission-set model, the grant stores `granted_permission_sets`, which maps permission set IDs to included service IDs.
 
 Implication:
 
-- AIB already has the right product surface for user delegated consent.
-- KAOS should use AIB consent URLs/errors for missing user consent rather than inventing its own user-consent store.
-- AIB does not currently provide the complete KAOS admin approval workflow for resource grants.
+- Missing user delegated grant should become `user_consent_required`.
+- Expired `user_grants.valid_until` should become `user_consent_required` or equivalent "re-consent required".
+- This should point the user to the AIB consent UI for the relevant agent.
+- It is not a third-party re-authentication problem and not an admin approval problem.
 
-### AIB token exchange can distinguish missing consent from missing/expired third-party sessions
+### Third-party OAuth2 sessions are implemented
 
-Source file:
+Relevant files:
 
+- `agentic-identity-broker/internal/adapters/http/oauth2_sessions/handler.go`
+- `agentic-identity-broker/internal/domain/oauth2session/service.go`
+- `agentic-identity-broker/migrations/004_create_user_sessions.up.sql`
+
+AIB OAuth2 session APIs allow a user to connect or reconnect a third-party service:
+
+```text
+user -> AIB third-party authorize endpoint
+     -> GitHub/Google/etc OAuth2 authorize page
+     -> AIB callback
+     -> AIB exchanges code for access/refresh tokens
+     -> AIB stores encrypted session in user_sessions
+```
+
+`user_sessions` stores encrypted access/refresh tokens, token type, token expiry, granted scopes, encryption context, and timestamps for a `(principal, service)` pair.
+
+A third-party session is missing or unusable when:
+
+- no session exists for `(principal, service)`,
+- the access token is expired and cannot be refreshed,
+- the refresh token is expired, revoked, absent, or unusable,
+- token refresh fails,
+- the session scopes do not cover the required effective scopes.
+
+Implication:
+
+- Missing/unusable session should become `third_party_reauth_required`.
+- The response should include a third-party re-auth URL such as AIB's `/api/third-party/{serviceId}/oauth2/authorize`.
+- This is not a user grant approval problem; it is a third-party account connection/refresh problem.
+
+### Token exchange distinguishes grants from sessions
+
+Relevant files:
+
+- `agentic-identity-broker/internal/domain/tokenexchange/request.go`
 - `agentic-identity-broker/internal/domain/tokenexchange/service.go`
+- `agentic-identity-broker/internal/domain/tokenexchange/response.go`
+- `agentic-identity-broker/specs/013-token-exchange/contracts/token-exchange-endpoint.yaml`
 
-Relevant facts:
+AIB token exchange:
 
-- Token exchange validates subject tokens and client assertions.
-- It extracts principal and agent identity.
-- It checks the user grant before retrieving third-party sessions.
-- Missing, revoked, or expired user grants map to access-denied style errors.
-- Missing or expired third-party sessions map to `invalid_grant` with re-auth hints and `error_uri` values.
-- If a session lacks required scopes, AIB returns `invalid_grant` with a re-auth URL.
-- AIB intentionally checks grants before sessions to avoid leaking whether a user has a third-party session when the agent is not granted.
+1. validates token exchange request shape,
+2. validates `subject_token`,
+3. validates `client_assertion`,
+4. extracts principal from the subject token,
+5. extracts agent ID from the subject token,
+6. authorizes the privileged client through CEL,
+7. resolves the requested `resource` to a third-party OAuth2 service,
+8. checks user grant before session lookup,
+9. retrieves/refreshes third-party session token,
+10. validates permission-set/effective-scope coverage,
+11. returns an RFC 8693 token exchange response.
+
+The ordering matters:
+
+```text
+grant check first
+session check second
+```
+
+This prevents leaking whether a user has a third-party session when the agent has not been granted access.
 
 Implication:
 
-- KAOS should preserve this distinction:
-  - no grant means consent/authorization is missing,
-  - no session means re-authentication is required,
-  - no resource grant means platform/admin approval is missing.
-- Runtime errors should not expose tokens or sensitive third-party session details.
+- Missing/expired user grant and missing/unusable third-party session must remain separate structured outcomes.
+- KAOS should not collapse both into a generic "approval required" response.
 
 ---
 
-## Decision scope
+## Execution model
 
-This ADR fixes the following scope:
+### Missing platform resource grant
 
-1. Which checks happen before a run starts.
-2. Which failures return an approval/consent/re-auth URL and require retry.
-3. Whether synchronous chat requests may block while waiting for approval.
-4. Whether A2A `input-required` should be used in 1.0.
-5. How autonomous runs behave when consent or re-authentication is required.
-6. What AIB must support now versus later.
-7. What KAOS UI/admin UI must support now versus later.
-
----
-
-## Annex: Alternatives considered
-
-### Option A: Preflight all approval and consent before execution
-
-This option requires every needed platform approval, user delegated consent, and third-party session to exist before the agent begins execution. The runtime performs a full preflight check and refuses to start if anything is missing.
-
-Example:
-
-```text
-Before running researcher for Alice:
-  1. Check researcher -> github MCP resource grant.
-  2. Check researcher -> gpt ModelAPI resource grant.
-  3. Check Alice -> researcher -> GitHub permission set.
-  4. Check Alice has active GitHub OAuth session.
-  5. Start the run only if all checks pass.
-```
-
-This is simple for deterministic workflows where the needed resources are known from CRDs. It fits admin/platform grants especially well because resource edges are known at deploy time.
-
-It is weaker for dynamic third-party usage. An agent may not know it needs GitHub until the conversation evolves or a tool is selected. Preflighting every possible user consent can lead to over-consent: users are asked to grant access that may not actually be needed.
-
-Pros:
-
-- Very predictable.
-- Avoids mid-run failures for known dependencies.
-- Good fit for admin/platform resource grants.
-- Easier to reason about in CI/admin workflows.
-
-Cons:
-
-- Can require broad consent before it is needed.
-- Hard to know all third-party scopes needed before agent execution.
-- Does not match dynamic agent/tool behavior well.
-- Requires more UI orchestration before a chat can start.
-
-Best fit:
-
-- Admin/platform resource grants.
-- Static CRD requested edges.
-- Optional preflight diagnostics, not the only user-consent behavior.
-
-### Option B: Fail fast with consent/re-auth URL and require retry
-
-This option lets execution begin when platform/resource access is allowed, but if a user delegated grant or third-party session is missing, the protected call fails with a structured error. The error includes enough information for the UI/client to send the user to AIB consent or re-authentication. After the user completes the flow, the user retries the request or tool call.
-
-Example:
-
-```text
-Alice asks researcher to file a GitHub issue.
-
-Runtime checks:
-  researcher -> github MCP resource grant: approved
-  Alice -> researcher -> GitHub permission set: missing
-
-Runtime response:
-  action blocked: user consent required
-  approval_url: https://aib.example.com/consent/agent/...
-
-After Alice approves:
-  Alice retries the action.
-```
-
-For expired third-party sessions:
-
-```text
-AIB token exchange response:
-  invalid_grant
-  error_uri: https://aib.example.com/oauth/github/authorize?...
-
-KAOS response:
-  re-authentication required for GitHub
-  reauth_url: ...
-```
-
-This keeps 1.0 simple because the runtime does not need to suspend and resume an execution stack. The client or user retries after consent. It also avoids asking for consent until a capability is actually needed.
-
-Pros:
-
-- Simple runtime behavior.
-- Uses AIB's existing consent and re-auth flows.
-- Avoids blocking requests while waiting for a human.
-- Avoids building durable pause/resume in 1.0.
-- Consent is demand-driven rather than broad upfront.
-
-Cons:
-
-- User may need to retry the request.
-- Agent may lose some intermediate reasoning unless the client/session preserves enough context.
-- Requires clear structured errors so UI/CLI clients can present the right action.
-- Less seamless than true pause/resume.
-
-Best fit:
-
-- KAOS 1.0 user delegated consent and third-party re-authentication.
-
-### Option C: Pause the A2A task with `input-required` and resume after approval
-
-This option uses the A2A `input-required` state as a true human-in-the-loop pause. When approval, consent, or re-authentication is required, the task transitions to `input-required`. The UI shows an approval URL or approval prompt. After the user/admin acts, a resume call continues the same task.
-
-Example:
-
-```text
-Task state:
-  working -> input-required
-
-Task status message:
-  GitHub consent required for Alice.
-  approval_url: https://aib.example.com/consent/agent/...
-
-After approval:
-  tasks/resume(task_id, approval_result)
-  input-required -> working
-```
-
-This is the best long-term UX for complex multi-step and autonomous tasks. It preserves task identity and can avoid asking the user to restate the request.
-
-However, current KAOS only has the state constant and transition rules. It does not yet have a complete durable resume mechanism, structured approval payloads, secure context preservation, or UI workflows for this. Implementing it now would expand the 1.0 scope significantly.
-
-Pros:
-
-- Best UX for long-running tasks.
-- Natural fit for A2A async and future runtime human approvals.
-- Preserves task identity.
-- Can support multi-agent approval flows later.
-
-Cons:
-
-- Requires new resume APIs and task persistence.
-- Requires structured approval records and UI support.
-- Requires preserving request security context across pauses.
-- More complex than required for initial grant-table authorization.
-
-Best fit:
-
-- Future approval/consent execution model after basic 1.0 grant checks work.
-
-### Option D: Block synchronous requests while waiting for approval
-
-This option keeps the HTTP/chat request open while the user completes consent or approval in another browser window.
-
-Example:
-
-```text
-User asks for GitHub action.
-Runtime detects missing consent.
-Runtime returns approval URL but keeps request open.
-User approves in browser.
-Runtime resumes and returns final answer in same HTTP response.
-```
-
-This may feel seamless in a demo, but it is brittle operationally. Human consent can take minutes or never complete. HTTP clients, gateways, and load balancers have timeouts. It also complicates cancellation and cleanup.
-
-Pros:
-
-- Smooth if approval is immediate.
-- No explicit retry needed.
-
-Cons:
-
-- Fragile with gateway/client timeouts.
-- Consumes runtime resources while waiting for humans.
-- Hard to cancel and audit cleanly.
-- Poor fit for autonomous or multi-agent flows.
-
-Best fit:
-
-- Not recommended for KAOS 1.0.
-
-### Option E: Automatically create grants from CRD references
-
-This option treats CRD wiring as both requested access and approved access. If an Agent references an MCPServer or ModelAPI, KAOS or AIB automatically creates the approved resource grant.
-
-Example:
-
-```text
-Agent spec references github MCP.
-KAOS sync service creates:
-  researcher -> github MCP, action=call, status=approved
-```
-
-This is operationally convenient, especially for development clusters, but it conflicts with no-permission-by-default. It also weakens the separation established in ADR-004 and ADR-005: CRDs define requested edges, not authorization approval.
-
-There may still be a bootstrap mode for local development or trusted namespaces, but it should be explicit and distinguishable from production approval semantics.
-
-Pros:
-
-- Very easy developer experience.
-- No separate admin approval UI needed initially.
-- Useful for local demos or trusted bootstrap installs.
-
-Cons:
-
-- Violates no-permission-by-default if enabled by default.
-- Makes CRD authors implicit security approvers.
-- Harder to audit who approved resource access.
-- Can hide missing approval flows that production needs.
-
-Best fit:
-
-- Explicit development/bootstrap mode only, not the 1.0 security default.
-
----
-
-## Required 1.0 behavior
-
-### Resource grant missing
-
-When an Agent tries to call an MCPServer, ModelAPI, or another Agent without an approved AIB resource grant:
+When an Agent tries to call an MCPServer, ModelAPI, or another Agent without an approved platform resource grant:
 
 ```text
 deny:
-  code: platform_approval_required
-  source: kaos://agent/researcher
-  target: kaos://mcpserver/github
+  code: platform_grant_missing
+  principal: keycloak://kaos/alice
+  actor: agent://default/researcher
+  target: mcp://default/github
   action: call
 ```
 
-The runtime should not return a user OAuth consent URL because this is not a user-consent problem. It is an admin/platform approval problem.
+The runtime should not return an AIB user consent URL or third-party re-auth URL. This is not a user-facing third-party consent/session problem.
 
-### User delegated grant missing
+Current AIB does not implement a pending admin approval request queue for this case. KAOS 1.0 should therefore fail closed and rely on pre-existing approved grants or explicit bootstrap/dev auto-grant behavior.
 
-When the platform resource grant exists but AIB reports that the user has not granted the agent the required third-party permission set:
+### Missing or expired user delegated grant
+
+When the platform resource grant exists but AIB reports that the user has not granted, or no longer grants, the agent the required third-party permission set:
 
 ```text
 deny:
   code: user_consent_required
   principal: keycloak://kaos/alice
-  agent: kaos://agent/researcher
+  agent: agent://default/researcher
   permission_set: github-issues-reader
-  consent_url: ...
+  consent_url: https://aib.example.com/consent/agent/{agent-id}
 ```
 
-The client should direct the user to AIB consent and then retry.
+The user opens the AIB consent UI, grants the agent permission, and retries the operation.
 
-### Third-party session missing or expired
+If `user_grants.valid_until` has expired, this is the same category: the user must re-consent/re-grant. It should not be treated as a third-party token refresh.
 
-When AIB token exchange returns `invalid_grant` with `error_uri` for a missing, expired, or insufficient-scope third-party session:
+### Missing or unusable third-party OAuth2 session
+
+When AIB token exchange finds that the user grant exists but the user's third-party OAuth2 session is missing, expired beyond refresh, revoked, or missing required scopes:
 
 ```text
 deny:
   code: third_party_reauth_required
   service: github
-  reauth_url: ...
+  reauth_url: https://aib.example.com/api/third-party/{serviceId}/oauth2/authorize
 ```
 
-The client should direct the user to re-authenticate and then retry.
+The user reconnects or re-authorizes the third-party service and retries the operation.
+
+If only the third-party access token is expired and the refresh token is valid, AIB should refresh internally and return a usable access token. The runtime should not involve the user in that case.
+
+### Runtime human approval
+
+Runtime human approval for action-specific decisions is deferred.
+
+Examples:
+
+```text
+Approve sending this email.
+Approve deleting this file.
+Approve paying this invoice.
+```
+
+These are not equivalent to AIB user delegated consent or third-party re-authentication. They require a separate task/UI approval model and policy vocabulary.
 
 ### Autonomous runs
 
-Autonomous runs must not create new user consent or wait indefinitely for re-authentication.
+Autonomous runs must not create new user consent, reconnect third-party accounts, or wait indefinitely for a human.
 
 If an autonomous run encounters missing consent or re-authentication:
 
@@ -454,16 +314,109 @@ The detailed policy for pausing/resuming autonomous runs is deferred until KAOS 
 
 ---
 
+## A2A `input-required` is not the 1.0 mechanism
+
+Source file:
+
+- `pydantic-ai-server/pais/a2a.py`
+
+Relevant facts:
+
+- `TaskState.INPUT_REQUIRED = "input-required"` exists.
+- Valid transitions include `WORKING -> INPUT_REQUIRED` and `INPUT_REQUIRED -> WORKING`.
+- The JSON-RPC route supports `tasks/send`, `tasks/get`, `tasks/list`, and `tasks/cancel`.
+- There is no explicit resume/continue method that attaches user approval input to an existing `input-required` task.
+- `LocalTaskManager` stores tasks in process memory.
+- Current execution paths transition tasks directly to `COMPLETED` or `FAILED`; they do not surface structured approval requests.
+
+Implication:
+
+- KAOS has a useful lifecycle state for future pause/resume.
+- Treating `input-required` as the 1.0 approval mechanism would require task persistence, resume APIs, approval payloads, UI support, and security context preservation.
+
+---
+
+## Memory is not approval state
+
+Source file:
+
+- `pydantic-ai-server/pais/memory.py`
+
+Relevant facts:
+
+- Memory stores events such as user messages, agent responses, tool calls, tool results, delegation requests, and delegation responses.
+- Memory backends include local, Redis, and null behavior.
+- Memory is suitable for replaying conversation context and tool history.
+- It is not currently an approval ledger or secure token/security-context store.
+
+Implication:
+
+- Consent and re-authentication state must live in AIB grant/session state, not hidden KAOS memory events.
+- Future admin/runtime approval state would need a dedicated durable model.
+
+---
+
+## Annex: Alternatives considered
+
+### Option A: Treat all human action as one generic approval flow
+
+This option returns a generic `approval_required` response for missing platform grants, missing user consent, expired user grants, missing third-party sessions, and runtime action approvals.
+
+Rejected. It hides the implemented AIB distinction between `user_grants` and `user_sessions`, and it incorrectly implies that current AIB has a generic approval engine.
+
+### Option B: Fail with consent/re-auth URL and require retry
+
+This option lets execution begin when platform/resource access is allowed, but if user delegated consent or third-party re-authentication is required, the protected call fails with a structured action URL. After the user completes the flow, the user retries the request or tool call.
+
+Accepted for KAOS 1.0 because it matches current AIB capabilities and avoids building durable pause/resume now.
+
+### Option C: Pause the A2A task with `input-required`
+
+This option uses the A2A `input-required` state as a true human-in-the-loop pause. When consent, re-authentication, or runtime approval is required, the task transitions to `input-required`; after the human acts, a resume call continues the same task.
+
+Deferred. It is the better long-term UX for complex multi-step tasks, but current KAOS does not yet have durable task persistence, resume APIs, structured approval payloads, secure context preservation, or UI support.
+
+### Option D: Automatically create grants from CRD references
+
+This option treats CRD wiring as both requested access and approved access. If an Agent references an MCPServer or ModelAPI, KAOS or AIB automatically creates the approved resource grant.
+
+Rejected as the production/default security behavior. It conflicts with no-permission-by-default and makes CRD authors implicit security approvers. Explicit bootstrap/dev auto-grant behavior may still be useful, but it must be clearly marked and auditable.
+
+---
+
+## Consequences
+
+### Positive
+
+- ADR language matches current AIB implementation instead of implying a nonexistent generic approval workflow.
+- KAOS can handle current AIB outcomes cleanly: consent URL, re-auth URL, or platform grant missing.
+- AIB token exchange remains secure by checking grants before sessions.
+- Runtime implementation stays simple: fail with structured action and retry.
+
+### Negative
+
+- Missing platform resource grants do not get an automatic admin approval request in 1.0.
+- Users may need to retry after consent or re-authentication.
+- Long-running tasks cannot yet pause and resume seamlessly around consent/re-authentication.
+
+### Risks
+
+- If clients label every outcome as "approval required", users and operators may misunderstand who must act.
+- If missing grants and missing sessions are collapsed, KAOS may leak third-party session state or show the wrong URL.
+- If future admin approval state is added without durable storage and audit, it may become unreliable or insecure.
+
+---
+
 ## Decision summary
 
-1. KAOS 1.0 separates admin/platform approval, user delegated consent, third-party re-authentication, and runtime human approval.
-2. Admin/platform resource access requires pre-existing AIB resource grants.
-3. Missing resource grants fail closed with a `platform_approval_required` style error.
-4. User delegated consent uses AIB consent flows and fail-with-consent-URL-and-retry.
-5. Third-party session expiry or missing scopes use AIB re-auth URLs and fail-with-reauth-URL-and-retry.
-6. Synchronous requests must not block while waiting for consent, re-authentication, or approval.
-7. A2A `input-required` pause/resume is deferred until KAOS has durable tasks, resume APIs, approval payloads, and UI support.
-8. Runtime human approval for specific tool actions is deferred until KAOS models tool/argument permissions or approval policies explicitly.
-9. Autonomous runs must not auto-create consent or wait indefinitely; they should record structured approval-required events and stop/skip protected actions.
-10. CRD references must not auto-create approved resource grants in the production/default security mode.
-11. Optional bootstrap/dev auto-grant behavior may be considered later, but must be explicit and auditable.
+1. KAOS 1.0 separates platform resource grants, user delegated consent grants, third-party OAuth2 sessions, and runtime human approvals.
+2. Current AIB supports admin configuration, user consent grants, OAuth2 sessions, and token exchange; it does not currently support runtime-created admin approval requests.
+3. Missing platform resource grants fail closed with `platform_grant_missing`; no user consent or third-party re-auth URL should be returned for that case.
+4. Missing or expired user delegated grants use AIB consent UI/API and fail with `user_consent_required` plus `consent_url`.
+5. Missing/unusable third-party OAuth2 sessions use AIB OAuth2 session flow and fail with `third_party_reauth_required` plus `reauth_url`.
+6. Expired third-party access tokens should be refreshed by AIB when a valid refresh token/session exists.
+7. Synchronous requests must not block while waiting for consent, re-authentication, or future approval.
+8. A2A `input-required` pause/resume is deferred until KAOS has durable tasks, resume APIs, approval payloads, and UI support.
+9. Runtime human approval for specific tool actions is deferred until KAOS models tool/argument permissions or approval policies explicitly.
+10. Autonomous runs must not auto-create consent or wait indefinitely; they should record structured consent/re-auth-required events and stop/skip protected actions.
+11. CRD references must not auto-create approved resource grants in production/default security mode.

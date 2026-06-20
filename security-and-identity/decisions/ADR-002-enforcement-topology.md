@@ -11,7 +11,7 @@ Adopt a **layered SDK-first topology**:
 1. **1.0: SDK-native Agent and MCPServer security**
    - Implement request context propagation and AIB integration in an application-level SDK.
    - Use the SDK in KAOS Agents and KAOS-owned FastMCP MCPServer runtimes.
-   - Use native runtime/MCP logic for semantic authorization, tool-level checks, token exchange, and approval-required handling.
+   - Use native runtime/MCP logic for semantic authorization, tool-level checks, token exchange, and structured consent/re-auth handling.
 
 2. **1.0: ModelAPI protected through LiteLLM where possible**
    - Prefer LiteLLM as the identity-aware ModelAPI surface.
@@ -34,7 +34,7 @@ This makes the SDK the primary 1.0 mechanism for Agents and MCPServers, while pr
 
 ## Context
 
-KAOS needs a clear enforcement topology before request context propagation, AIB grant checks, token exchange, and approval-required handling are embedded into runtime code. This ADR fixes where KAOS should enforce authentication, token exchange, and authorization across:
+KAOS needs a clear enforcement topology before request context propagation, AIB grant checks, token exchange, and consent/re-auth handling are embedded into runtime code. This ADR fixes where KAOS should enforce authentication, token exchange, and authorization across:
 
 - external user to Agent/MCPServer/ModelAPI,
 - Agent to MCPServer,
@@ -74,7 +74,7 @@ For KAOS-owned Python Agents and FastMCP MCPServers, the SDK can cover most of t
 - request context propagation,
 - AIB grant checks,
 - AIB token exchange,
-- approval-required handling,
+- structured consent/re-auth handling,
 - tool-level MCP authorization,
 - audit metadata.
 
@@ -163,7 +163,7 @@ Sidecars remain a future option for environments that need local egress token in
 ## Follow-up
 
 1. Define the SDK package and upstream contribution boundary.
-2. Define AIB SDK APIs for grant checks, token exchange, and approval-required responses.
+2. Define AIB SDK APIs for grant checks, token exchange, user consent-required responses, and third-party re-auth-required responses.
 3. Define LiteLLM ModelAPI integration details.
 4. Create a separate ADR for GatewayAPI 1.1:
    - internal URL injection through Gateway,

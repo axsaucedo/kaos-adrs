@@ -24,7 +24,7 @@ RequestSecurityContext
   kaos_agent_identity
   parent_agent_identity
   delegation_chain
-  approval_context
+  consent_or_reauth_context
   auth_source
 ```
 
@@ -50,7 +50,7 @@ The SDK owns:
 2. Normalizing header names and claim names used between Agent, A2A, MCPServer, and ModelAPI calls.
 3. Propagating non-secret context across A2A delegation.
 4. Propagating request context to MCP calls when the MCP runtime supports it.
-5. Making context available to later AIB SDK calls for grant checks, token exchange, and approval-required handling.
+5. Making context available to later AIB SDK calls for grant checks, token exchange, user consent-required handling, and third-party re-auth-required handling.
 6. Persisting non-secret context metadata for audit/correlation.
 
 The SDK must not persist raw bearer tokens in memory events or durable task metadata.
@@ -92,11 +92,11 @@ MCPServer custom code is broader than Agent custom code. MCP runtimes may need t
 | `spec.security.id` omitted | `kaos://{kind}/{namespace}/{name}` |
 | `spec.security.id` provided | `kaos://{kind}/{id}` |
 
-KAOS now needs a way for authenticated request context to survive agent execution, A2A delegation, MCP calls, async tasks, autonomous runs, and future AIB approval/token-exchange flows.
+KAOS now needs a way for authenticated request context to survive agent execution, A2A delegation, MCP calls, async tasks, autonomous runs, and future AIB grant/token-exchange flows.
 
 Current source behavior:
 
-- Agent `/v1/chat/completions` reads `X-Session-ID` and OpenTelemetry headers, but does not extract user principal, authorization token, scopes, approval context, or delegation chain.
+- Agent `/v1/chat/completions` reads `X-Session-ID` and OpenTelemetry headers, but does not extract user principal, authorization token, scopes, consent/re-auth context, or delegation chain.
 - Memory currently records static actor values such as `app_name="agent"` and `user_id="user"`.
 - `AgentDeps` contains only `session_id` and `memory`.
 - A2A `RemoteAgent` injects tracing headers only and sends metadata `{"delegation": true}`.
@@ -139,7 +139,7 @@ Capture principal/session context but do not propagate or enforce it.
 - Provides the semantic context that Gateway or sidecars cannot infer.
 - Establishes a reusable SDK boundary that can be contributed upstream and used outside KAOS.
 - Allows Agent and MCPServer security to evolve without mandating Gateway or sidecars in the 1.0 scope.
-- Provides the foundation for AIB grant checks, token exchange, approval-required responses, and audit metadata.
+- Provides the foundation for AIB grant checks, token exchange, user consent-required responses, third-party re-auth-required responses, and audit metadata.
 
 ### Negative
 
