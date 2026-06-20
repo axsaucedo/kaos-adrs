@@ -287,7 +287,52 @@ Best fit:
 - Future advanced security profile.
 - Regulated or multi-tenant environments after the 1.0 model is validated.
 
-### Option D: Gateway + NetworkPolicy boundary hardening
+### Option D: Configurable native intra-service TLS
+
+This option adds first-class TLS support directly to KAOS-managed Agent, MCPServer, and ModelAPI services. Instead of only terminating TLS at the Gateway, each runtime can be configured to serve HTTPS using mounted certificates from Kubernetes Secrets or a certificate automation system.
+
+Example:
+
+```text
+Agent -> https://mcpserver-github.namespace.svc.cluster.local
+Agent -> https://modelapi-gpt.namespace.svc.cluster.local
+
+MCPServer pod:
+  mounts tls.crt/tls.key from a Secret
+  serves HTTPS
+```
+
+This is different from full mTLS or service mesh. Native intra-service TLS encrypts the connection to the server, but it does not necessarily prove client workload identity unless mutual TLS is also configured. It is a useful middle layer between Gateway-only TLS and full mesh/SPIFFE identity.
+
+To support this properly, KAOS would need runtime and operator changes:
+
+- Agent runtime must support HTTPS URLs and CA/trust configuration for MCPServer, ModelAPI, and A2A calls.
+- MCP runtimes must support serving HTTPS.
+- Agent runtime must support serving HTTPS for inbound A2A/chat if exposed internally.
+- ModelAPI integrations must support HTTPS or be wrapped behind a TLS-capable proxy.
+- CRDs or chart values must model TLS Secret references, CA bundles, scheme selection, and possibly certificate rotation behavior.
+- Probes, generated endpoints, and Gateway routes must use the correct scheme/ports.
+
+Pros:
+
+- Encrypts in-cluster traffic without requiring a full service mesh.
+- Lets security-sensitive deployments harden service-to-service communication incrementally.
+- Keeps the mechanism configurable per runtime/resource.
+- Can be combined later with client certificate auth or workload identity.
+
+Cons:
+
+- Requires runtime support across Agent, MCPServer, and ModelAPI surfaces.
+- Certificate provisioning and rotation become KAOS deployment concerns.
+- Does not by itself prevent ClusterIP bypass or prove caller identity.
+- More work than required for the first AIB authorization/token integration.
+
+Best fit:
+
+- Future configurable production hardening layer.
+- Environments that want in-cluster encryption but do not want a service mesh.
+
+### Option E: Gateway + NetworkPolicy boundary hardening
 
 This option adds Kubernetes NetworkPolicies so Agents can only reach MCPServers, ModelAPIs, and AIB through approved paths, or so direct ClusterIP bypass is restricted.
 
@@ -323,7 +368,7 @@ Best fit:
 - 1.1 Gateway/resource-boundary hardening.
 - Production profile when Gateway enforcement is adopted.
 
-### Option E: Service mesh as default platform baseline
+### Option F: Service mesh as default platform baseline
 
 This option requires a service mesh such as Istio or Linkerd for mTLS, traffic policy, identity, and observability.
 
@@ -358,7 +403,7 @@ Use three profiles:
 |---|---|---|
 | Minimal/dev | Local demos and development | HTTP allowed locally, memory/local storage allowed, dev skip flags allowed only for local test |
 | Recommended production | First production target | TLS at external ingress/Gateway/reverse proxy, Kubernetes Secrets/external secret manager, AIB durable storage and encryption backend, no plaintext production credentials in CRDs, no raw tokens in logs/telemetry |
-| Advanced future | High-security environments | Gateway resource-boundary enforcement, NetworkPolicy, cert-manager chart support, in-cluster mTLS/SPIFFE/service mesh, workload identity binding |
+| Advanced future | High-security environments | Gateway resource-boundary enforcement, NetworkPolicy, cert-manager chart support, native intra-service TLS, in-cluster mTLS/SPIFFE/service mesh, workload identity binding |
 
 The 1.0 target should require:
 
@@ -367,7 +412,7 @@ The 1.0 target should require:
 3. AIB dev-only skip flags are never enabled in production.
 4. Raw OAuth tokens, AIB exchanged tokens, client secrets, signing keys, and encryption keys are never persisted in KAOS memory/events/logs.
 5. Production credentials are referenced through Kubernetes Secrets or external secret management, not literal CRD fields.
-6. Gateway TLS/cert-manager, NetworkPolicy, service mesh, SPIFFE, and workload identity binding are deferred hardening layers.
+6. Gateway TLS/cert-manager, native intra-service TLS, NetworkPolicy, service mesh, SPIFFE, and workload identity binding are deferred hardening layers.
 
 ---
 
@@ -413,7 +458,17 @@ Tradeoff:
 
 - Avoids CNI-dependent complexity, but direct ClusterIP bypass prevention is not solved by default.
 
-### Q5. Should KAOS store or cache delegated third-party tokens?
+### Q5. Should Agent/MCPServer/ModelAPI native TLS be mandatory in 1.0?
+
+Recommended answer:
+
+- No. Add it as a future configurable hardening layer. It is valuable, but requires runtime/operator changes across Agent, MCPServer, ModelAPI, probes, generated endpoints, and certificate configuration.
+
+Tradeoff:
+
+- Keeps 1.0 simpler, but in-cluster runtime-to-runtime traffic remains HTTP unless the deployment provides TLS through other means.
+
+### Q6. Should KAOS store or cache delegated third-party tokens?
 
 Recommended answer:
 
@@ -423,7 +478,7 @@ Tradeoff:
 
 - Clearer secret ownership, but runtime integrations must carefully avoid leaking transient tokens.
 
-### Q6. Should literal production secrets in CRDs be allowed?
+### Q7. Should literal production secrets in CRDs be allowed?
 
 Recommended answer:
 
@@ -433,7 +488,7 @@ Tradeoff:
 
 - Safer operational posture, while preserving current CRD flexibility.
 
-### Q7. What minimum audit/telemetry should be required?
+### Q8. What minimum audit/telemetry should be required?
 
 Recommended answer:
 
@@ -452,13 +507,14 @@ Tradeoff:
 3. cert-manager is recommended for Kubernetes-native certificate automation but not mandatory.
 4. Gateway TLS support is a recommended chart/controller enhancement, not a prerequisite for the initial AIB integration.
 5. NetworkPolicy is deferred to the Gateway/resource-boundary hardening extension.
-6. SPIFFE, service mesh, and cryptographic workload binding are deferred advanced-profile features.
-7. AIB owns token vault storage and encryption; KAOS must not persist delegated third-party tokens.
-8. AIB production deployments must use durable storage and production-grade encryption/key management.
-9. AIB development skip flags for HTTPS/SSRF validation must not be enabled in production.
-10. Production credentials should be provided through Kubernetes Secrets or external secret management, not literal CRD values.
-11. Security logs/telemetry must include decision metadata and correlation IDs but never raw tokens or secrets.
-12. Existing KAOS operator container hardening remains the baseline pattern for new KAOS-managed security components where practical.
+6. Native Agent/MCPServer/ModelAPI TLS is a future configurable hardening layer, not mandatory for 1.0.
+7. SPIFFE, service mesh, and cryptographic workload binding are deferred advanced-profile features.
+8. AIB owns token vault storage and encryption; KAOS must not persist delegated third-party tokens.
+9. AIB production deployments must use durable storage and production-grade encryption/key management.
+10. AIB development skip flags for HTTPS/SSRF validation must not be enabled in production.
+11. Production credentials should be provided through Kubernetes Secrets or external secret management, not literal CRD values.
+12. Security logs/telemetry must include decision metadata and correlation IDs but never raw tokens or secrets.
+13. Existing KAOS operator container hardening remains the baseline pattern for new KAOS-managed security components where practical.
 
 ## Decision status
 
