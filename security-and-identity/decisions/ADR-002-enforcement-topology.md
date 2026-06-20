@@ -165,7 +165,7 @@ Sidecars remain a future option for environments that need local egress token in
 1. Define the SDK package and upstream contribution boundary.
 2. Define AIB SDK APIs for grant checks, token exchange, user-grant-required responses, and third-party re-auth-required responses.
 3. Define LiteLLM ModelAPI integration details.
-4. Create a separate ADR for GatewayAPI 1.1:
+4. Use [ADR-011](./ADR-011-gateway-api-resource-boundary-enforcement.md) for the GatewayAPI resource-boundary extension:
    - internal URL injection through Gateway,
    - JWT validation,
    - resource-level authz,
