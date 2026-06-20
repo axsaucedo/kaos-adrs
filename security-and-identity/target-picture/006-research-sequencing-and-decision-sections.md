@@ -269,32 +269,6 @@ Decision output:
 - Adopt/build/upstream recommendations.
 - First implementation boundary.
 
-### 9. Upstream contribution scope
-
-Core question:
-
-- Which security/identity components should KAOS contribute upstream to AIB, which should stay KAOS-local, and which should remain outside both projects?
-
-Sub-questions:
-
-- Which generic broker capabilities are missing in AIB and should be proposed upstream?
-- Which KAOS-specific adapters, CRD mappings, and operator reconciliation behaviors should stay in KAOS?
-- Which SDK components are reusable across agentic runtimes versus specific to KAOS resource identity and topology?
-- Which pieces should not be upstreamed because they belong to Keycloak/Dex, OPA, Gateway, cert-manager, service mesh, or LiteLLM?
-
-Evidence needed:
-
-- Finalized responsibility matrix from section 8.
-- Current AIB server, grant, consent, ExtProc, and token exchange package boundaries.
-- KAOS-specific CRD, operator, runtime, and MCP integration requirements.
-
-Decision output:
-
-- Upstreamable AIB feature list.
-- KAOS-local adapter and operator list.
-- Explicit non-upstream/non-KAOS responsibilities.
-- Sequencing guidance for contributing generic pieces without blocking KAOS integration.
-
 ### 10. AIB SDK design
 
 Core question:
@@ -312,7 +286,7 @@ Sub-questions:
 
 Evidence needed:
 
-- Finalized decisions from sections 1-9.
+- Finalized decisions from sections 1-8.
 - KAOS Agent runtime request handling, MCP client construction, A2A delegation, and ModelAPI call paths.
 - KAOS MCP runtime patterns and FastMCP auth/header extension points.
 - AIB token exchange, grant, ExtProc, CEL, and admin/client APIs.
@@ -371,12 +345,8 @@ The order matters because later decisions depend on earlier ones.
 
 ### Phase D: implementation-shape decision
 
-9. **Upstream contribution scope**
-   - Decide what should be contributed to AIB versus kept KAOS-local.
-   - This should turn the responsibility matrix into an implementation ownership boundary.
-
 10. **AIB SDK design**
-   - Decide the concrete SDK boundary after architecture responsibilities and upstream scope are clear.
+   - Decide the concrete SDK boundary after architecture responsibilities are clear.
    - This should translate the target security model into runtime/operator integration surfaces without becoming the policy source of truth.
 
 ## Output format for each decision note

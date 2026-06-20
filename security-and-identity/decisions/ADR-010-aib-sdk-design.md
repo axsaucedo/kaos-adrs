@@ -18,7 +18,7 @@ Proposed decision: adopt a **generic SDK core plus KAOS adapters** design.
 
 ## Context
 
-ADR-002 accepts SDK-first Agent/MCPServer enforcement for KAOS 1.0. ADR-003 defines the request security context that must flow through Agent, A2A, MCP, ModelAPI, and autonomous execution paths. ADR-004 through ADR-008 define AIB as the grant, consent, and delegated-token broker, while keeping policy, transport, IdP, and ModelAPI internals in their own layers. ADR-009 splits upstreamable AIB core capabilities from KAOS-local adapters.
+ADR-002 accepts SDK-first Agent/MCPServer enforcement for KAOS 1.0. ADR-003 defines the request security context that must flow through Agent, A2A, MCP, ModelAPI, and autonomous execution paths. ADR-004 through ADR-008 define AIB as the grant, consent, and delegated-token broker, while keeping policy, transport, IdP, and ModelAPI internals in their own layers.
 
 The SDK must therefore be a narrow integration layer, not a new policy platform. It should make the accepted architecture easy to implement consistently across KAOS runtimes while keeping reusable broker logic upstreamable.
 
@@ -172,7 +172,7 @@ Configuration should fail closed when security is enabled and required AIB or id
 
 This would be fastest to implement but would duplicate generic AIB client and token-exchange behavior inside KAOS.
 
-Rejected as the target. KAOS adapters should be local, but generic SDK core should be upstreamable per ADR-009.
+Rejected as the target. KAOS adapters should be local, but generic SDK core should be kept clean enough to propose upstream if it proves generally useful.
 
 ### Option B: Fully generic AIB SDK with no KAOS adapters
 
