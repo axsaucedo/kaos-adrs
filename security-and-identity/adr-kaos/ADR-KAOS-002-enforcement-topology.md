@@ -1,4 +1,4 @@
-# ADR-002: Enforcement topology
+# ADR-KAOS-002: Enforcement topology
 
 **Status**: Accepted
 **Date**: 2026-06-19
@@ -122,7 +122,7 @@ mTLS, SPIFFE, service mesh, workload identity, and sidecars can strengthen workl
 
 ## Follow-up
 
-1. Use [ADR-011](./ADR-011-gateway-api-resource-boundary-enforcement.md) to define the gateway enforcement pipeline in detail:
+1. Use [ADR-KAOS-009](./ADR-KAOS-009-gateway-api-resource-boundary-enforcement.md) to define the gateway enforcement pipeline in detail:
    - internal URL injection through the gateway,
    - `jwt_authn` for user and agent token validation,
    - `ext_authz` resource authorization,

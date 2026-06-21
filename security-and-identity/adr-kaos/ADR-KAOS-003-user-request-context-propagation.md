@@ -1,4 +1,4 @@
-# ADR-003: User and request context propagation
+# ADR-KAOS-003: User and request context propagation
 
 **Status**: Accepted
 **Date**: 2026-06-19
@@ -6,9 +6,9 @@
 
 ## Decision
 
-Introduce an application-level **request security context** and a **propagation-only SDK**. The SDK carries verified identity/context across hops so the gateway can enforce end-to-end (ADR-011); it does **not** authenticate users and does **not** make authorization decisions — enforcement is gateway-centric.
+Introduce an application-level **request security context** and a **propagation-only SDK**. The SDK carries verified identity/context across hops so the gateway can enforce end-to-end (ADR-KAOS-009); it does **not** authenticate users and does **not** make authorization decisions — enforcement is gateway-centric.
 
-The SDK should be separable from KAOS where possible, so it can be contributed upstream or reused by non-KAOS agentic runtimes. KAOS-specific code should mostly be adapters for KAOS identity formats, CRD-derived configuration, and AIB resource naming. The concrete SDK API is specified in [ADR-009](../adr-aib/ADR-009-aib-python-sdk-design.md).
+The SDK should be separable from KAOS where possible, so it can be contributed upstream or reused by non-KAOS agentic runtimes. KAOS-specific code should mostly be adapters for KAOS identity formats, CRD-derived configuration, and AIB resource naming. The concrete SDK API is specified in [ADR-AIB-001](../adr-aib/ADR-AIB-001-aib-python-sdk-design.md).
 
 ### Two propagated identities
 
@@ -17,7 +17,7 @@ A protected call carries two distinct identities, which the SDK keeps separate a
 - **User principal (subject)** — the inbound Keycloak/OIDC user token (`Authorization: Bearer`), propagated unchanged on outbound calls.
 - **Calling agent (actor)** — the workload's own AIB-issued machine token (`x-agent-authorization: Bearer`), attached by the SDK from the agent's credential.
 
-The actor is the calling agent's own identity, never the user token's `azp`. This is what makes multi-agent delegation correct (ADR-004): when Agent B calls a resource, the gateway sees actor = B.
+The actor is the calling agent's own identity, never the user token's `azp`. This is what makes multi-agent delegation correct (ADR-KAOS-004): when Agent B calls a resource, the gateway sees actor = B.
 
 ### Concrete SDK functions
 
@@ -37,7 +37,7 @@ aib.instrument_asgi(app)
 aib.ctx.to_headers()          # manual escape hatch for non-instrumented transports
 ```
 
-The instrumented HTTP clients attach the agent actor token and forward the user subject token transparently (including the machine-token refresh/retry described in ADR-009), so application code does not hand-pass auth pieces.
+The instrumented HTTP clients attach the agent actor token and forward the user subject token transparently (including the machine-token refresh/retry described in ADR-AIB-001), so application code does not hand-pass auth pieces.
 
 ### RequestSecurityContext
 
@@ -78,7 +78,7 @@ The SDK owns:
 1. Parsing trusted inbound identity/context (forwarded by the gateway) into `RequestSecurityContext`.
 2. Normalizing header names and claim names used between Agent, A2A, MCPServer, and ModelAPI calls.
 3. Propagating the user subject token and attaching the agent actor token on outbound A2A/MCP/ModelAPI calls.
-4. Managing the agent machine-token lifecycle (acquire/cache/refresh; see ADR-009).
+4. Managing the agent machine-token lifecycle (acquire/cache/refresh; see ADR-AIB-001).
 5. Persisting non-secret context metadata for audit/correlation.
 
 The SDK must not persist raw bearer tokens in memory events or durable task metadata.
@@ -113,7 +113,7 @@ MCPServer custom code is broader than Agent custom code. MCP runtimes may need t
 
 ## Context
 
-[ADR-001](./ADR-001-identity-model-and-source-of-truth.md) defines stable KAOS security identities through `spec.security.id`, resolving to:
+[ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md) defines stable KAOS security identities through `spec.security.id`, resolving to:
 
 | Case | Resolved identity |
 |---|---|
@@ -143,7 +143,7 @@ Gateway/Envoy/AIB ExtProc validates or exchanges tokens and forwards requests up
 
 **Rejected as the only propagation mechanism** because Gateway only sees individual HTTP hops. It does not understand agent run state, A2A delegation semantics, tool intent, or autonomous task correlation unless the application passes that context.
 
-Gateway remains useful as the optional resource-boundary enforcement layer; see ADR-002.
+Gateway remains useful as the optional resource-boundary enforcement layer; see ADR-KAOS-002.
 
 ### Sidecar-only propagation
 
@@ -195,4 +195,4 @@ Capture principal/session context but do not propagate or enforce it.
    - AIB client hooks.
 2. Define which fields are safe to persist.
 3. Define token redaction and logging rules.
-4. Use ADR-006's fail-with-URL-and-retry behavior for consent and re-authentication, while leaving durable pause/resume to future task approval work.
+4. Use ADR-KAOS-006's fail-with-URL-and-retry behavior for consent and re-authentication, while leaving durable pause/resume to future task approval work.

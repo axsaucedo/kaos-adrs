@@ -1,4 +1,4 @@
-# ADR-010: AIB integration and synchronization architecture
+# ADR-KAOS-008: AIB integration and synchronization architecture
 
 **Status**: Accepted
 **Date**: 2026-06-20
@@ -38,7 +38,7 @@ kaos system install --aib-enabled \
 
 Installing the charts as a convenience is **not** KAOS taking ownership of their lifecycle — it is a
 bootstrap, and operators may disable it and manage AIB/Keycloak themselves. The CLI renders the
-operator `security.userAuth` / `security.agentAuth` config (ADR-011) and the sync-service config.
+operator `security.userAuth` / `security.agentAuth` config (ADR-KAOS-009) and the sync-service config.
 
 ### Synchronization (lightweight external service)
 
@@ -62,7 +62,7 @@ The synchronization service is responsible for:
    - Read AIB endpoint/configuration from its own configuration or KAOS CLI-generated configuration.
 
 2. **Identity projection**
-   - Compute canonical KAOS logical IDs from [ADR-001](./ADR-001-identity-model-and-source-of-truth.md).
+   - Compute canonical KAOS logical IDs from [ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md).
    - Create or update AIB records using stable `external_id` values.
    - Preserve AIB records across Kubernetes delete/recreate when the logical identity is intentionally stable.
 
@@ -77,8 +77,8 @@ The synchronization service is responsible for:
 
 5. **Agent identity and credential provisioning**
    - Ensure required AIB agent records, third-party service records, and PermissionSets exist when KAOS declares or references them.
-   - Generate and rotate **per-agent AIB client credentials** through the AIB admin API for each identity-bearing caller. This is **required when security is enabled** (it is how an agent authenticates as the actor; see ADR-004), not optional.
-   - Write the resulting client credentials into per-agent Kubernetes Secrets (named by `credentialSecretPrefix`, e.g. `kaos-aib-<agentid>`). The **operator mounts** these Secrets into the agent/MCPServer pods (ADR-011); Kubernetes keeps a pod `Pending` until its Secret exists, which orders provisioning naturally.
+   - Generate and rotate **per-agent AIB client credentials** through the AIB admin API for each identity-bearing caller. This is **required when security is enabled** (it is how an agent authenticates as the actor; see ADR-KAOS-004), not optional.
+   - Write the resulting client credentials into per-agent Kubernetes Secrets (named by `credentialSecretPrefix`, e.g. `kaos-aib-<agentid>`). The **operator mounts** these Secrets into the agent/MCPServer pods (ADR-KAOS-009); Kubernetes keeps a pod `Pending` until its Secret exists, which orders provisioning naturally.
 
 6. **Status and drift reporting**
    - Report synchronization state through service logs, metrics, and optional Kubernetes annotations/status integration.
@@ -95,11 +95,11 @@ AIB lifecycle and should not make AIB itself KAOS-specific.
 
 ## Context
 
-[ADR-001](./ADR-001-identity-model-and-source-of-truth.md) establishes that KAOS owns logical resource identity and topology, while AIB can mirror KAOS identities through `external_id`.
+[ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md) establishes that KAOS owns logical resource identity and topology, while AIB can mirror KAOS identities through `external_id`.
 
-[ADR-004](./ADR-004-aib-responsibility-boundary.md) establishes that KAOS CRDs define requested access edges, and that AIB may store the broker-side grants and records used for authorization and delegated-token flows.
+[ADR-KAOS-004](./ADR-KAOS-004-aib-responsibility-boundary.md) establishes that KAOS CRDs define requested access edges, and that AIB may store the broker-side grants and records used for authorization and delegated-token flows.
 
-[ADR-009](../adr-aib/ADR-009-aib-python-sdk-design.md) establishes that SDK/native calls are the baseline integration path for runtime AIB use.
+[ADR-AIB-001](../adr-aib/ADR-AIB-001-aib-python-sdk-design.md) establishes that SDK/native calls are the baseline integration path for runtime AIB use.
 
 The remaining architecture question is operational: whether AIB should become a KAOS-managed control-plane dependency, an embedded KAOS component, or an external service with a synchronization bridge.
 
@@ -203,7 +203,7 @@ The Docker Compose setup runs:
 - mock MCP server,
 - agentgateway.
 
-This provides a local AIB end-to-end development topology. ExtProc runs as a separate deployment unit at the gateway, per [ADR-002](./ADR-002-enforcement-topology.md).
+This provides a local AIB end-to-end development topology. ExtProc runs as a separate deployment unit at the gateway, per [ADR-KAOS-002](./ADR-KAOS-002-enforcement-topology.md).
 
 ### AIB admin API surfaces useful for synchronization
 
@@ -299,7 +299,7 @@ The sync service watches KAOS resources and mirrors desired AIB records. It may 
 
 ### Runtime integration
 
-Runtime calls continue to follow [ADR-009](../adr-aib/ADR-009-aib-python-sdk-design.md):
+Runtime calls continue to follow [ADR-AIB-001](../adr-aib/ADR-AIB-001-aib-python-sdk-design.md):
 
 ```text
 Agent / MCPServer runtime

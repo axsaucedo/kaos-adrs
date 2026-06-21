@@ -1,4 +1,4 @@
-# ADR-011: Gateway API resource-boundary enforcement
+# ADR-KAOS-009: Gateway API resource-boundary enforcement
 
 **Status**: Accepted
 **Date**: 2026-06-20
@@ -29,7 +29,7 @@ Each protected request carries two identities, validated by Envoy `jwt_authn` wi
 | User principal (subject) | `Authorization: Bearer` | Keycloak/OIDC | `userAuth.issuer` |
 | Calling agent (actor) | `x-agent-authorization: Bearer` | AIB | `agentAuth.issuer` |
 
-`ext_authz` then decides **actor (calling agent) -> resource**, using the user principal for user-delegated third-party grants. The decision keys on the calling agent's own AIB-issued identity, **never on `subject_token.azp`**, which is what makes multi-agent delegation correct (see ADR-004). Autonomous runs have no user subject (actor-only). The SDK sets `x-agent-authorization` from the agent's AIB machine token and forwards the inbound user `Authorization`.
+`ext_authz` then decides **actor (calling agent) -> resource**, using the user principal for user-delegated third-party grants. The decision keys on the calling agent's own AIB-issued identity, **never on `subject_token.azp`**, which is what makes multi-agent delegation correct (see ADR-KAOS-004). Autonomous runs have no user subject (actor-only). The SDK sets `x-agent-authorization` from the agent's AIB machine token and forwards the inbound user `Authorization`.
 
 ### NetworkPolicy is required, not optional
 
@@ -43,7 +43,7 @@ Without NetworkPolicy the Gateway can be bypassed via ClusterIP, so it is part o
 
 ### Authorization scope
 
-The Gateway enforces coarse resource-boundary `require_access` (can this user, through this agent, reach this Agent/MCPServer/ModelAPI), via the AIB access-check API ([ADR-012](../adr-aib/ADR-012-aib-access-check-api.md)). It does not replace runtime/SDK semantics for MCP tool-level and argument-level authorization, agent run/session state, or multi-step re-authentication retry — those remain deferred or runtime concerns.
+The Gateway enforces coarse resource-boundary `require_access` (can this user, through this agent, reach this Agent/MCPServer/ModelAPI), via the AIB access-check API ([ADR-AIB-002](../adr-aib/ADR-AIB-002-aib-access-check-api.md)). It does not replace runtime/SDK semantics for MCP tool-level and argument-level authorization, agent run/session state, or multi-step re-authentication retry — those remain deferred or runtime concerns.
 
 ### Backend-neutral authorization (AIB default, OPA drop-in)
 
@@ -64,9 +64,9 @@ ExtProc and external authorization are different Envoy extension points; AIB ser
 
 ## Context
 
-[ADR-002](./ADR-002-enforcement-topology.md) establishes gateway-centric enforcement, with the SDK as a propagation-only layer.
+[ADR-KAOS-002](./ADR-KAOS-002-enforcement-topology.md) establishes gateway-centric enforcement, with the SDK as a propagation-only layer.
 
-[ADR-003](./ADR-003-user-request-context-propagation.md) defines propagated context headers such as:
+[ADR-KAOS-003](./ADR-KAOS-003-user-request-context-propagation.md) defines propagated context headers such as:
 
 ```text
 x-request-id
@@ -79,7 +79,7 @@ x-aib-scopes
 authorization
 ```
 
-[ADR-007](./ADR-007-transport-security-and-hardening-baseline.md) makes Gateway + NetworkPolicy boundary hardening a required part of security-enabled deployments, on top of the external TLS baseline.
+[ADR-KAOS-007](./ADR-KAOS-007-transport-security-and-hardening-baseline.md) makes Gateway + NetworkPolicy boundary hardening a required part of security-enabled deployments, on top of the external TLS baseline.
 
 This ADR defines the gateway enforcement model and the operator changes it requires.
 
@@ -303,7 +303,7 @@ Properties:
 - Gateway is the only enforcement point; the SDK only propagates the two identities so the gateway can
   decide end-to-end.
 - Resource access keys on the calling agent's own AIB-issued identity (the actor), never on
-  `subject_token.azp` — this is what makes multi-agent delegation correct (ADR-004).
+  `subject_token.azp` — this is what makes multi-agent delegation correct (ADR-KAOS-004).
 - NetworkPolicy is required so the gateway cannot be bypassed via ClusterIP.
 - The gateway handles the coarse resource boundary and token exchange; MCP tool/argument semantics and
   user-facing grant/re-auth flows remain runtime/SDK or deferred concerns.
@@ -345,7 +345,7 @@ aibExtProc
 networkPolicy
 ```
 
-This should be driven by global security configuration (ADR-001 keeps per-resource config to `spec.security.id` only).
+This should be driven by global security configuration (ADR-KAOS-001 keeps per-resource config to `spec.security.id` only).
 
 ### Header conventions
 
@@ -389,7 +389,7 @@ security:
     credentialSecretPrefix: kaos-aib                                # per-agent credential Secret (operator mounts; sync creates)
 ```
 
-`userAuth` and `agentAuth` become two Envoy `jwt_authn` providers. The AIB admin URL/credentials are not here — they live in the sync-service config ([ADR-010](./ADR-010-aib-integration-and-synchronization-architecture.md)). Per-resource configuration is `spec.security.id` only (ADR-001).
+`userAuth` and `agentAuth` become two Envoy `jwt_authn` providers. The AIB admin URL/credentials are not here — they live in the sync-service config ([ADR-KAOS-008](./ADR-KAOS-008-aib-integration-and-synchronization-architecture.md)). Per-resource configuration is `spec.security.id` only (ADR-KAOS-001).
 
 The operator generates, per protected route, an Envoy `SecurityPolicy` `extAuth.grpc` pointing at `agentAuth.extAuthzUrl`, with `headersToExtAuth` including `authorization` and `x-agent-authorization`, `contextExtensions` `kaos.resource`/`kaos.action` derived from the target identity, and fail-closed behavior (`failOpen: false`, `statusOnError: 503`). Token exchange uses `agentAuth.extProcUrl` when a protected call needs a delegated third-party token.
 
@@ -441,7 +441,7 @@ AIB ExtProc exchanges tokens and mutates `Authorization`, but it is not an autho
 
 Accepted as the target Gateway authorization integration.
 
-Envoy `ext_authz` is the right native contract for route-level allow/deny. AIB exposes an `envoy.service.auth.v3.Authorization/Check` implementation (ADR-012). Existing AIB ExtProc remains useful for token exchange, but it is not the authorization contract.
+Envoy `ext_authz` is the right native contract for route-level allow/deny. AIB exposes an `envoy.service.auth.v3.Authorization/Check` implementation (ADR-AIB-002). Existing AIB ExtProc remains useful for token exchange, but it is not the authorization contract.
 
 ### Option C2: Gateway-level `require_access` for all authorization
 

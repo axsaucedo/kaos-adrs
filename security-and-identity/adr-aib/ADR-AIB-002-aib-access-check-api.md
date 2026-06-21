@@ -1,4 +1,4 @@
-# ADR-012: AIB access-check API
+# ADR-AIB-002: AIB access-check API
 
 **Status**: Accepted
 **Date**: 2026-06-20
@@ -51,9 +51,9 @@ The decision is therefore `actor (calling agent) -> resource`. This is what make
 
 ## Context
 
-[ADR-009](./ADR-009-aib-python-sdk-design.md) describes SDK methods such as `check_access` and `require_access`, but current AIB does not expose a matching server API.
+[ADR-AIB-001](./ADR-AIB-001-aib-python-sdk-design.md) describes SDK methods such as `check_access` and `require_access`, but current AIB does not expose a matching server API.
 
-[ADR-011](../adr-kaos/ADR-011-gateway-api-resource-boundary-enforcement.md) describes Gateway-level resource-boundary enforcement, but Gateway cannot call AIB for a clean resource decision without a standalone AIB access-check API.
+[ADR-KAOS-009](../adr-kaos/ADR-KAOS-009-gateway-api-resource-boundary-enforcement.md) describes Gateway-level resource-boundary enforcement, but Gateway cannot call AIB for a clean resource decision without a standalone AIB access-check API.
 
 This ADR defines the AIB-side capability required to make those SDK and Gateway designs real.
 
@@ -258,7 +258,7 @@ Given a target resource URI mapped to the synthetic platform service, and a boot
 3. Given no bootstrap grant for the actor covering the resource, then the decision is denied.
 4. Given an ambiguous resource mapping, then the decision fails closed with `ambiguous_resource`.
 
-Note: a user-delegated `UserGrant` alone never grants KAOS resource access; the two grant families stay distinct (ADR-004).
+Note: a user-delegated `UserGrant` alone never grants KAOS resource access; the two grant families stay distinct (ADR-KAOS-004).
 
 ### User Story 5 - Target mode supports platform resources (P2)
 

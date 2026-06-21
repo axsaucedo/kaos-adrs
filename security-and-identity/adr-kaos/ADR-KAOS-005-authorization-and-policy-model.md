@@ -1,4 +1,4 @@
-# ADR-005: Authorization and policy model
+# ADR-KAOS-005: Authorization and policy model
 
 **Status**: Accepted
 **Date**: 2026-06-20
@@ -70,13 +70,13 @@ The authorization integration is backend-neutral: it uses the standard Envoy `ex
 
 ## Context
 
-[ADR-001](./ADR-001-identity-model-and-source-of-truth.md) defines KAOS logical identities.
+[ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md) defines KAOS logical identities.
 
-[ADR-003](./ADR-003-user-request-context-propagation.md) defines request context propagation.
+[ADR-KAOS-003](./ADR-KAOS-003-user-request-context-propagation.md) defines request context propagation.
 
-[ADR-002](./ADR-002-enforcement-topology.md) defines gateway-centric enforcement: `jwt_authn`, `ext_authz` -> AIB, `ext_proc` -> AIB token exchange, and NetworkPolicy bypass prevention.
+[ADR-KAOS-002](./ADR-KAOS-002-enforcement-topology.md) defines gateway-centric enforcement: `jwt_authn`, `ext_authz` -> AIB, `ext_proc` -> AIB token exchange, and NetworkPolicy bypass prevention.
 
-[ADR-004](./ADR-004-aib-responsibility-boundary.md) defines AIB as the authorization and delegated-token broker for KAOS, with:
+[ADR-KAOS-004](./ADR-KAOS-004-aib-responsibility-boundary.md) defines AIB as the authorization and delegated-token broker for KAOS, with:
 
 - AIB-owned KAOS logical resource grants,
 - AIB-owned user-delegated third-party grants,
@@ -86,7 +86,7 @@ The authorization integration is backend-neutral: it uses the standard Envoy `ex
 - ModelAPI internals remaining LiteLLM-owned,
 - OPA/Rego and Keycloak Authorization Services treated as optional future enterprise integrations under this decision.
 
-[ADR-011](./ADR-011-gateway-api-resource-boundary-enforcement.md) defines the gateway enforcement pipeline that calls AIB for resource authorization and token exchange.
+[ADR-KAOS-009](./ADR-KAOS-009-gateway-api-resource-boundary-enforcement.md) defines the gateway enforcement pipeline that calls AIB for resource authorization and token exchange.
 
 This ADR decides how authorization definitions, policy rules, and approval semantics should be represented for the target architecture.
 
@@ -133,7 +133,7 @@ Implication:
 
 - They are a good fit for third-party delegated OAuth scopes.
 - They are not a good long-term model for all KAOS resource grants, MCP tool arguments, ModelAPI budgets, or Gateway routes.
-- ADR-004 permits a temporary synthetic-service/custom-scope workaround for resource grants, but the target is a first-class resource-grant model.
+- ADR-KAOS-004 permits a temporary synthetic-service/custom-scope workaround for resource grants, but the target is a first-class resource-grant model.
 
 ### AIB UserGrants are principal-to-agent delegated grants
 
@@ -290,7 +290,7 @@ This option is intentionally simple: it gives KAOS a clear boundary between requ
 Pros:
 
 - Simple to explain to operators and users.
-- Fits ADR-001 through ADR-004.
+- Fits ADR-KAOS-001 through ADR-KAOS-004.
 - Keeps policy definitions config-as-code through KAOS CRDs and AIB records.
 - Avoids new policy-language dependency.
 - Easy to audit because the grant is a concrete row/record.
@@ -428,7 +428,7 @@ Keycloak permission:
 
 This is appealing in enterprises where Keycloak is already the policy administration point. It keeps user identity, groups, roles, and authorization in one system.
 
-The problem is that KAOS resources are dynamic Kubernetes resources. If Keycloak owns KAOS resource authorization, KAOS must sync Agents, MCPServers, ModelAPIs, scopes, permissions, and deletions into Keycloak. This overlaps with ADR-004, which already chose AIB as the KAOS resource-grant authority and delegated-token broker. It also does not replace AIB's token vault and third-party delegated session model.
+The problem is that KAOS resources are dynamic Kubernetes resources. If Keycloak owns KAOS resource authorization, KAOS must sync Agents, MCPServers, ModelAPIs, scopes, permissions, and deletions into Keycloak. This overlaps with ADR-KAOS-004, which already chose AIB as the KAOS resource-grant authority and delegated-token broker. It also does not replace AIB's token vault and third-party delegated session model.
 
 This option is therefore a different product boundary. It may be useful as an optional future enterprise integration, but it should not be the default architecture unless KAOS intentionally chooses Keycloak as its central authorization platform through an adapter.
 

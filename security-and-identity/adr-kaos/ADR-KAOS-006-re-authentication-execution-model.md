@@ -1,4 +1,4 @@
-# ADR-006: Re-authentication execution model
+# ADR-KAOS-006: Re-authentication execution model
 
 **Status**: Accepted
 **Date**: 2026-06-20
@@ -44,17 +44,17 @@ This keeps the model simple:
 
 ## Context
 
-[ADR-001](./ADR-001-identity-model-and-source-of-truth.md) defines KAOS logical identities.
+[ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md) defines KAOS logical identities.
 
-[ADR-003](./ADR-003-user-request-context-propagation.md) defines request context propagation.
+[ADR-KAOS-003](./ADR-KAOS-003-user-request-context-propagation.md) defines request context propagation.
 
-[ADR-004](./ADR-004-aib-responsibility-boundary.md) defines AIB as the owner of:
+[ADR-KAOS-004](./ADR-KAOS-004-aib-responsibility-boundary.md) defines AIB as the owner of:
 
 - approved KAOS logical resource grants,
 - user-delegated third-party grants,
 - delegated third-party token exchange.
 
-[ADR-005](./ADR-005-authorization-and-policy-model.md) accepts a simple grant-table model:
+[ADR-KAOS-005](./ADR-KAOS-005-authorization-and-policy-model.md) accepts a simple grant-table model:
 
 - KAOS CRD references are requested access edges only.
 - AIB owns approved KAOS resource grants.
@@ -62,7 +62,7 @@ This keeps the model simple:
 - no-permission-by-default applies when security is enabled.
 - OPA/Rego, Keycloak Authorization Services, MCP tool/argument policy, and autonomous run-scoped grants are deferred.
 
-[ADR-002](./ADR-002-enforcement-topology.md) defines the gateway as the enforcement plane. Resource-to-resource authorization happens at the gateway, not in Python/SDK code. Per-resource configuration is `spec.security.id` only.
+[ADR-KAOS-002](./ADR-KAOS-002-enforcement-topology.md) defines the gateway as the enforcement plane. Resource-to-resource authorization happens at the gateway, not in Python/SDK code. Per-resource configuration is `spec.security.id` only.
 
 This ADR decides what happens operationally when an agent action cannot proceed because a platform grant, user delegated grant, or third-party OAuth2 session is missing or expired.
 

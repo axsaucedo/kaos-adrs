@@ -1,4 +1,4 @@
-# ADR-007: Transport security and hardening baseline
+# ADR-KAOS-007: Transport security and hardening baseline
 
 **Status**: Accepted
 **Date**: 2026-06-20
@@ -24,13 +24,13 @@ mTLS, SPIFFE, service mesh, native intra-service TLS, cert-manager chart support
 
 ## Context
 
-[ADR-002](./ADR-002-enforcement-topology.md) accepts the Envoy-compatible Gateway as the enforcement plane: `jwt_authn` validates inbound tokens, `ext_authz` asks AIB for allow/deny resource decisions, and `ext_proc` performs RFC 8693 token exchange.
+[ADR-KAOS-002](./ADR-KAOS-002-enforcement-topology.md) accepts the Envoy-compatible Gateway as the enforcement plane: `jwt_authn` validates inbound tokens, `ext_authz` asks AIB for allow/deny resource decisions, and `ext_proc` performs RFC 8693 token exchange.
 
-[ADR-004](./ADR-004-aib-responsibility-boundary.md) accepts AIB as the authorization and delegated-token broker, while placing Kubernetes ServiceAccount/SPIFFE workload binding in future hardening.
+[ADR-KAOS-004](./ADR-KAOS-004-aib-responsibility-boundary.md) accepts AIB as the authorization and delegated-token broker, while placing Kubernetes ServiceAccount/SPIFFE workload binding in future hardening.
 
-[ADR-005](./ADR-005-authorization-and-policy-model.md) accepts simple AIB grant tables for resource authorization and treats OPA/Rego, Keycloak Authorization Services, and MCP tool/argument policy as optional policy extensions.
+[ADR-KAOS-005](./ADR-KAOS-005-authorization-and-policy-model.md) accepts simple AIB grant tables for resource authorization and treats OPA/Rego, Keycloak Authorization Services, and MCP tool/argument policy as optional policy extensions.
 
-[ADR-006](./ADR-006-re-authentication-execution-model.md) accepts fail-closed resource grants, user-grant-required outcomes, and fail-with-URL-and-retry for third-party re-authentication surfaced through the gateway path.
+[ADR-KAOS-006](./ADR-KAOS-006-re-authentication-execution-model.md) accepts fail-closed resource grants, user-grant-required outcomes, and fail-with-URL-and-retry for third-party re-authentication surfaced through the gateway path.
 
 This ADR decides the transport security and network boundary requirements for the gateway-centric security model.
 
