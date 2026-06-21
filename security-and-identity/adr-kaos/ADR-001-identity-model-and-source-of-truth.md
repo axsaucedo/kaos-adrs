@@ -93,6 +93,36 @@ This matches:
 - AIB `external_id` mapping,
 - the requirement that users may intentionally reuse the same logical identifier across namespaces.
 
+### Per-agent authentication identity (AIB-issued)
+
+The logical identity above is an *identifier* used for grant lookup. It is not, by itself, a way for
+a workload to **authenticate as itself**. Multi-agent delegation requires that a calling agent prove
+which agent it is (see ADR-004), so each identity-bearing **caller** (every Agent, and an MCPServer
+when it calls out) also has a first-class **authentication credential**:
+
+- The agent is registered with **AIB**, which issues it per-agent client credentials
+  (`client_id`/`client_secret`) through its admin API.
+- AIB acts as the OAuth2 authorization server for agents: the agent runs a `client_credentials` grant
+  against AIB's token endpoint to obtain a short-lived, AIB-signed **actor token** whose `sub`/`azp`
+  resolves to its KAOS logical identity.
+- AIB issues agent identity tokens; **Keycloak/Dex/OIDC remain human-only** (see ADR-004 and ADR-000).
+- Client authentication defaults to the `client_secret` (Argon2id-hashed by AIB); `private_key_jwt`
+  is a stronger option; mTLS/SPIFFE workload binding remains future hardening.
+
+The credential is provisioned by the external sync service into a Kubernetes Secret and **mounted into
+the pod by the operator** (see ADR-010 and ADR-011). The trust assumption is possession of the
+credential, protected by Kubernetes Secret isolation; cryptographic proof that the pod *is* the agent
+(mTLS/SPIFFE) is deferred future hardening.
+
+### CRD surface: `spec.security.id` only
+
+`spec.security.id` is the **only** per-resource security field. Authentication and authorization are
+configured operator-wide (see ADR-011), and identity/credentials are auto-provisioned. This is a
+deliberate design choice: there are **no per-resource `authentication`/`authorization`/public
+overrides**, so a CRD author cannot weaken the enforced security posture of the cluster. Requested
+access edges are expressed through existing wiring fields (`spec.mcpServers`, `spec.modelAPI`,
+`spec.agentNetwork`), not through `spec.security`.
+
 ## Context
 
 KAOS resources are Kubernetes CRDs and already have Kubernetes object identity:
@@ -151,7 +181,7 @@ Keep Agent, MCPServer, and ModelAPI in the target identity model for now.
 Implication:
 
 - Treat all three as KAOS-managed service identities conceptually.
-- ADR-002 keeps Agent and MCPServer enforcement SDK-native in the baseline profile, and treats ModelAPI root access as AIB-manageable while leaving model/budget internals to LiteLLM.
+- ADR-002 enforces Agent, MCPServer, and ModelAPI access at the gateway, while leaving ModelAPI model/budget internals to LiteLLM.
 
 ### CRD surface
 
@@ -192,15 +222,15 @@ Implication:
 
 ## Consequences
 
-- KAOS resources have a first-class `spec.security.id`.
+- KAOS resources have a first-class `spec.security.id`, which is the only per-resource security field.
 - If omitted, identity defaults to kind/namespace/name.
 - AIB `external_id` uses the resolved KAOS logical identity.
-- A separate KAOS-AIB sync service reconciles KAOS resources into AIB records.
+- Each identity-bearing caller additionally has an AIB-issued per-agent authentication credential so it can authenticate as itself (the actor) for delegation; Keycloak stays human-only.
+- A separate KAOS-AIB sync service reconciles KAOS resources into AIB records and provisions per-agent credentials into Secrets; the operator mounts them into pods.
 - Grants survive delete/recreate when the resolved logical identity is the same.
-- ServiceAccounts are excluded from initial implementation.
-- Workload verification is deferred.
-- Agent, MCPServer, and ModelAPI remain in the identity target picture. ADR-002 uses those identities for SDK-native Agent/MCPServer enforcement and ModelAPI root access decisions.
-- Autonomous run identity remains Agent-level plus correlation for now.
+- ServiceAccounts and SPIFFE/mTLS workload binding are deferred future hardening.
+- Agent, MCPServer, and ModelAPI remain in the identity target picture. ADR-011 uses those identities for gateway-enforced access decisions.
+- Autonomous run identity remains Agent-level plus correlation for now (actor-only, no user subject).
 
 ## Follow-up
 

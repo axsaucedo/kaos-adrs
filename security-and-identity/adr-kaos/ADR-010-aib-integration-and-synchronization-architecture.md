@@ -7,32 +7,54 @@
 
 ## Decision
 
-KAOS will integrate with AIB as an **externally managed broker service**.
+KAOS separates **AIB lifecycle** from **AIB integration**, and owns only the latter.
 
-KAOS will not install, upgrade, own, or lifecycle-manage AIB. AIB should be installed through AIB-owned distribution mechanisms, primarily the AIB Helm chart or another external platform path.
+### Lifecycle (KAOS does not own it)
 
-KAOS will provide **configuration support** for using an existing AIB installation. The primary KAOS-side UX may be a CLI/configuration path such as:
+KAOS does not own, upgrade, or lifecycle-manage AIB or the IdP (Keycloak) as part of its
+reconciliation. Their storage, keys, migrations, and upgrades are managed externally through their own
+Helm charts / operators. Production deployments are expected to run externally-managed AIB and Keycloak.
+
+### Integration (KAOS owns it, via the CLI, like other platform integrations)
+
+KAOS configures itself to **use** AIB and Keycloak, following the same flow as other `kaos system install`
+integrations (otel, gateway, metallb). As a bootstrap convenience the CLI can install the Keycloak and
+AIB Helm charts and wire the operator security config; it can equally point at externally-managed
+instances:
 
 ```text
+# Convenience: install Keycloak + AIB charts and wire everything
+kaos system install --aib-enabled --keycloak-enabled
+
+# External: use already-managed instances
 kaos system install --aib-enabled \
-  --aib-base-url ... \
-  --aib-admin-url ... \
-  --aib-admin-credentials-secret ...
+  --idp-issuer https://keycloak.example.com/realms/kaos \
+  --aib-issuer https://aib.example.com \
+  --aib-ext-authz-url aib-ext-authz.aib-system.svc.cluster.local:9002 \
+  --aib-ext-proc-url  aib-extproc.aib-system.svc.cluster.local:50051 \
+  --aib-admin-url https://aib.example.com:14000 \
+  --aib-admin-credentials-secret aib-admin-credentials
 ```
 
-This configures KAOS runtimes, operator settings, SDK environment variables, and credential references to use AIB. It does **not** install AIB.
+Installing the charts as a convenience is **not** KAOS taking ownership of their lifecycle — it is a
+bootstrap, and operators may disable it and manage AIB/Keycloak themselves. The CLI renders the
+operator `security.userAuth` / `security.agentAuth` config (ADR-011) and the sync-service config.
 
-KAOS-to-AIB synchronization will not be embedded into KAOS core and will not be embedded into AIB core. Automatic synchronization may be provided by a **lightweight external synchronization service** that watches KAOS resources, computes desired AIB records, calls AIB admin APIs, and reports drift/status.
+### Synchronization (lightweight external service)
 
-In this ADR, "controller" means reconciliation behavior:
+KAOS-to-AIB synchronization is not embedded into KAOS core and not into AIB core. It is a **lightweight
+external synchronization service** that watches KAOS resources, computes desired AIB records, calls AIB
+admin APIs, and reports drift/status:
 
 ```text
 watch/list KAOS resources -> compute AIB desired records -> call AIB admin APIs -> report drift/status
 ```
 
-It does not require a Go/Kubebuilder operator, new CRDs, or code inside the KAOS operator. The sync service may be implemented in Go, Python, or any language with Kubernetes watch support.
+It does not require a Go/Kubebuilder operator, new CRDs, or code inside the KAOS operator, and may be
+implemented in any language with Kubernetes watch support. The AIB admin URL/credentials live in this
+sync-service config (not in the operator/gateway enforcement config).
 
-The synchronization service is responsible for:
+The synchronization service is responsible for: 
 
 1. **Discovery**
    - Watch KAOS Agent, MCPServer, and ModelAPI resources.
@@ -53,17 +75,21 @@ The synchronization service is responsible for:
    - For the current AIB model, optionally encode early KAOS resource access through a synthetic internal service and PermissionSet scopes.
    - Mark this as compatibility encoding, not the target platform/resource grant model.
 
-5. **AIB configuration reconciliation**
+5. **Agent identity and credential provisioning**
    - Ensure required AIB agent records, third-party service records, and PermissionSets exist when KAOS declares or references them.
-   - Optionally generate and rotate agent client credentials through AIB admin APIs.
-   - Store resulting client credentials in Kubernetes Secrets for the relevant KAOS workload, when credential management is enabled.
+   - Generate and rotate **per-agent AIB client credentials** through the AIB admin API for each identity-bearing caller. This is **required when security is enabled** (it is how an agent authenticates as the actor; see ADR-004), not optional.
+   - Write the resulting client credentials into per-agent Kubernetes Secrets (named by `credentialSecretPrefix`, e.g. `kaos-aib-<agentid>`). The **operator mounts** these Secrets into the agent/MCPServer pods (ADR-011); Kubernetes keeps a pod `Pending` until its Secret exists, which orders provisioning naturally.
 
 6. **Status and drift reporting**
    - Report synchronization state through service logs, metrics, and optional Kubernetes annotations/status integration.
    - Report AIB unreachable, AIB record drift, missing credentials, stale external IDs, and unsupported requested edges.
    - Never silently fall back to insecure behavior when synchronization fails.
 
-The sync service may live in a separate repository, an AIB-adjacent integration repository, or initially as documented sample code. It should not make KAOS own AIB lifecycle and should not make AIB itself KAOS-specific.
+In summary, the sync service projects, at a high level: KAOS logical identities (`external_id`), requested
+access edges (kept distinct from approved grants), third-party services and PermissionSets, **per-agent
+client credentials** (into Secrets), and drift/status. It may live in a separate repository, an
+AIB-adjacent integration repository, or initially as documented sample code. It should not make KAOS own
+AIB lifecycle and should not make AIB itself KAOS-specific.
 
 ---
 
@@ -177,7 +203,7 @@ The Docker Compose setup runs:
 - mock MCP server,
 - agentgateway.
 
-This provides a local AIB end-to-end development topology. ExtProc remains a separate deployment unit for the Gateway resource-boundary profile rather than part of the SDK-native baseline described by [ADR-002](./ADR-002-enforcement-topology.md).
+This provides a local AIB end-to-end development topology. ExtProc runs as a separate deployment unit at the gateway, per [ADR-002](./ADR-002-enforcement-topology.md).
 
 ### AIB admin API surfaces useful for synchronization
 

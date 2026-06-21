@@ -7,26 +7,28 @@
 
 ## Decision
 
-Adopt **Option A: Simple AIB grant tables for the baseline profile**.
+Adopt **Option A: Simple AIB grant tables for the target model**.
 
-Keep the baseline implementation deliberately simple: explicit requested edges, explicit approved resource grants, and explicit user delegated grants. Do not add a generalized external-PDP envelope, policy plugin boundary, or policy abstraction layer to the baseline profile just to prepare for OPA/Rego or Keycloak Authorization Services.
+Keep authorization data-first: explicit requested edges, explicit approved resource grants, and explicit user delegated grants. Do not add a generalized external-PDP envelope, policy plugin boundary, or policy abstraction layer by default just to prepare for OPA/Rego or Keycloak Authorization Services.
 
-Use the deployment-profile vocabulary consistently: the **baseline profile** uses SDK-native enforcement with external TLS and direct ClusterIP access; the **Gateway resource-boundary profile** adds Gateway routing, Envoy `ext_authz`, AIB ExtProc token exchange, and NetworkPolicy bypass prevention; the **advanced/hardened profile** adds optional mTLS/SPIFFE/service mesh/workload identity hardening.
+The enforcement point for KAOS resource authorization is the gateway `ext_authz` call. AIB evaluates the runtime decision through that call: "does an approved grant exist for this caller, target, and action?" The decision is keyed on the **ACTOR**: the calling agent's own AIB-issued identity carried in `x-agent-authorization: Bearer`. The user principal carried in `Authorization: Bearer` is the **SUBJECT** and is used for user-delegated third-party grants, not for attributing resource-to-resource access. Autonomous runs are actor-only.
+
+The SDK propagates verified identity and context so the gateway can enforce end-to-end. It does not enforce KAOS resource authorization.
 
 Use:
 
 | Authorization domain | Target model |
 |---|---|
-| Agent -> MCPServer | AIB resource grant |
-| Agent -> ModelAPI root access | AIB resource grant |
-| Agent -> Agent delegation | AIB resource grant |
-| User -> Agent third-party delegation | AIB UserGrant + PermissionSet |
-| MCP tool-level auth | Optional advanced policy; CRD/schema model required |
-| MCP argument-level auth | Optional advanced policy; policy/approval model required |
+| Agent -> MCPServer | AIB resource grant enforced by gateway `ext_authz` |
+| Agent -> ModelAPI root access | AIB resource grant enforced by gateway `ext_authz` |
+| Agent -> Agent delegation | AIB resource grant enforced by gateway `ext_authz` |
+| User -> Agent third-party delegation | AIB UserGrant + PermissionSet, evaluated for delegated token availability |
+| MCP tool-level auth | Optional future policy; CRD/schema model required |
+| MCP argument-level auth | Optional future policy; policy/approval model required |
 | ModelAPI model allowlist/budget/rate limit | LiteLLM |
-| Gateway route auth | Gateway resource-boundary profile + AIB resource grant |
+| Gateway route auth | Gateway `ext_authz` enforces it using an AIB resource grant |
 | Human login/groups/roles | Keycloak/Dex/OIDC |
-| Complex enterprise policy | Optional advanced OPA/Rego or Keycloak AuthZ integration |
+| Complex enterprise policy | Optional future OPA/Rego or Keycloak AuthZ integration; OPA can be a drop-in `ext_authz` backend via opa-envoy |
 
 Policy should be represented as data first:
 
@@ -56,7 +58,13 @@ Use CEL only for:
 - simple built-in checks,
 - implementation internals where AIB already uses it.
 
-Do not make OPA/Rego or Keycloak Authorization Services mandatory in the baseline profile. Treat them as optional advanced integrations to reconsider only when simple grants are no longer enough.
+Do not make OPA/Rego or Keycloak Authorization Services mandatory. Treat them as optional future enterprise PDP integrations to reconsider only when simple grants are no longer enough. OPA is specifically a drop-in Envoy `ext_authz` backend through opa-envoy when it is fed equivalent policy and data.
+
+Per-resource security configuration is `spec.security.id` only. Authentication, authorization, and backend selection are operator-wide integration concerns.
+
+### Backend-neutral authorization integration
+
+The authorization integration is backend-neutral: it uses the standard Envoy `ext_authz` gRPC contract (`envoy.service.auth.v3.Authorization/Check`) and neutral `kaos.resource` / `kaos.action` `context_extensions`. AIB is the default backend. OPA is swappable as a drop-in backend via opa-envoy with no Envoy or KAOS configuration change, provided it has equivalent policy and data. Keycloak-as-authz would need an adapter because it is the IdP, not an `ext_authz` backend.
 
 ---
 
@@ -64,9 +72,9 @@ Do not make OPA/Rego or Keycloak Authorization Services mandatory in the baselin
 
 [ADR-001](./ADR-001-identity-model-and-source-of-truth.md) defines KAOS logical identities.
 
-[ADR-003](./ADR-003-user-request-context-propagation.md) defines SDK-first request context propagation.
+[ADR-003](./ADR-003-user-request-context-propagation.md) defines request context propagation.
 
-[ADR-002](./ADR-002-enforcement-topology.md) defines SDK-native baseline enforcement and the Gateway resource-boundary profile.
+[ADR-002](./ADR-002-enforcement-topology.md) defines gateway-centric enforcement: `jwt_authn`, `ext_authz` -> AIB, `ext_proc` -> AIB token exchange, and NetworkPolicy bypass prevention.
 
 [ADR-004](./ADR-004-aib-responsibility-boundary.md) defines AIB as the authorization and delegated-token broker for KAOS, with:
 
@@ -76,10 +84,11 @@ Do not make OPA/Rego or Keycloak Authorization Services mandatory in the baselin
 - no-permission-by-default semantics,
 - AIB PermissionSets primarily representing third-party service scopes,
 - ModelAPI internals remaining LiteLLM-owned,
-- OPA/Rego and Keycloak Authorization Services treated as optional advanced integrations under this decision.
+- OPA/Rego and Keycloak Authorization Services treated as optional future enterprise integrations under this decision.
+
+[ADR-011](./ADR-011-gateway-api-resource-boundary-enforcement.md) defines the gateway enforcement pipeline that calls AIB for resource authorization and token exchange.
 
 This ADR decides how authorization definitions, policy rules, and approval semantics should be represented for the target architecture.
-
 
 ---
 
@@ -169,7 +178,7 @@ Implication:
 
 - CEL is a good fit for small, local, deterministic transformations and simple checks.
 - CEL is not currently a full policy administration model for KAOS resources.
-- CEL can be part of AIB's implementation, but should not be treated as the user-facing policy language for the baseline profile unless explicitly designed.
+- CEL can be part of AIB's implementation, but should not be treated as the user-facing policy language unless explicitly designed.
 
 ### OPA/Rego is a general policy engine
 
@@ -181,13 +190,14 @@ Relevant facts:
 
 - OPA evaluates policies written in Rego over structured input data.
 - It is suitable for fine-grained, context-aware decisions over API requests, infrastructure, and configuration data.
-- OPA can be integrated by calling its REST API or embedding SDKs.
+- OPA can be integrated with Envoy through opa-envoy as an `ext_authz` backend.
 - Rego is more expressive than simple grant tables, but introduces an additional policy language, runtime, bundle/deployment model, and operational surface.
 
 Implication:
 
-- OPA/Rego is a credible optional advanced PDP for complex enterprise policies.
-- It is likely overkill for the baseline KAOS policy model if that profile only needs requested edges plus approved grants.
+- OPA/Rego is a credible optional future enterprise PDP for complex policies.
+- It can replace AIB as the `ext_authz` decision backend without changing Envoy or KAOS configuration if it receives equivalent `kaos.resource` / `kaos.action` context and grant data.
+- It is overkill for the target KAOS grant model when the needed decision is requested edge plus approved grant.
 
 ### Keycloak Authorization Services can be a PDP/PAP
 
@@ -206,7 +216,7 @@ Implication:
 
 - Keycloak Authorization Services could model KAOS resources and policies in enterprise deployments.
 - It would duplicate or displace part of AIB's KAOS-native resource-grant role.
-- It remains better suited as human identity/SSO for the baseline profile unless the architecture intentionally adopts Keycloak as the central PDP.
+- It remains better suited as human identity/SSO by default unless the architecture intentionally adopts Keycloak as the central PDP through an adapter.
 
 ---
 
@@ -214,21 +224,21 @@ Implication:
 
 This ADR fixes the following scope:
 
-1. What is the minimum baseline authorization data model?
+1. What is the minimum target authorization data model?
 2. Which permissions are declared in KAOS CRDs as requested access?
 3. Which permissions are approved and stored in AIB?
 4. Whether policy logic is simple grant lookup, CEL, OPA/Rego, Keycloak AuthZ, or a combination.
 5. How admin/platform authorization combines with user-delegated grants.
 6. How autonomous grants are represented.
-7. What remains optional or advanced.
+7. What remains optional or future.
 
 ---
 
 ## Annex: Alternatives considered
 
-### Option A: Simple AIB grant tables for the baseline profile
+### Option A: Simple AIB grant tables for the target model
 
-This option treats authorization as explicit data rather than as a general-purpose policy language. KAOS CRDs say what a resource is wired to use. AIB stores which of those requested edges are approved. Runtime enforcement then asks a simple question: "does an approved grant exist for this caller, target, and action?"
+This option treats authorization as explicit data rather than as a general-purpose policy language. KAOS CRDs say what a resource is wired to use. AIB stores which of those requested edges are approved. Runtime enforcement then asks a simple question through gateway `ext_authz`: "does an approved grant exist for this caller, target, and action?"
 
 The model has two distinct grant families:
 
@@ -246,7 +256,7 @@ The model has two distinct grant families:
 
 Policy is primarily grant lookup, expiry/status checks, and simple metadata checks.
 
-In practice, an Agent that references an MCPServer in its CRD would not automatically be allowed to call it. The CRD reference becomes a requested edge. AIB would need a matching approved resource grant before the SDK/Gateway/runtime lets the call proceed.
+In practice, an Agent that references an MCPServer in its CRD would not automatically be allowed to call it. The CRD reference becomes a requested edge. AIB needs a matching approved resource grant before the gateway allows the call.
 
 Example:
 
@@ -257,8 +267,8 @@ CRD requested edge:
 AIB approved resource grant:
   kaos://agent/researcher -> kaos://mcpserver/github, action=call, status=approved
 
-Runtime decision:
-  allow if requested edge exists and approved grant exists
+Runtime decision at gateway ext_authz:
+  allow if requested edge exists and approved grant exists for actor -> target/action
 ```
 
 For delegated third-party access, the resource grant is not enough. If the GitHub MCP needs to call GitHub as Alice, AIB must also have a user-delegated grant:
@@ -275,7 +285,7 @@ decision:
   provide GitHub token only if the user delegated grant also exists
 ```
 
-This option is intentionally "boring": it does not try to answer every advanced authorization question. It gives KAOS a clear baseline boundary between requested topology, approved resource access, and delegated user consent.
+This option is intentionally simple: it gives KAOS a clear boundary between requested topology, approved resource access, and delegated user consent.
 
 Pros:
 
@@ -285,19 +295,19 @@ Pros:
 - Avoids new policy-language dependency.
 - Easy to audit because the grant is a concrete row/record.
 - Matches no-permission-by-default semantics.
+- Aligns directly with gateway `ext_authz` decisions.
 
 Cons:
 
 - Less expressive than OPA/Keycloak AuthZ.
-- Complex context-aware policies need optional advanced extension.
+- Complex context-aware policies need optional future extension.
 - AIB needs first-class resource-grant and approval models.
 - Does not solve MCP tool/argument policy until KAOS models tools and tool permissions explicitly.
 - Requires a clear admin approval/bootstrap path, otherwise all requested edges remain denied.
 
 Best fit:
 
-- The baseline profile.
-- The baseline "secure but understandable" model.
+- The target model.
 - Environments where explicit allowlists are preferable to writing policy code.
 
 ### Option B: AIB CEL as the policy language
@@ -316,9 +326,7 @@ allow if:
 
 This is attractive because AIB already uses CEL in several bounded places: extracting principals from JWTs, extracting agent IDs from tokens, authorizing privileged token-exchange clients, and shaping token claims. CEL is deterministic and lighter than introducing OPA.
 
-However, using CEL internally for claim extraction is different from exposing CEL as the primary user-facing policy model. Once CEL becomes policy, KAOS/AIB need policy storage, versioning, review, testing, migration, audit, debugging, error reporting, and a safe data model for what expressions are allowed to inspect. That is a much larger product surface than the current AIB implementation.
-
-This option can also blur config-as-code boundaries. If access rules live inside dynamic CEL expressions, the operator can no longer understand authorization just by comparing KAOS requested edges and AIB approved grants.
+However, using CEL internally for claim extraction is different from exposing CEL as the primary user-facing policy model. Once CEL becomes policy, KAOS/AIB need policy storage, versioning, review, testing, migration, audit, debugging, error reporting, and a safe data model for what expressions are allowed to inspect.
 
 Pros:
 
@@ -338,19 +346,19 @@ Cons:
 
 Best fit:
 
-- Internal claim extraction and simple checks, not the primary baseline user-facing policy language.
-- Possible advanced implementation detail behind grant-table decisions.
+- Internal claim extraction and simple checks, not the primary user-facing policy language.
+- Possible future implementation detail behind grant-table decisions.
 
 ### Option C: OPA/Rego as policy decision point
 
-This option introduces OPA as the policy decision point. KAOS or AIB would assemble structured authorization input and call OPA for an allow/deny decision. AIB could still store grants and delegated tokens, but OPA would evaluate richer policy logic.
+This option introduces OPA as the policy decision point. In the gateway-centric architecture, OPA can be a drop-in `ext_authz` backend via opa-envoy. AIB could still store grants and delegated tokens, but OPA would evaluate richer policy logic over equivalent input.
 
 Example input:
 
 ```json
 {
   "principal": "keycloak://kaos/alice",
-  "agent": "kaos://agent/researcher",
+  "actor": "kaos://agent/researcher",
   "target": "kaos://mcpserver/github",
   "action": "call",
   "requested_edge_exists": true,
@@ -372,7 +380,7 @@ allow if:
 
 OPA is the strongest option if KAOS needs enterprise-style policy: group/role rules, label-based rules, environment-based constraints, time windows, organization-specific exceptions, separation of duties, or policy bundles managed by a central platform team.
 
-The tradeoff is that OPA changes the architecture from "AIB owns concrete grants" to "AIB owns grants and OPA owns final policy logic" or "OPA owns final authorization and AIB is an input provider." That may be correct for advanced deployments, but it is more than is needed to decide basic Agent -> MCPServer, Agent -> ModelAPI, and Agent -> Agent access in the baseline profile.
+The tradeoff is that OPA changes the architecture from "AIB owns concrete grants" to "AIB owns grants and OPA owns final policy logic" or "OPA owns final authorization and AIB is an input provider." That may be correct for enterprise deployments, but it is more than is needed to decide basic Agent -> MCPServer, Agent -> ModelAPI, and Agent -> Agent access in the target model.
 
 Pros:
 
@@ -382,20 +390,20 @@ Pros:
 - Works across services and languages.
 - Clear upgrade path if simple grants become insufficient.
 - Can evaluate KAOS, AIB, IdP, and runtime context together.
+- Can use the same Envoy `ext_authz` contract as AIB.
 
 Cons:
 
 - Adds operational dependency.
 - Requires policy bundle lifecycle.
-- More complex than needed for baseline grant checks.
+- More complex than needed for simple grant checks.
 - Requires clear integration with AIB grants and KAOS CRDs.
-- Requires deciding whether KAOS, AIB, Gateway, or each runtime calls OPA.
 - Adds another failure mode to every protected call path.
 - Makes debugging harder unless the input and decision trace are exposed well.
 
 Best fit:
 
-- Advanced/enterprise policy layer.
+- Optional future enterprise policy.
 - Deployments that already standardize on OPA for platform authorization.
 
 ### Option D: Keycloak Authorization Services as PDP/PAP
@@ -422,7 +430,7 @@ This is appealing in enterprises where Keycloak is already the policy administra
 
 The problem is that KAOS resources are dynamic Kubernetes resources. If Keycloak owns KAOS resource authorization, KAOS must sync Agents, MCPServers, ModelAPIs, scopes, permissions, and deletions into Keycloak. This overlaps with ADR-004, which already chose AIB as the KAOS resource-grant authority and delegated-token broker. It also does not replace AIB's token vault and third-party delegated session model.
 
-This option is therefore not "wrong"; it is a different product boundary. It would make Keycloak the enterprise PDP/PAP and make AIB more narrowly responsible for token brokerage. That may be useful as an optional integration, but it should not be the default baseline architecture unless KAOS intentionally chooses Keycloak as its central authorization platform.
+This option is therefore a different product boundary. It may be useful as an optional future enterprise integration, but it should not be the default architecture unless KAOS intentionally chooses Keycloak as its central authorization platform through an adapter.
 
 Pros:
 
@@ -443,24 +451,24 @@ Cons:
 
 Best fit:
 
-- Optional enterprise integration, not the baseline default.
+- Optional future enterprise integration.
 - Deployments that explicitly want Keycloak as the central PDP/PAP.
 
-### Option E: Hybrid grant tables plus optional external PDP hooks
+### Option E: Grant tables plus optional external PDP compatibility
 
-This option chooses Option A for the baseline profile but designs the data and request context so that OPA or Keycloak can be enabled as optional advanced integrations without rewriting the whole security model.
+This option chooses Option A but shapes the data and request context so that OPA or Keycloak can be integrated later without rewriting the grant model.
 
-In this model, the baseline decision remains:
+In this model, the default decision remains:
 
 ```text
 allow if requested edge exists and approved AIB grant exists
 ```
 
-But the authorization input is shaped in a profile-compatible way:
+The authorization input is shaped in a backend-neutral way:
 
 ```text
 principal
-agent identity
+actor identity
 target identity
 action
 requested edge metadata
@@ -469,7 +477,7 @@ user delegated grant metadata, if relevant
 runtime/request context
 ```
 
-In an advanced profile, an external PDP could evaluate that same input:
+A future external PDP could evaluate that same input:
 
 ```text
 allow if:
@@ -485,38 +493,41 @@ allow if:
   and Keycloak AuthZ allows the request
 ```
 
-This is not a separate enforcement model for the baseline profile. It is a compatibility stance: keep the baseline simple, but avoid designing grants and request context in a way that blocks optional OPA/Keycloak integration.
+This is not a separate enforcement model. It is a compatibility stance: keep the default simple, but avoid designing grants and request context in a way that blocks optional OPA/Keycloak integration.
 
 Pros:
 
 - Preserves the simplicity of Option A.
 - Keeps a migration path to OPA/Rego or Keycloak AuthZ.
-- Aligns SDK and Gateway input models with optional policy engines.
+- Aligns gateway input with optional policy engines.
 - Avoids premature commitment to a specific external PDP.
 
 Cons:
 
 - Requires discipline not to overbuild hooks before they are needed.
-- The baseline implementation must define stable authorization input shapes.
-- Some advanced PDP-specific features may still require schema changes.
+- The implementation must define stable authorization input shapes.
+- Some PDP-specific features may still require schema changes.
 
 Best fit:
 
-- Advanced refinement after the Option A baseline is proven. This should not be selected as the baseline recommendation if it causes the SDK/API boundary to become broader than the current grant checks require.
+- Future refinement after Option A is proven.
+- Backend-neutral `ext_authz` inputs using `kaos.resource` and `kaos.action`.
 
 ---
 
 ## Decision summary
 
-1. KAOS baseline authorization is data-first and grant-table-based.
+1. KAOS authorization is data-first and grant-table-based by default.
 2. KAOS CRD references define requested access edges only.
 3. AIB owns approved KAOS resource grants.
 4. AIB owns user-delegated third-party grants through UserGrants and PermissionSets.
-5. Admin/platform grants and user-delegated grants are both required when both apply.
-6. AIB CEL remains internal bounded expression support, not the primary policy authoring language.
-7. OPA/Rego is an optional advanced policy integration.
-8. Keycloak Authorization Services is an optional advanced integration; Keycloak/Dex/OIDC remains human identity/SSO in the baseline profile.
-9. ModelAPI internal model/budget/rate authorization remains LiteLLM-owned.
-10. MCP tool/argument-level policy remains optional until KAOS models tool permissions explicitly.
-11. Autonomous run-scoped grants belong to the approval/consent execution model.
-12. Optional external PDP compatibility must not broaden the baseline SDK/API surface beyond what direct grant checks require.
+5. Runtime KAOS resource authorization is enforced at the gateway through `ext_authz`, not in the SDK.
+6. AIB evaluates whether an approved grant exists for actor -> target/action; the actor is the calling agent's own AIB-issued identity.
+7. The user principal is used for user-delegated third-party grants and autonomous runs are actor-only.
+8. Gateway authorization input uses neutral `kaos.resource` and `kaos.action` context extensions.
+9. AIB CEL remains internal bounded expression support, not the primary policy authoring language.
+10. OPA/Rego is an optional future enterprise PDP; OPA can be a drop-in `ext_authz` backend via opa-envoy.
+11. Keycloak Authorization Services is an optional future enterprise integration; Keycloak/Dex/OIDC remains human identity/SSO by default.
+12. ModelAPI internal model/budget/rate authorization remains LiteLLM-owned.
+13. MCP tool/argument-level policy remains optional until KAOS models tool permissions explicitly.
+14. Optional external PDP compatibility must not broaden the per-resource configuration surface beyond `spec.security.id`.

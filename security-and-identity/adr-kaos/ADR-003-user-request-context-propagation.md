@@ -6,9 +6,38 @@
 
 ## Decision
 
-Introduce an application-level **request security context** and propagation SDK as the first identity/security implementation layer.
+Introduce an application-level **request security context** and a **propagation-only SDK**. The SDK carries verified identity/context across hops so the gateway can enforce end-to-end (ADR-011); it does **not** authenticate users and does **not** make authorization decisions — enforcement is gateway-centric.
 
-The SDK should be separable from KAOS where possible, so it can be contributed upstream or reused by non-KAOS agentic runtimes. KAOS-specific code should mostly be adapters for KAOS identity formats, CRD-derived configuration, and AIB resource naming.
+The SDK should be separable from KAOS where possible, so it can be contributed upstream or reused by non-KAOS agentic runtimes. KAOS-specific code should mostly be adapters for KAOS identity formats, CRD-derived configuration, and AIB resource naming. The concrete SDK API is specified in [ADR-009](../adr-aib/ADR-009-aib-python-sdk-design.md).
+
+### Two propagated identities
+
+A protected call carries two distinct identities, which the SDK keeps separate and forwards on outbound calls so the gateway can validate both:
+
+- **User principal (subject)** — the inbound Keycloak/OIDC user token (`Authorization: Bearer`), propagated unchanged on outbound calls.
+- **Calling agent (actor)** — the workload's own AIB-issued machine token (`x-agent-authorization: Bearer`), attached by the SDK from the agent's credential.
+
+The actor is the calling agent's own identity, never the user token's `azp`. This is what makes multi-agent delegation correct (ADR-004): when Agent B calls a resource, the gateway sees actor = B.
+
+### Concrete SDK functions
+
+Propagation mirrors OpenTelemetry ergonomics — instrument once, propagate automatically:
+
+```python
+import aib
+
+aib.ctx                       # request-local context (ContextVar-backed dict)
+
+aib.instrument_fastapi(app)   # extract verified identity at the server boundary
+aib.instrument_httpx()        # inject subject + actor on outbound calls
+aib.instrument_requests()
+aib.instrument_fastmcp(mcp)
+aib.instrument_asgi(app)
+
+aib.ctx.to_headers()          # manual escape hatch for non-instrumented transports
+```
+
+The instrumented HTTP clients attach the agent actor token and forward the user subject token transparently (including the machine-token refresh/retry described in ADR-009), so application code does not hand-pass auth pieces.
 
 ### RequestSecurityContext
 
@@ -46,12 +75,11 @@ This context should be attached to `AgentDeps` or an equivalent per-run dependen
 
 The SDK owns:
 
-1. Parsing trusted inbound identity/context headers or tokens into `RequestSecurityContext`.
+1. Parsing trusted inbound identity/context (forwarded by the gateway) into `RequestSecurityContext`.
 2. Normalizing header names and claim names used between Agent, A2A, MCPServer, and ModelAPI calls.
-3. Propagating non-secret context across A2A delegation.
-4. Propagating request context to MCP calls when the MCP runtime supports it.
-5. Making context available to later AIB SDK calls for grant checks, token exchange, user-grant-required handling, and third-party re-auth-required handling.
-6. Persisting non-secret context metadata for audit/correlation.
+3. Propagating the user subject token and attaching the agent actor token on outbound A2A/MCP/ModelAPI calls.
+4. Managing the agent machine-token lifecycle (acquire/cache/refresh; see ADR-009).
+5. Persisting non-secret context metadata for audit/correlation.
 
 The SDK must not persist raw bearer tokens in memory events or durable task metadata.
 
@@ -138,7 +166,7 @@ Capture principal/session context but do not propagate or enforce it.
 - Keeps the first implementation focused on code paths KAOS owns directly.
 - Provides the semantic context that Gateway or sidecars cannot infer.
 - Establishes a reusable SDK boundary that can be contributed upstream and used outside KAOS.
-- Allows Agent and MCPServer security to evolve without mandating Gateway or sidecars in the baseline profile.
+- Keeps the SDK focused on propagation, with enforcement owned by the gateway.
 - Provides the foundation for AIB grant checks, token exchange, user-grant-required responses, third-party re-auth-required responses, and audit metadata.
 
 ### Negative
@@ -152,7 +180,7 @@ Capture principal/session context but do not propagate or enforce it.
 
 - Raw tokens could leak into logs or memory if the SDK boundary is not strict. Mitigation: persist non-secret metadata only and provide explicit redaction helpers.
 - Context propagation could diverge between Agent, A2A, MCP, and ModelAPI if header/claim conventions are not centralized.
-- Treating Gateway as optional by default means resource-boundary enforcement is weaker unless the Gateway profile is enabled.
+- Without the gateway (the development state) there is no resource-boundary enforcement; the secured target requires it.
 
 ---
 
@@ -167,4 +195,4 @@ Capture principal/session context but do not propagate or enforce it.
    - AIB client hooks.
 2. Define which fields are safe to persist.
 3. Define token redaction and logging rules.
-4. Use ADR-006's fail-with-URL-and-retry behavior for consent and re-authentication in the baseline profile, while leaving durable pause/resume to optional task approval work.
+4. Use ADR-006's fail-with-URL-and-retry behavior for consent and re-authentication, while leaving durable pause/resume to future task approval work.

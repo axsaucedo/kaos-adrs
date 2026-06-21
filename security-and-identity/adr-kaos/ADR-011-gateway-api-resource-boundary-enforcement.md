@@ -7,55 +7,64 @@
 
 ## Decision
 
-Define a Gateway API resource-boundary mode for KAOS where internal Agent-to-Agent, Agent-to-MCPServer, and Agent-to-ModelAPI traffic can be routed through Gateway routes instead of direct ClusterIP service URLs.
-
-In this mode, Gateway becomes the default resource access path for protected KAOS resources:
+The Envoy-compatible **Gateway is the enforcement plane** for KAOS security. When security is enabled, all Agent-to-Agent, Agent-to-MCPServer, Agent-to-ModelAPI, and external traffic to protected resources is routed through Gateway routes instead of direct ClusterIP URLs, and the Gateway enforces authentication, authorization, and token exchange:
 
 ```text
-Agent -> Gateway route -> MCPServer
-Agent -> Gateway route -> ModelAPI
-Agent -> Gateway route -> Agent
-External client -> Gateway route -> Agent/MCPServer/ModelAPI
+Agent / external client
+  -> Gateway route
+     -> jwt_authn   (validate identities)
+     -> ext_authz   (AIB allow/deny resource decision)
+     -> ext_proc    (AIB token exchange, when a third-party token is required)
+  -> protected MCPServer / ModelAPI / Agent
 ```
 
-Direct ClusterIP Services remain necessary for Kubernetes mechanics such as service discovery, backend selection, and health checks, but they should not remain open as the normal application-level access path for protected resource calls. In strict Gateway mode, KAOS should pair Gateway routing with NetworkPolicy so:
+Resource-to-resource authorization happens **only at the Gateway**, not in Python/SDK code. The SDK is propagation-only: it carries the verified identities across hops so the Gateway can enforce end-to-end. There is no partial SDK-enforced mode; security enabled is binary and **requires both the Gateway and NetworkPolicy** (below). mTLS/SPIFFE/service-mesh workload binding is future hardening.
+
+### Two-identity authentication
+
+Each protected request carries two identities, validated by Envoy `jwt_authn` with two providers:
+
+| Identity | Header | Issuer | Validated against |
+|---|---|---|---|
+| User principal (subject) | `Authorization: Bearer` | Keycloak/OIDC | `userAuth.issuer` |
+| Calling agent (actor) | `x-agent-authorization: Bearer` | AIB | `agentAuth.issuer` |
+
+`ext_authz` then decides **actor (calling agent) -> resource**, using the user principal for user-delegated third-party grants. The decision keys on the calling agent's own AIB-issued identity, **never on `subject_token.azp`**, which is what makes multi-agent delegation correct (see ADR-004). Autonomous runs have no user subject (actor-only). The SDK sets `x-agent-authorization` from the agent's AIB machine token and forwards the inbound user `Authorization`.
+
+### NetworkPolicy is required, not optional
+
+Direct ClusterIP Services remain for Kubernetes mechanics (service discovery, backend selection, health checks), but they must not be the application-level access path. Because enforcement lives only at the Gateway, security-enabled deployments **must** pair Gateway routing with NetworkPolicy so:
 
 - Gateway-to-backend application traffic is allowed,
-- required platform traffic such as kubelet probes, DNS, operator access, Gateway, and AIB is allowed,
+- required platform traffic (kubelet probes, DNS, operator, Gateway, AIB) is allowed,
 - direct workload-to-workload application traffic to protected ClusterIP Services is denied where the CNI supports it.
 
-Health endpoints must not become a general bypass path. If the cluster/CNI can distinguish probe or platform traffic, health-check access should be narrowed to those actors; otherwise the policy must document the remaining limitation.
+Without NetworkPolicy the Gateway can be bypassed via ClusterIP, so it is part of the required secured target, not an add-on. Health endpoints must not become a general bypass path; narrow probe/platform access where the CNI allows it, otherwise document the limitation.
 
-Gateway enforcement is a resource-boundary layer. With the AIB access-check API accepted in [ADR-012](../adr-aib/ADR-012-aib-access-check-api.md), it can host the equivalent of `require_access` for coarse resource-level checks such as:
+### Authorization scope
 
-```text
-principal/subject + calling actor -> target KAOS resource
-```
+The Gateway enforces coarse resource-boundary `require_access` (can this user, through this agent, reach this Agent/MCPServer/ModelAPI), via the AIB access-check API ([ADR-012](../adr-aib/ADR-012-aib-access-check-api.md)). It does not replace runtime/SDK semantics for MCP tool-level and argument-level authorization, agent run/session state, or multi-step re-authentication retry — those remain deferred or runtime concerns.
 
-That means Gateway can reject requests before they reach the target workload when the caller is not allowed to access the Agent, MCPServer, or ModelAPI route. It should also enforce bearer-token presence, token exchange, normalized context headers, and bypass prevention. It should not replace SDK/runtime semantic checks for:
+### Backend-neutral authorization (AIB default, OPA drop-in)
 
-- MCP tool-level authorization,
-- MCP argument-level authorization,
-- agent run/session semantics,
-- A2A delegation semantics,
-- re-authentication retry handling in application flows.
+The authorization integration is deliberately backend-neutral. It uses the **standard Envoy `ext_authz` gRPC contract** (`envoy.service.auth.v3.Authorization/Check`) and **neutral `kaos.resource` / `kaos.action` context_extensions**, so the decision backend is swappable with **no KAOS or Envoy configuration change**: AIB is the default, and OPA is a drop-in via the opa-envoy plugin (the backend must be fed equivalent policy/data). Keycloak remains swappable as the **IdP** (authn), not as the authz backend — Keycloak Authorization Services would need an adapter since it is not an `ext_authz` server.
 
-AIB ExtProc can be used as one Gateway integration mode because the current AIB code implements Envoy's External Processing API and performs header-phase token exchange. However, ExtProc and external authorization are different Envoy extension points:
+### ExtProc vs ExtAuthz
+
+ExtProc and external authorization are different Envoy extension points; AIB serves both:
 
 | Envoy integration | Formal API | KAOS/AIB role |
 |---|---|---|
-| `ext_proc` / External Processing | `envoy.service.ext_proc.v3.ExternalProcessor/Process` | Existing AIB token exchange and header mutation |
-| `ext_authz` / External Authorization | `envoy.service.auth.v3.Authorization/Check` | Target AIB Gateway allow/deny access check |
+| `ext_authz` / External Authorization | `envoy.service.auth.v3.Authorization/Check` | AIB allow/deny resource decision (primary authorization) |
+| `ext_proc` / External Processing | `envoy.service.ext_proc.v3.ExternalProcessor/Process` | AIB token exchange / `Authorization` replacement for third-party calls |
 
-The current AIB ExtProc is resource/header-oriented, not KAOS-resource-aware or MCP-tool-aware. KAOS must configure resource URIs, routing, and header conventions explicitly rather than assuming ExtProc understands KAOS CRDs.
-
-Pure Gateway + AIB enforcement is possible only for coarse resource-level `require_access` semantics, and only if the Gateway integration has an auth-required policy plus an AIB decision path that fails closed for denied resource access. Current AIB ExtProc is useful for token exchange but is not by itself a complete `require_access` implementation because no-Bearer requests pass through and current AIB does not yet expose the ADR-012 access-check API or first-class KAOS platform/resource grants.
+`ext_authz` is the authorization contract; `ext_proc` token exchange is applied when a protected call needs a delegated third-party token.
 
 ---
 
 ## Context
 
-[ADR-002](./ADR-002-enforcement-topology.md) accepts SDK-native security as the baseline profile and Gateway API resource-boundary enforcement as a complementary profile.
+[ADR-002](./ADR-002-enforcement-topology.md) establishes gateway-centric enforcement, with the SDK as a propagation-only layer.
 
 [ADR-003](./ADR-003-user-request-context-propagation.md) defines propagated context headers such as:
 
@@ -70,9 +79,9 @@ x-aib-scopes
 authorization
 ```
 
-[ADR-007](./ADR-007-transport-security-and-hardening-baseline.md) places Gateway + NetworkPolicy boundary hardening in the Gateway resource-boundary profile rather than the minimal transport baseline.
+[ADR-007](./ADR-007-transport-security-and-hardening-baseline.md) makes Gateway + NetworkPolicy boundary hardening a required part of security-enabled deployments, on top of the external TLS baseline.
 
-This ADR defines the scope of that Gateway resource-boundary profile and the integration modes KAOS must consider.
+This ADR defines the gateway enforcement model and the operator changes it requires.
 
 ---
 
@@ -243,11 +252,12 @@ spec:
           port: 9002
     headersToExtAuth:
       - authorization
+      - x-agent-authorization
       - x-request-id
     contextExtensions:
-      - name: aib.resource
+      - name: kaos.resource
         value: kaos://mcpserver/default/github
-      - name: aib.action
+      - name: kaos.action
         value: access
     failOpen: false
     timeout: 500ms
@@ -258,170 +268,47 @@ Mapping to AIB:
 
 | AIB access-check input | Gateway source |
 |---|---|
-| user subject token | `authorization` header forwarded to `ext_authz` |
-| user principal | extracted by AIB after JWT validation |
-| actor/agent | extracted by AIB from token claims or a trusted Gateway-provided context value |
-| resource | `contextExtensions["aib.resource"]`, generated by KAOS from the target route/backend |
-| action | `contextExtensions["aib.action"]`, usually `access` |
+| calling agent (actor) | `x-agent-authorization` agent token (AIB-issued); the decision keys on this |
+| user principal (subject) | `authorization` header; used for user-delegated third-party grants |
+| resource | `contextExtensions["kaos.resource"]`, generated by KAOS from the target route/backend |
+| action | `contextExtensions["kaos.action"]`, usually `access` |
 | request ID | `x-request-id` |
 
-The user-token verification remains AIB's responsibility. AIB should validate the inbound subject token against the configured upstream OIDC/OAuth2 provider, including JWKS signature verification, issuer, audience, expiration, and CEL-based principal/actor extraction. Keycloak, Dex, or another provider issues the token; AIB verifies and authorizes it.
+Envoy `jwt_authn` validates **both** tokens before `ext_authz`: the user subject token against `userAuth.issuer` (Keycloak) and the agent actor token against `agentAuth.issuer` (AIB). `ext_authz` then decides **actor -> resource**, using the subject only for user-delegated grants. The actor is the calling agent's own AIB identity, never `subject_token.azp`. Autonomous calls have no subject (actor-only).
 
 ---
 
-## Gateway integration modes
+## Enforcement flow
 
-### Mode 0: SDK-only direct service mode
+There is one enforcement model, not a ladder of profiles. Two deployment states exist:
 
-SDK-native baseline profile:
+**Development (no gateway):** the SDK propagates context but nothing is enforced. Suitable for local
+development only; direct ClusterIP access is open and there is no authorization.
+
+**Secured (gateway enabled):** the required target. Operator-injected runtime URLs use Gateway routes,
+NetworkPolicy restricts direct ClusterIP bypass, and every protected request flows through the inline
+gateway pipeline:
 
 ```text
-Agent -> direct ClusterIP -> MCPServer/ModelAPI/Agent
-SDK/native runtime performs context propagation and AIB calls
+caller request
+  ( Authorization: Bearer <user subject, Keycloak>  +  x-agent-authorization: Bearer <agent actor, AIB> )
+    -> jwt_authn   validate subject (userAuth.issuer) and actor (agentAuth.issuer)
+    -> ext_authz   AIB decides actor (calling agent) -> target resource; user principal for delegated grants
+    -> ext_proc    AIB token exchange when a delegated third-party token is required
+  -> protected MCPServer / ModelAPI / Agent
 ```
 
 Properties:
 
-- Simple.
-- Works without Gateway or NetworkPolicy.
-- Does not prevent direct ClusterIP bypass.
-- Required for local/dev and the baseline profile.
-
-### Mode 1: Gateway routing only
-
-KAOS injects Gateway URLs instead of ClusterIP URLs:
-
-```text
-Agent -> Gateway HTTPRoute -> MCPServer/ModelAPI/Agent
-```
-
-Gateway handles:
-
-- routing,
-- path prefix,
-- URL rewrite,
-- timeouts,
-- optional request-header mutation where portable.
-
-Properties:
-
-- Establishes the Gateway as the normal access path.
-- Does not by itself authenticate, authorize, exchange tokens, or block direct ClusterIP bypass.
-- Useful migration step before stricter enforcement.
-
-### Mode 2: Gateway routing plus normalized headers
-
-Gateway validates or trusts an upstream authentication boundary, then injects normalized context headers:
-
-```text
-x-request-id
-x-principal
-x-actor
-authorization
-```
-
-Optionally, AIB/SDK-aware components propagate:
-
-```text
-x-aib-context-id
-x-aib-session-id
-x-aib-delegation-chain
-x-aib-scopes
-```
-
-Properties:
-
-- Gives SDK/native runtimes a consistent inbound context.
-- Header trust must be boundary-scoped: workloads must not trust arbitrary client-supplied identity headers unless Gateway or another trusted boundary overwrote them.
-- Portable Gateway API may support basic request header modification, but identity extraction/JWT validation remains implementation-specific.
-
-### Mode 3: Gateway routing plus AIB ExtProc token exchange
-
-Envoy-compatible Gateway/agentgateway calls AIB ExtProc before forwarding:
-
-```text
-Agent/client request with subject token
-  -> Gateway ExtProc
-  -> AIB token exchange
-  -> Authorization header replaced with exchanged downstream token
-  -> upstream MCPServer/ModelAPI/Agent
-```
-
-Properties:
-
-- Validated against current AIB code: AIB ExtProc implements Envoy ExtProc and mutates `authorization`.
-- Best fit for resource-level token exchange at the Gateway boundary.
-- Requires a Gateway implementation that supports Envoy ExtProc or compatible policy.
-- Requires an ExtProc Deployment, gRPC service, client credentials, and AIB token endpoint configuration.
-- Requires a separate auth-required policy because current AIB ExtProc passes through requests without Bearer tokens.
-- Still does not provide MCP tool/argument authorization.
-
-### Mode 3b: Gateway routing plus AIB `ext_authz` resource `require_access`
-
-Gateway calls AIB through Envoy External Authorization before forwarding and fails closed unless AIB says the caller may access the target resource.
-
-Conceptually:
-
-```text
-subject token + actor + target resource
-  -> Gateway SecurityPolicy extAuth.grpc
-  -> AIB envoy.service.auth.v3.Authorization/Check
-  -> AIB access decision service
-  -> allow or deny before backend
-```
-
-Properties:
-
-- This is feasible for coarse route/resource authorization.
-- It can remove the need for every application to call `require_access` for simple Agent-to-MCPServer, Agent-to-ModelAPI, or Agent-to-Agent root access checks.
-- It still requires application-level checks for tool names, tool arguments, agent run semantics, and user-facing re-authentication handling.
-- It requires AIB to have first-class platform/resource grant semantics or a clearly documented bootstrap encoding.
-- It requires a new AIB `ext_authz` service or adapter, because current AIB ExtProc is token-exchange-oriented and no-Bearer pass-through is not fail-closed authorization.
-
-### Mode 4: Gateway routing plus NetworkPolicy bypass prevention
-
-KAOS generates NetworkPolicies that allow protected workloads to receive traffic from Gateway and required platform components, while denying direct application traffic from arbitrary Agents or other workloads.
-
-Example target:
-
-```text
-allow Gateway -> MCPServer
-allow Gateway -> ModelAPI
-allow Gateway -> Agent
-allow kubelet/probes as needed
-deny Agent -> MCPServer direct ClusterIP
-deny Agent -> ModelAPI direct ClusterIP
-deny Agent -> Agent direct ClusterIP
-```
-
-Properties:
-
-- This is the Gateway integration mode that materially reduces direct ClusterIP bypass.
-- Depends on CNI NetworkPolicy enforcement.
-- Requires careful labels, namespace selectors, health/probe exceptions, and AIB/Gateway egress rules.
-- Should be opt-in until tested across supported local and production clusters.
-
-### Mode 5: Gateway resource-boundary required mode
-
-The strict target combines:
-
-```text
-Gateway route URLs injected into runtimes
-Gateway auth-required policy
-Gateway/AIB ext_authz resource authorization
-AIB ExtProc token exchange where exchanged downstream tokens are required
-NetworkPolicy direct-bypass restriction
-SDK/native semantic checks inside Agent/MCPServer
-```
-
-Properties:
-
-- Strongest Gateway-based KAOS profile mode.
-- Default application path is Gateway.
-- Direct ClusterIP application calls are blocked where NetworkPolicy supports it.
-- Gateway handles coarse resource boundary; SDK handles semantics.
-
----
+- Gateway is the only enforcement point; the SDK only propagates the two identities so the gateway can
+  decide end-to-end.
+- Resource access keys on the calling agent's own AIB-issued identity (the actor), never on
+  `subject_token.azp` — this is what makes multi-agent delegation correct (ADR-004).
+- NetworkPolicy is required so the gateway cannot be bypassed via ClusterIP.
+- The gateway handles the coarse resource boundary and token exchange; MCP tool/argument semantics and
+  user-facing grant/re-auth flows remain runtime/SDK or deferred concerns.
+- The `ext_authz` backend is swappable (AIB default; OPA drop-in) via the standard contract and neutral
+  `kaos.resource`/`kaos.action` context_extensions.
 
 ## Required KAOS changes
 
@@ -458,7 +345,7 @@ aibExtProc
 networkPolicy
 ```
 
-This should likely be driven by global security profile defaults, with per-resource overrides only when needed.
+This should be driven by global security configuration (ADR-001 keeps per-resource config to `spec.security.id` only).
 
 ### Header conventions
 
@@ -485,63 +372,48 @@ Rules:
 4. Client-supplied identity headers must be stripped or overwritten at Gateway.
 5. Raw bearer tokens must not be logged or stored in durable task state.
 
-### AIB ExtProc configuration
+### Operator-wide security configuration (Helm)
 
-For AIB ExtProc mode, KAOS needs to define:
+Security is configured operator-wide (Helm values rendered into operator config), the same way KAOS wires other platform integrations. Presence of the `security` block implies enabled:
 
-- ExtProc service endpoint.
-- AIB token endpoint.
-- ExtProc client credentials.
-- ext_authz service endpoint.
-- expected subject token type.
-- token-exchange audience and client assertion requirements.
-- resource URI convention.
-- failure behavior.
+```yaml
+security:
+  userAuth:                    # human users — standard OIDC; validated at the gateway (Keycloak default, swappable)
+    issuer:  https://keycloak.<domain>/realms/kaos
+    audience: kaos
+    jwksUri: ""                # optional; discovered from issuer .well-known
+  agentAuth:                   # agent identity + authorization via AIB
+    issuer:  http://aib-enduser.aib-system.svc.cluster.local:8000   # AIB OIDC issuer: mints agent tokens + JWKS
+    extAuthzUrl: aib-ext-authz.aib-system.svc.cluster.local:9002    # envoy ext_authz — access checks (AIB default; OPA drop-in)
+    extProcUrl:  aib-extproc.aib-system.svc.cluster.local:50051     # envoy ext_proc — token exchange
+    credentialSecretPrefix: kaos-aib                                # per-agent credential Secret (operator mounts; sync creates)
+```
 
-The resource URI convention is critical. Current AIB ExtProc sends the HTTP resource URI derived from `:scheme`, `:authority`, and `:path`; KAOS must ensure AIB records use the same URI or contribute/extend mapping to canonical KAOS resource IDs.
+`userAuth` and `agentAuth` become two Envoy `jwt_authn` providers. The AIB admin URL/credentials are not here — they live in the sync-service config ([ADR-010](./ADR-010-aib-integration-and-synchronization-architecture.md)). Per-resource configuration is `spec.security.id` only (ADR-001).
 
-### AIB ext_authz configuration
+The operator generates, per protected route, an Envoy `SecurityPolicy` `extAuth.grpc` pointing at `agentAuth.extAuthzUrl`, with `headersToExtAuth` including `authorization` and `x-agent-authorization`, `contextExtensions` `kaos.resource`/`kaos.action` derived from the target identity, and fail-closed behavior (`failOpen: false`, `statusOnError: 503`). Token exchange uses `agentAuth.extProcUrl` when a protected call needs a delegated third-party token.
 
-For AIB `ext_authz` mode, KAOS needs to define:
+### Agent credential mounting (operator)
 
-- SecurityPolicy targetRefs for generated HTTPRoutes.
-- `headersToExtAuth`, at minimum `authorization` and `x-request-id`.
-- `contextExtensions` generated from KAOS identity:
+When security is enabled, the operator mounts each agent's AIB credential Secret (named by `credentialSecretPrefix`, provisioned by the sync service) into the Agent/MCPServer pod. A projected-volume mount is preferred so credential rotation reloads without a restart; Kubernetes keeps the pod `Pending` until the Secret exists, which orders provisioning naturally.
 
-  ```text
-  aib.resource = kaos://<kind>/<namespace>/<name>
-  aib.action   = access
-  ```
+### Token lifecycle and failure modes
 
-- fail-closed behavior:
-
-  ```text
-  failOpen: false
-  statusOnError: 503
-  ```
-
-- AIB-side subject-token validation configuration:
-
-  ```text
-  issuer
-  JWKS URI
-  expected audience
-  principal CEL expression
-  actor/agent CEL expression
-  ```
-
-This makes Gateway authorization independent of token exchange. If token exchange is also needed, it should remain a separate ExtProc mode after or alongside authorization, not the only authorization mechanism.
+- Pods hold long-lived **credentials**, not long-lived tokens. Actor tokens (AIB-issued) are short-lived.
+- The SDK manages the actor token: **refresh-ahead caching** (refresh at a TTL fraction so the request path never refreshes), file-watched credential reload on rotation (AIB rotation has a grace window), a **single reactive retry on 401**, and backoff on AIB unavailability. The instrumented call is the seamless "ensure-fresh + inject + retry" path; no manual check-then-refresh.
+- The gateway pipeline runs inline in one request pass: `jwt_authn -> ext_authz -> ext_proc -> upstream`.
+- **Fail closed** always (auth is critical; there is no fail-open knob): an expired/unrefreshable actor token yields `401`/`403`; an unreachable `ext_authz`/AIB yields `503`. No silent allow.
 
 ### NetworkPolicy generation
 
-For strict Gateway mode, generate policies that:
+NetworkPolicy is part of the required secured target. The operator generates policies that:
 
 - allow Gateway to call protected services,
-- allow required kubelet probes, DNS, operator, Gateway, and AIB traffic as needed,
-- allow workload egress to Gateway and AIB as needed,
+- allow required kubelet probes, DNS, operator, Gateway, and AIB traffic,
+- allow workload egress to Gateway and AIB,
 - deny direct workload-to-protected-service application traffic.
 
-This does not mean keeping all ClusterIP traffic open. The intended target is that ClusterIP Services still exist, but protected application traffic is only generally reachable through Gateway. This should be opt-in and clearly documented because it depends on CNI support and can break deployments if selectors are wrong.
+ClusterIP Services still exist for Kubernetes mechanics, but protected application traffic is only reachable through the Gateway. Effectiveness depends on CNI NetworkPolicy support, which must be validated per cluster.
 
 ---
 
@@ -549,45 +421,45 @@ This does not mean keeping all ClusterIP traffic open. The intended target is th
 
 ### Option A: Keep ClusterIP direct access as the only internal mode
 
-Rejected for the Gateway resource-boundary profile.
+Rejected as the secured target.
 
-This keeps the system simple, but it cannot provide a strong resource boundary or bypass prevention. It remains the SDK-native baseline profile and local/dev mode.
+This keeps the system simple, but it cannot provide a strong resource boundary or bypass prevention. It remains the development state (no gateway) only.
 
 ### Option B: Gateway routing without NetworkPolicy
 
-Accepted only as an intermediate mode.
+Not a security mode.
 
-It moves runtime traffic through Gateway but does not prevent direct ClusterIP bypass. It is useful for migration and observability, but it should not be described as strict enforcement.
+It moves runtime traffic through Gateway but does not prevent direct ClusterIP bypass, so it does not satisfy security-enabled. It is only a non-secured migration/observability step; the secured target requires NetworkPolicy.
 
 ### Option C: Gateway plus AIB ExtProc as the only enforcement
 
 Rejected as complete enforcement.
 
-AIB ExtProc can exchange tokens and mutate `Authorization`, but current code passes through requests without Bearer tokens and does not inspect MCP body/tool semantics. It must be combined with auth-required policy and SDK/runtime checks.
+AIB ExtProc exchanges tokens and mutates `Authorization`, but it is not an authorization decision point. Authorization is the `ext_authz` path; ExtProc complements it for token exchange.
 
 ### Option C1: Gateway plus AIB ext_authz for coarse resource authorization
 
 Accepted as the target Gateway authorization integration.
 
-Envoy `ext_authz` is the right native contract for route-level allow/deny. AIB should expose an `envoy.service.auth.v3.Authorization/Check` implementation or adapter that calls the ADR-012 access decision service. Existing AIB ExtProc remains useful for token exchange/header mutation, but it should not be overloaded as the primary authorization contract.
+Envoy `ext_authz` is the right native contract for route-level allow/deny. AIB exposes an `envoy.service.auth.v3.Authorization/Check` implementation (ADR-012). Existing AIB ExtProc remains useful for token exchange, but it is not the authorization contract.
 
 ### Option C2: Gateway-level `require_access` for all authorization
 
-Rejected as complete enforcement.
+Accepted for resource-boundary authorization; tool/argument/workflow semantics are out of scope.
 
-Gateway-level `require_access` is appropriate for coarse route/resource access, but Gateway does not understand every application semantic. It cannot decide MCP tool arguments, agent run/session state, or multi-step re-authentication retry behavior without pushing application semantics into the Gateway layer.
+Gateway `ext_authz` decides route/resource access. It cannot decide MCP tool arguments, agent run/session state, or multi-step re-authentication retry — those are not part of the resource-boundary enforcement model and remain future or runtime-specific concerns, not application enforcement that KAOS mandates.
 
-### Option D: Gateway plus NetworkPolicy plus SDK checks
+### Option D: Gateway plus NetworkPolicy (the secured target)
 
-Accepted as the target Gateway resource-boundary architecture.
+Accepted.
 
-Gateway handles coarse resource boundary, token exchange, and route-level `require_access` where AIB supports it. NetworkPolicy reduces direct bypass. SDK/runtime handles semantic checks and user-facing grant/re-auth flows.
+The gateway handles authentication, resource-boundary authorization, and token exchange; NetworkPolicy prevents direct ClusterIP bypass. The SDK only propagates identities. Tool/argument semantics, if ever needed, are future controls, not part of this enforcement model.
 
 ### Option E: Sidecar instead of Gateway
 
 Deferred.
 
-Sidecars can help for local egress token injection or runtimes that cannot route through Gateway, but they add pod complexity and are not required for the Gateway resource-boundary target.
+Sidecars can help for local egress token injection or runtimes that cannot route through Gateway, but they add pod complexity and are not required for the gateway enforcement target.
 
 ---
 
@@ -595,43 +467,37 @@ Sidecars can help for local egress token injection or runtimes that cannot route
 
 ### Positive
 
-- Shows how the Gateway resource-boundary profile layers on SDK-native enforcement.
-- Makes Gateway the default application access path for protected resources when enabled.
-- Reduces direct ClusterIP bypass when paired with NetworkPolicy.
-- Allows Envoy `ext_authz` to provide fail-closed AIB route authorization where Envoy-compatible Gateway support exists.
-- Allows AIB ExtProc to remain available for token exchange/header mutation where needed.
-- Keeps SDK/runtime semantic enforcement in place instead of overloading Gateway.
-- Makes integration modes explicit and testable.
+- Makes the gateway the single enforcement plane for protected resources.
+- Makes the Gateway the application access path for protected resources when security is enabled.
+- Prevents direct ClusterIP bypass through required NetworkPolicy.
+- Covers all runtimes (including ModelAPI and non-Python servers) uniformly, with no per-runtime security code.
+- Keeps the SDK to propagation only, avoiding per-language enforcement duplication.
 
 ### Negative
 
-- Requires operator changes to inject Gateway URLs instead of ClusterIP URLs.
-- Requires Gateway implementation-specific policy resources for JWT validation, external auth, ExtProc, or advanced header mutation.
+- Requires operator changes to inject Gateway URLs instead of ClusterIP URLs and to mount agent credentials.
+- Requires Gateway implementation-specific policy resources for `jwt_authn`, `ext_authz`, and `ext_proc`.
 - Requires NetworkPolicy generation and CNI-dependent validation.
-- Requires careful resource URI alignment between Gateway routes and AIB records.
-- Adds another deployment component if AIB ExtProc is used.
+- Requires a resource-naming convention shared between Gateway routes and AIB records.
+- Adds the AIB `ext_authz`/`ext_proc` deployment as a dependency of the secured target.
 
 ### Risks
 
-- If Gateway mode is enabled without NetworkPolicy, users may overestimate bypass protection.
-- If ExtProc is used without ext_authz or another auth-required policy, no-Bearer requests may pass through unchanged.
-- If Gateway-injected identity headers are not stripped/overwritten, clients may spoof `x-principal` or `x-actor`.
-- If URL rewrite changes the URI that ExtProc sees, AIB `resource` mapping may not match expected records.
+- If NetworkPolicy is absent or the CNI does not enforce it, the Gateway can be bypassed via ClusterIP; security-enabled therefore requires it.
+- If Gateway-injected identity headers are not stripped/overwritten, clients may spoof identity headers; the gateway must own `Authorization`/`x-agent-authorization`.
+- If URL rewrite changes the URI the gateway derives, the `kaos.resource` value may not match AIB records.
 - If NetworkPolicy selectors are wrong, workloads may lose access to required Gateway, AIB, DNS, or health probe traffic.
-- If gateway-level `require_access` is presented as complete authorization, users may skip SDK/runtime checks that are still required for tool, argument, and workflow semantics.
 
 ---
 
 ## Decision summary
 
-1. Define a Gateway API resource-boundary profile as a complementary layer on top of SDK-native baseline security.
-2. In this mode, protected runtime URLs should use Gateway routes by default instead of direct ClusterIP service URLs.
-3. Gateway routing alone is not strict enforcement; strict mode requires NetworkPolicy bypass prevention where supported.
-4. Gateway should enforce coarse resource boundary, route-level `require_access` where AIB supports it, auth-required policy, token exchange, normalized headers, and audit at the request boundary.
-5. SDK/native runtime code remains responsible for semantic Agent/MCP/ModelAPI behavior and user-facing grant/re-auth handling.
-6. AIB ExtProc is a valid Envoy-compatible integration mode for token exchange and `Authorization` header replacement.
-7. Current AIB ExtProc does not inject KAOS/AIB context headers and does not inspect MCP tool bodies; those remain SDK/runtime responsibilities unless ExtProc is extended.
-8. KAOS must define a resource URI convention that matches what AIB ExtProc sends in token-exchange `resource`.
-9. KAOS must not present Gateway mode as bypass-safe unless NetworkPolicy is enabled and validated.
-10. ClusterIP Services should remain for Kubernetes mechanics, but strict Gateway mode should deny direct workload-to-workload application traffic to protected resources where supported.
-11. Sidecars remain deferred unless a specific non-Gateway or egress-token-injection requirement appears.
+1. The Envoy gateway is the enforcement plane for KAOS security; resource-to-resource authorization happens only at the gateway.
+2. When security is enabled, protected runtime URLs use Gateway routes instead of direct ClusterIP URLs.
+3. Security is binary: it requires both the Gateway and NetworkPolicy (gateway routing without NetworkPolicy is not a security mode).
+4. The gateway enforces resource-boundary `require_access` via AIB `ext_authz`, plus `jwt_authn` (two providers) and `ext_proc` token exchange.
+5. Decisions key on the calling agent's AIB-issued identity (the actor), never `subject_token.azp`; the user subject is used for user-delegated grants.
+6. The SDK is propagation-only; tool/argument/workflow semantics are future or runtime-specific controls, not part of this enforcement model.
+7. The `ext_authz` backend is swappable (AIB default, OPA drop-in) over the standard contract with neutral `kaos.resource`/`kaos.action`.
+8. KAOS defines a resource-naming convention shared between Gateway routes and AIB records.
+9. mTLS/SPIFFE/service-mesh workload binding and sidecars are deferred future hardening.

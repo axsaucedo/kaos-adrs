@@ -524,6 +524,37 @@ AIB_API_KEY
 
 If `base_url` is not passed, the client should read `AIB_BASE_URL`. If an API key or workload credential is not passed, the client should read the configured env var. The SDK should not prescribe the final AIB server authentication mechanism; it should support the current AIB deployment while leaving room for workload identity later.
 
+### Machine identity and actor-token lifecycle
+
+In the gateway-centric KAOS deployment the agent does not call AIB for access decisions — the gateway does. The SDK's primary server-side job is therefore to give the agent its **own machine identity** (the actor) and attach it to outbound calls, so the gateway can validate actor + subject.
+
+The SDK manages the agent's AIB-issued **actor token** transparently:
+
+```python
+import aib
+
+# Credentials come from the mounted Secret (provisioned by the sync service, mounted by the operator).
+aib.instrument_agent_identity(
+    issuer_env="AIB_ISSUER",                 # AIB OIDC issuer (mints agent tokens; exposes JWKS)
+    client_id_env="AIB_CLIENT_ID",
+    client_secret_file="/var/run/aib/client_secret",   # projected file; watched for rotation
+)
+
+token = aib.actor_token()                    # cached, always-fresh AIB actor token (sub/azp = this agent)
+```
+
+Lifecycle requirements:
+
+- **Acquire** the actor token via the `client_credentials` grant against AIB's `/oauth2/token` (default client auth `client_secret`; `private_key_jwt` supported for stronger deployments).
+- **Refresh-ahead caching**: refresh at a TTL fraction (e.g. ~75–80%) so the request path never blocks on a refresh.
+- **Credential reload**: watch the mounted secret file and reload on rotation without a restart, honoring AIB's previous-secret grace window.
+- **Reactive retry**: on a `401` from the gateway, refresh once and retry the call a single time.
+- **Backoff** on AIB unavailability; fail closed (surface an auth error) rather than proceeding unauthenticated.
+
+The httpx/requests/MCP instrumentation injects this actor token as `x-agent-authorization` and forwards the inbound user subject `Authorization` automatically. The instrumented call is thus the seamless "ensure-fresh + inject + retry" path — no manual check-then-refresh.
+
+The `check_access`/`require_access`/`get_token`/`exchange_token` methods below remain available but are **optional**, for custom servers run off-gateway; the standard gateway path performs authorization and token exchange itself.
+
 ### Core request types
 
 The client should accept simple strings and small typed request objects. Plain strings keep the first API ergonomic; request objects allow advanced callers to be explicit.

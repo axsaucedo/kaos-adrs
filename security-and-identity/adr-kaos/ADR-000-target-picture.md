@@ -1,54 +1,54 @@
 # ADR-000: Security and identity target picture
 
 **Status**: Accepted
-**Date**: 2026-06-20
+**Date**: 2026-06-21
 
 ---
 
 ## Purpose
 
 This ADR is the single, self-contained view of the KAOS security and identity target
-architecture. It can be read independently. It states what the system is, how the pieces
-fit, and who owns what. It deliberately omits source-level investigation, alternatives,
-and decision justification — those live in the per-topic ADRs indexed at the end.
-
-It supersedes the former standalone responsibility-matrix ADR; the matrix now lives here.
+architecture. It can be read independently. It states what the system is, how the pieces fit,
+and who owns what. It omits source-level investigation, alternatives, and decision justification —
+those live in the per-topic ADRs indexed at the end. It supersedes the former standalone
+responsibility-matrix ADR; the matrix now lives here.
 
 ---
 
 ## One-paragraph summary
 
-KAOS keeps Kubernetes as the source of truth for resource existence, topology, and logical
-identity. The Agentic Identity Broker (AIB) is the external authorization and delegated-token
-broker. An external Identity Provider (Keycloak/Dex/OIDC) authenticates humans. Security is
-enforced in layers: an always-present **SDK-native** layer carries request context and asks AIB
-for decisions and tokens; an opt-in **Gateway resource-boundary** layer makes the Gateway the
-default access path and enforces fail-closed authorization, token exchange, and bypass
-prevention; and an optional **transport/workload hardening** layer adds TLS, mTLS, and workload
-identity. Authorization is data-first: KAOS CRD wiring declares *requested* access; AIB stores
-*approved* resource grants and user-delegated third-party grants; nothing is permitted by
-default.
+Kubernetes remains the source of truth for resource existence, topology, and logical identity.
+Enforcement is **gateway-centric**: an Envoy-compatible Gateway authenticates requests, calls the
+Agentic Identity Broker (AIB) for allow/deny resource decisions, and performs token exchange — all
+inline. Every protected request carries **two identities**: a user **principal** (subject) issued by
+Keycloak/OIDC, and the calling agent (**actor**) issued by **AIB**. Resource access is decided on the
+**actor's own AIB identity, never on the user token's `azp`**, which makes multi-agent delegation
+correct. The SDK is **propagation-only** — it carries the two identities across hops and manages the
+agent's machine-token lifecycle, but it does not enforce. Authorization is data-first and
+no-permission-by-default: KAOS CRD wiring declares *requested* access; AIB stores *approved* resource
+grants and user-delegated third-party grants. The authorization integration is backend-neutral
+(AIB default, OPA drop-in) over the standard Envoy `ext_authz` contract.
 
 ---
 
 ## Actors and components
 
-| Component | Role in the target |
+| Component | Role |
 |---|---|
-| KAOS CRDs / operator | Source of truth for Agent, MCPServer, ModelAPI existence, topology, logical identity, requested access edges, runtime wiring. |
-| KAOS / AIB SDK | Application-level request context propagation and AIB client calls inside Agent and MCPServer runtimes. |
-| AIB (external broker) | Approved KAOS resource grants, user-delegated third-party grants, consent, third-party OAuth sessions/token vault, token exchange, and access-check decisions. |
-| External IdP (Keycloak/Dex/OIDC) | Human authentication, user identity, claims/groups. Not replaced by AIB. |
+| KAOS CRDs / operator | Source of truth for Agent/MCPServer/ModelAPI existence, topology, logical identity, requested access edges; mounts AIB agent credentials into pods; generates Gateway routes, `ext_authz`/`ext_proc` policy, and NetworkPolicy. |
+| Gateway (Envoy-compatible) | The enforcement plane: `jwt_authn` (two providers), `ext_authz` → AIB, `ext_proc` → AIB token exchange, fail-closed. |
+| AIB (external broker) | Agent identity issuance (per-agent credentials + AIB-signed actor tokens), approved KAOS resource grants, user-delegated third-party grants, consent, third-party OAuth sessions/token vault, token exchange, and `ext_authz` access decisions. |
+| External IdP (Keycloak/Dex/OIDC) | Human authentication and user identity only. Not replaced by AIB; does not issue agent identities. |
+| KAOS / AIB SDK | Propagation-only: carries subject + actor across hops and manages the agent machine-token lifecycle. Optional access-check/token-exchange helpers for custom off-gateway servers. |
 | LiteLLM | ModelAPI internals: model allowlists, provider credentials, budgets, rate limits. |
-| Gateway API (Envoy-compatible) | Resource-boundary routing, fail-closed `ext_authz` authorization, ExtProc token exchange, header normalization. |
-| NetworkPolicy / CNI | Direct ClusterIP bypass prevention in the Gateway resource-boundary profile. |
-| KAOS–AIB sync service | Lightweight external reconciliation of KAOS resources into AIB records. |
+| NetworkPolicy / CNI | Required bypass-prevention: denies direct ClusterIP workload-to-workload application traffic. |
+| KAOS–AIB sync service | Lightweight external reconciliation of KAOS resources into AIB records; provisions per-agent credentials into Secrets. |
 
 ---
 
 ## Identity model
 
-KAOS resources carry a first-class, user-configurable security identity through
+KAOS resources carry a first-class, user-configurable logical security identity through
 `spec.security.id`, with a Kubernetes namespace/name default:
 
 | Case | Resolved external identity |
@@ -56,79 +56,68 @@ KAOS resources carry a first-class, user-configurable security identity through
 | `spec.security.id` omitted | `kaos://{kind}/{namespace}/{name}` |
 | `spec.security.id` provided | `kaos://{kind}/{id}` |
 
-This identity is what AIB stores as `external_id`. It is stable across delete/recreate so grants
-survive, human-readable, and namespace-independent when an explicit ID is set. Cluster identity,
-Kubernetes ServiceAccount binding, and SPIFFE/SPIRE workload identity are not part of the logical
-identity model; they are options in the advanced/hardened profile. Agent, MCPServer, and ModelAPI
-are all identity-bearing. See [ADR-001](./ADR-001-identity-model-and-source-of-truth.md).
+This identity is what AIB stores as `external_id`; it is stable across delete/recreate so grants
+survive, human-readable, and namespace-independent when set. **`spec.security.id` is the only
+per-resource security field** — authn/authz are operator-wide and identity/credentials are
+auto-provisioned, so a CRD author cannot weaken the enforced posture.
+
+The logical id is an *identifier*. Each identity-bearing **caller** (every Agent, and an MCPServer when
+it calls out) additionally has an **AIB-issued authentication credential**: AIB registers the agent and
+issues per-agent client credentials; the agent runs a `client_credentials` grant against AIB to obtain a
+short-lived, AIB-signed **actor token** (`sub`/`azp` = its logical identity). **Keycloak issues human
+tokens only; AIB issues agent identities.** Client auth defaults to `client_secret` (`private_key_jwt`
+stronger); cryptographic pod binding via mTLS/SPIFFE is future hardening. See
+[ADR-001](./ADR-001-identity-model-and-source-of-truth.md) and [ADR-004](./ADR-004-aib-responsibility-boundary.md).
 
 ---
 
-## Enforcement layers
+## Enforcement model
 
-Security is enforced in three complementary layers. They are not sequential releases; they are
-layers that a deployment combines through a profile.
+Enforcement is gateway-centric. There are two deployment states, plus future hardening — **not** a
+ladder of profiles.
 
-### 1. SDK-native enforcement (always present)
+**Development (no gateway):** the SDK propagates context but nothing is enforced. Local/dev only.
 
-The SDK is the only component with full semantic context: agent run state, session, tool call,
-A2A delegation, and autonomous task correlation. It owns:
+**Secured (gateway enabled):** the required target. Protected runtime URLs use Gateway routes,
+NetworkPolicy restricts ClusterIP bypass, and every request flows through the inline pipeline:
 
-- parsing trusted inbound identity/context into a `RequestSecurityContext`,
-- propagating non-secret context across A2A, MCP, and ModelAPI calls,
-- AIB grant/access checks and token exchange,
-- tool-level and argument-level decisions (where modeled),
-- structured grant/re-authentication handling,
-- audit metadata, without persisting raw bearer tokens.
+```text
+caller request
+  ( Authorization: Bearer <user subject, Keycloak>  +  x-agent-authorization: Bearer <agent actor, AIB> )
+    -> jwt_authn   validate subject (userAuth.issuer) and actor (agentAuth.issuer)
+    -> ext_authz   AIB decides actor (calling agent) -> target resource; user principal for delegated grants
+    -> ext_proc    AIB token exchange when a delegated third-party token is required
+  -> protected MCPServer / ModelAPI / Agent
+```
 
-See [ADR-003](./ADR-003-user-request-context-propagation.md) and the SDK design in
-[ADR-009](../adr-aib/ADR-009-aib-python-sdk-design.md).
+The Gateway is the only enforcement point; the SDK only propagates the two identities. ModelAPI is
+covered uniformly behind the Gateway (no per-runtime auth), with LiteLLM keeping model/budget internals.
+**NetworkPolicy is required** so the Gateway cannot be bypassed via ClusterIP. mTLS/SPIFFE/service mesh
+and pod-level workload binding are **future hardening**. See
+[ADR-002](./ADR-002-enforcement-topology.md), [ADR-007](./ADR-007-transport-security-and-hardening-baseline.md),
+and [ADR-011](./ADR-011-gateway-api-resource-boundary-enforcement.md).
 
-### 2. Gateway resource-boundary enforcement (opt-in profile)
+### Two-identity model and multi-agent delegation
 
-When enabled, the Gateway becomes the default application access path for protected resources,
-and adds guarantees the SDK alone cannot provide:
+The decision keys on the **actor** (the calling agent's own AIB identity), with the user **subject** used
+for user-delegated third-party grants. This resolves the multi-agent delegation gap:
 
-- Gateway routes injected into runtimes instead of direct ClusterIP URLs,
-- Envoy `ext_authz` fail-closed authorization (route/resource-level `require_access`),
-- AIB ExtProc token exchange where exchanged downstream tokens are required,
-- normalized identity headers from a trusted boundary,
-- NetworkPolicy to deny direct workload-to-workload ClusterIP bypass where the CNI supports it,
-- boundary audit and coarse rejection before requests reach pods.
+```text
+user -> Agent A -> Agent B -> MCPServer Y   (A may access MCP X; B may access MCP Y)
 
-Gateway handles the coarse resource boundary; the SDK still handles semantics. See
-[ADR-011](./ADR-011-gateway-api-resource-boundary-enforcement.md).
+Naive bug:  B forwards the user token (azp = A); reading azp attributes B's call to A.
+Resolution: each agent authenticates as itself, so B's call carries actor = B.
+            -> B -> Y allowed only if B is granted Y;  A -> Y denied even though A delegated to B.
+```
 
-### 3. Transport and workload hardening (optional/advanced)
-
-- Baseline: TLS terminated at external ingress/Gateway/load balancer/reverse proxy.
-- Advanced/hardened: native intra-service TLS, in-cluster mTLS, SPIFFE/SPIRE or service-mesh
-  identity, Kubernetes ServiceAccount/workload binding, cert-manager automation.
-
-See [ADR-007](./ADR-007-transport-security-and-hardening-baseline.md).
-
----
-
-## Deployment profiles
-
-A deployment selects a profile rather than a version. Profiles are additive.
-
-| Profile | Enforcement | Transport | Bypass prevention |
-|---|---|---|---|
-| Baseline | SDK-native | External TLS in production | Not enforced (direct ClusterIP allowed) |
-| Gateway resource-boundary | SDK-native + Gateway routing + `ext_authz` + ExtProc | External TLS, optional Gateway TLS | NetworkPolicy where CNI supports it |
-| Advanced/hardened | + workload identity and policy depth | + mTLS/SPIFFE/mesh | NetworkPolicy + mesh identity |
-
-The baseline profile is sufficient for KAOS-owned Python Agents and FastMCP runtimes. The Gateway
-resource-boundary profile is the path to strong, bypass-resistant resource isolation and non-SDK
-runtime coverage. The advanced/hardened profile is for regulated or multi-tenant environments.
+Correct least privilege, no nested-actor chains. Resource-access decisions never read
+`subject_token.azp`. Deep delegation-chain policy is out of scope.
 
 ---
 
 ## Authorization model
 
-Authorization is data-first, not a policy language. There are two distinct grant families, and
-nothing is granted by default.
+Authorization is data-first, not a policy language, and no-permission-by-default. Two grant families:
 
 ```text
 requested edge        (KAOS CRD wiring; a request, not an approval)
@@ -141,43 +130,31 @@ user delegated grant   (AIB; user consents to third-party access by an agent)
   keycloak://kaos/alice -> kaos://agent/researcher -> github-issues-reader
 ```
 
-Runtime decisions:
-
-- Allow a resource call only if a matching **requested edge** and **approved resource grant** exist.
-- Provide a third-party token only if a matching **user delegated grant** and a usable third-party
-  OAuth session also exist.
-
-CRD wiring declares capability, never approval (`declared != granted`). Policy is grant lookup
-plus expiry/status checks. CEL is used only for bounded claim extraction and simple internal
-checks. OPA/Rego and Keycloak Authorization Services are optional future enterprise PDP
-integrations, not part of the default model. See
-[ADR-004](./ADR-004-aib-responsibility-boundary.md) and
-[ADR-005](./ADR-005-authorization-and-policy-model.md).
+The Gateway's `ext_authz` call to AIB allows a resource call only if a matching requested edge and
+approved resource grant exist for the **actor**; a third-party token is provided only if a matching user
+delegated grant and a usable third-party session also exist. CRD wiring declares capability, never
+approval (`declared != granted`). CEL is used only for bounded claim extraction. The authz integration
+is **backend-neutral**: the standard Envoy `ext_authz` contract plus neutral `kaos.resource`/`kaos.action`
+context_extensions, so the backend is swappable with no Envoy/KAOS config change — **AIB default, OPA
+drop-in** (opa-envoy). Keycloak Authorization Services and OPA-as-default remain optional future
+integrations. See [ADR-005](./ADR-005-authorization-and-policy-model.md) and
+[ADR-012](../adr-aib/ADR-012-aib-access-check-api.md).
 
 ---
 
 ## Runtime behavior
 
-### Request context propagation
+**Propagation & token lifecycle.** The SDK carries the user subject token and attaches the agent actor
+token on outbound calls. Pods hold long-lived **credentials**, not long-lived tokens; actor tokens are
+short-lived. The SDK uses refresh-ahead caching, file-watched credential reload on rotation, a single
+reactive retry on 401, and backoff — so the instrumented call is the seamless "ensure-fresh + inject +
+retry" path. The gateway pipeline runs inline in one pass.
 
-Inbound user/principal/scope/subject-token context is captured at the boundary and propagated
-through agent execution, A2A delegation, MCP calls, async tasks, and autonomous runs. Raw tokens
-are never persisted in memory events or durable task state.
+**Fail closed.** Auth is a critical path: an expired/unrefreshable actor token yields 401/403; an
+unreachable `ext_authz`/AIB yields 503. There is no fail-open knob and no silent allow.
 
-### Access checks and token exchange
-
-The SDK (or the Gateway, in the Gateway profile) asks AIB:
-
-- **access check** — may this actor access this resource? (allow/deny only),
-- **token exchange** — return a delegated third-party token for this user/agent/resource.
-
-These are distinct: an access check never performs third-party token exchange and never returns a
-third-party token. See the AIB access-check API in
-[ADR-012](../adr-aib/ADR-012-aib-access-check-api.md).
-
-### Failure and re-authentication outcomes
-
-Outcomes are kept separate and fail closed; synchronous requests never block waiting for a human:
+**Failure / re-authentication outcomes** are surfaced via the gateway path (`ext_authz` denied responses /
+`ext_proc` immediate responses), not application code, and never block synchronously:
 
 | Outcome | Behavior |
 |---|---|
@@ -185,96 +162,110 @@ Outcomes are kept separate and fail closed; synchronous requests never block wai
 | Missing/expired user delegated grant | Fail: `user_grant_required`; user re-grants and retries. |
 | Missing/unusable third-party OAuth session | Fail: `third_party_reauth_required` + re-auth URL; user reconnects and retries. |
 | Autonomous run needs a user action | Record `user_action_required`; stop/skip the protected action. |
-| Runtime human approval / MCP tool-argument approval | Not modeled yet; optional future work. |
+| Runtime/tool-argument approval | Not modeled yet; future. |
 
-See [ADR-006](./ADR-006-re-authentication-execution-model.md).
+See [ADR-003](./ADR-003-user-request-context-propagation.md), [ADR-006](./ADR-006-re-authentication-execution-model.md),
+and [ADR-009](../adr-aib/ADR-009-aib-python-sdk-design.md).
 
 ---
 
 ## Integration and lifecycle
 
-KAOS does not install, upgrade, or lifecycle-manage AIB. AIB is installed externally through its
-own Helm chart or platform path. KAOS provides configuration to use an existing AIB (for example a
-`kaos system install --aib-enabled ...` CLI path that wires operator settings, SDK environment
-variables, and credential references).
+KAOS separates **AIB lifecycle** (AIB and Keycloak are external; KAOS does not own/upgrade them) from
+**AIB integration** (KAOS configures itself to use them). Integration follows the same flow as other
+`kaos system install` integrations (otel, gateway): as a bootstrap convenience the CLI can install the
+Keycloak + AIB Helm charts and wire the operator security config, or point at externally-managed
+instances:
 
-Automatic KAOS→AIB synchronization is a **lightweight external sync service** — not KAOS core and
-not AIB core. It watches KAOS resources, computes desired AIB records using stable `external_id`
-values, calls AIB admin APIs, mirrors requested edges (without auto-approving them), and reports
-drift/status. It may be written in any language with Kubernetes watch support and does not require
-a Kubebuilder operator or new CRDs. See
-[ADR-010](./ADR-010-aib-integration-and-synchronization-architecture.md).
+```text
+kaos system install --aib-enabled --keycloak-enabled        # convenience: install charts + wire config
+kaos system install --aib-enabled --idp-issuer ... --aib-issuer ... --aib-ext-authz-url ... --aib-ext-proc-url ...
+```
+
+Installing the charts is a bootstrap, not KAOS taking ownership. Automatic KAOS→AIB synchronization is a
+**lightweight external sync service** (not KAOS core, not AIB core): it watches KAOS resources and
+projects, at a high level, logical identities (`external_id`), requested access edges (kept distinct from
+approved grants), third-party services and PermissionSets, **per-agent client credentials** (into Secrets,
+which the operator mounts), and drift/status. AIB admin URL/credentials live in the sync-service config.
+See [ADR-010](./ADR-010-aib-integration-and-synchronization-architecture.md).
+
+### Operator-wide configuration (Helm)
+
+```yaml
+security:
+  userAuth:                    # human users — standard OIDC; validated at the gateway (Keycloak default, swappable)
+    issuer:  https://keycloak.<domain>/realms/kaos
+    audience: kaos
+    jwksUri: ""                # optional; discovered from issuer .well-known
+  agentAuth:                   # agent identity + authorization via AIB
+    issuer:  http://aib-enduser.aib-system.svc.cluster.local:8000   # AIB OIDC issuer: mints agent tokens + JWKS
+    extAuthzUrl: aib-ext-authz.aib-system.svc.cluster.local:9002    # envoy ext_authz — access checks (AIB default; OPA drop-in)
+    extProcUrl:  aib-extproc.aib-system.svc.cluster.local:50051     # envoy ext_proc — token exchange
+    credentialSecretPrefix: kaos-aib                                # per-agent credential Secret (operator mounts; sync creates)
+```
+
+Per-resource config is `spec.security.id` only.
 
 ---
 
 ## AIB capabilities the target depends on
 
-KAOS reuses AIB's implemented capabilities (agent/service/permission-set registry, user consent,
-third-party OAuth sessions/token vault, RFC 8693 token exchange, JWT validation via JWKS, CEL
-claim extraction, Envoy ExtProc). The target also depends on two AIB additions, owned by AIB and
-specified in the `adr-aib/` folder:
+KAOS reuses AIB's implemented capabilities (OAuth2 authorization server with `client_credentials` +
+JWKS, per-agent client credentials, RFC 8693 token exchange, JWT validation, CEL claim extraction, Envoy
+ExtProc, user consent, third-party token vault). The target also depends on AIB additions, owned by AIB
+and specified in `adr-aib/`:
 
-- A first-class **access-check API** (`POST /api/access/check` for SDKs and an Envoy `ext_authz`
-  service for the Gateway) returning allow/deny decisions only —
+- A first-class **access-check API** — `POST /api/access/check` for SDKs and an Envoy `ext_authz` service
+  for the Gateway, returning allow/deny only, keyed on the actor —
   [ADR-012](../adr-aib/ADR-012-aib-access-check-api.md).
-- A first-class **platform/resource grant model** distinct from user-delegated OAuth grants. Until
-  it exists, resource grants may be bootstrapped through a synthetic internal service plus
-  PermissionSet scopes, explicitly marked temporary — [ADR-004](./ADR-004-aib-responsibility-boundary.md).
+- A first-class **platform/resource grant model** distinct from user-delegated OAuth grants; until it
+  exists, resource grants may be bootstrapped through a synthetic service + PermissionSet scopes, marked
+  temporary — [ADR-004](./ADR-004-aib-responsibility-boundary.md).
 
-The **Python SDK** that carries request context and calls these APIs is specified in
+The propagation-only **Python SDK** (with the agent machine-token lifecycle) is specified in
 [ADR-009](../adr-aib/ADR-009-aib-python-sdk-design.md).
 
 ---
 
 ## Responsibility matrix
 
-The component that is the best fit owns each concern. AIB is not an all-purpose security platform.
-
-| Concern | Owner | Optional/advanced owner | Notes |
+| Concern | Owner | Optional/future owner | Notes |
 |---|---|---|---|
-| KAOS resource existence | KAOS CRDs/operator | — | Kubernetes is source of truth. |
-| KAOS logical identity | KAOS CRDs/operator | — | `spec.security.id` / default identity (ADR-001). |
-| Requested access edges | KAOS CRDs/operator | KAOS–AIB sync service mirrors to AIB | Wiring is request, not approval. |
+| KAOS resource existence, topology, logical identity | KAOS CRDs/operator | — | Kubernetes is source of truth (ADR-001). |
+| Requested access edges | KAOS CRDs/operator | KAOS–AIB sync mirrors to AIB | Wiring is request, not approval. |
+| Agent identity issuance | AIB (per-agent credentials + actor tokens) | — | `client_credentials`, local/hybrid mode. |
+| User authentication / claims | Keycloak/Dex/OIDC | Enterprise IdP | AIB does not replace SSO; Keycloak/Dex/OIDC do not issue agent identities. |
 | Approved KAOS resource grants | AIB | AIB first-class resource-grant model | Bootstrap may use synthetic PermissionSet encoding. |
-| User authentication | Keycloak/Dex/OIDC | Enterprise IdP | AIB does not replace SSO. |
-| User claims/groups | Keycloak/Dex/OIDC | Enterprise IdP | AIB consumes claims, does not own identity. |
-| User delegated third-party grants | AIB | AIB | UserGrant + PermissionSet domain. |
-| Third-party OAuth sessions/token vault | AIB | AIB | Not KAOS runtime state. |
-| Token exchange for third-party APIs | AIB | AIB ExtProc at the Gateway | SDK-native by default; Gateway/ExtProc in the Gateway profile. |
-| Access-check decisions | AIB access-check API | AIB `ext_authz` at the Gateway | Allow/deny only (ADR-012). |
-| SDK request context propagation | KAOS/AIB SDK | Third-party AIB SDK + framework helpers | SDK design in ADR-009. |
-| Agent/MCPServer root authorization | AIB grant checks via SDK | Gateway `ext_authz` + NetworkPolicy | Resource-level, not tool-level. |
-| MCP tool/argument authorization | SDK/runtime (where modeled) | Future tool-permission model + AIB/OPA | Not in the default authorization model. |
-| ModelAPI root authorization | AIB resource grants | Gateway resource-boundary enforcement | Root access only. |
-| ModelAPI model/budget/rate policy | LiteLLM | LiteLLM/enterprise controls | Not AIB PermissionSets. |
-| Gateway routes/policy | KAOS Gateway integration | Gateway + NetworkPolicy | AIB does not own route config. |
-| Human approval / pause-resume | — | KAOS task/UI approval model | A2A `input-required` is a future path. |
-| General policy language/PDP | Simple AIB grant lookup | OPA/Rego or Keycloak AuthZ | Optional enterprise extension. |
-| Transport TLS | Ingress/Gateway/reverse proxy | Gateway TLS/cert-manager/native TLS | ADR-007. |
-| Network bypass prevention | Gateway + NetworkPolicy (Gateway profile) | Mesh identity | Depends on CNI. |
-| Workload identity/mTLS | — | SPIFFE/mesh/K8s SA binding | Advanced/hardened profile. |
+| User delegated third-party grants / token vault | AIB | AIB | UserGrant + PermissionSet, sessions. |
+| Access-check decisions | AIB `ext_authz` (+ HTTP for custom servers) | OPA drop-in | Allow/deny only, actor-keyed (ADR-012). |
+| Token exchange for third-party APIs | AIB `ext_proc` at the gateway | SDK for custom servers | RFC 8693. |
+| Enforcement (authn/authz/token-exchange) | Gateway (Envoy) | — | jwt_authn + ext_authz + ext_proc. |
+| Bypass prevention | NetworkPolicy (required) + Gateway | mesh identity | Depends on CNI. |
+| Context propagation + machine-token lifecycle | KAOS/AIB SDK | — | Propagation-only; no enforcement. |
+| MCP tool/argument authorization | — | Future tool-permission model | Not at the gateway. |
+| ModelAPI model/budget/rate policy | LiteLLM | — | Not AIB PermissionSets. |
+| Transport TLS | Ingress/Gateway/reverse proxy | cert-manager/native TLS | External TLS baseline (ADR-007). |
+| Workload identity / mTLS | — | SPIFFE/mesh/K8s SA binding | Future hardening. |
+| General policy language/PDP | AIB grant lookup | OPA/Rego or Keycloak AuthZ | Optional. |
 
-### Build / adopt / upstream
+### Build / adopt
 
 | Area | Approach |
 |---|---|
-| KAOS logical identity and requested-edge extraction | Build in KAOS |
-| KAOS–AIB sync service | Build externally; upstream reusable reconciliation patterns to AIB if generic |
-| AIB first-class resource grants and access-check API | Build/upstream in AIB |
-| AIB user consent and token exchange | Adopt from AIB |
-| AIB SDK generic client pieces | Upstream to AIB where generic |
-| KAOS runtime SDK adapters | Build in KAOS |
-| Gateway/NetworkPolicy enforcement | Build in KAOS (Gateway profile) |
+| KAOS logical identity, requested-edge extraction, operator credential-mount, Gateway/NetworkPolicy generation | Build in KAOS |
+| KAOS–AIB sync service | Build externally; upstream reusable patterns to AIB if generic |
+| AIB agent-identity issuance, access-check API, first-class resource grants | Build/upstream in AIB |
+| AIB consent, token exchange, OAuth2 server | Adopt from AIB |
+| Propagation SDK (+ machine-token lifecycle) | Build/upstream in the AIB SDK |
 | LiteLLM model/budget integration | Adopt LiteLLM; build KAOS config wiring only |
-| Keycloak/Dex OIDC integration | Adopt existing IdP tooling |
-| OPA/Keycloak AuthZ PDP | Optional enterprise extension |
-| Native TLS/service mesh/SPIFFE | Optional hardening profile |
+| Keycloak/Dex OIDC | Adopt existing IdP tooling |
+| OPA/Keycloak AuthZ PDP; native TLS/mesh/SPIFFE | Optional future hardening |
 
 ---
 
 ## ADR index
 
-KAOS-owned decisions (`adr-kaos/`):
+KAOS-owned (`adr-kaos/`):
 
 | ADR | Topic |
 |---|---|
@@ -289,7 +280,7 @@ KAOS-owned decisions (`adr-kaos/`):
 | [ADR-010](./ADR-010-aib-integration-and-synchronization-architecture.md) | AIB integration and synchronization architecture |
 | [ADR-011](./ADR-011-gateway-api-resource-boundary-enforcement.md) | Gateway API resource-boundary enforcement |
 
-AIB-owned decisions (`adr-aib/`):
+AIB-owned (`adr-aib/`):
 
 | ADR | Topic |
 |---|---|

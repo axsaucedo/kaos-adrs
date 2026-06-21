@@ -7,35 +7,32 @@
 
 ## Decision
 
-Adopt **Option A: Minimal transport hardening (baseline profile) with external TLS**.
+Adopt **external TLS at the ingress/gateway boundary** as the baseline transport requirement.
 
-Use three profiles:
+Because KAOS security enforcement is gateway-centric, security enabled means:
 
-| Profile | Scope | Requirements |
-|---|---|---|
-| Baseline profile | Local demos, development, and simple production with existing ingress | SDK-native enforcement, external TLS for production, and direct ClusterIP |
-| Gateway resource-boundary profile | Production deployments requiring resource-boundary enforcement | Baseline profile plus Gateway routing as the default access path, Envoy `ext_authz` fail-closed authorization, AIB ExtProc token exchange, and NetworkPolicy bypass prevention |
-| Advanced/hardened profile | High-security environments | Gateway resource-boundary profile plus optional transport/workload hardening such as cert-manager chart support, native intra-service TLS, in-cluster mTLS/SPIFFE/service mesh, and workload identity binding |
+1. The Envoy-compatible Gateway is enabled and is the required enforcement path.
+2. External user/client traffic uses TLS at the ingress, Gateway, load balancer, or trusted reverse proxy boundary.
+3. NetworkPolicy restricts direct ClusterIP workload-to-workload traffic for KAOS workloads so resource-to-resource calls cannot bypass the gateway.
+4. Resource-to-resource authorization happens at the gateway through Envoy `jwt_authn`, `ext_authz`, and `ext_proc`, not in Python/SDK code.
 
-The baseline profile requires:
+Without the gateway, KAOS provides propagation only for local/dev use and no resource-to-resource enforcement.
 
-1. External user/client traffic uses TLS in production.
-2. Gateway resource-boundary enforcement and advanced transport/workload hardening layers are opt-in deployment profiles.
+mTLS, SPIFFE, service mesh, native intra-service TLS, cert-manager chart support, and workload identity binding remain future optional hardening, not required transport security for the target model.
 
 ---
 
 ## Context
 
-[ADR-002](./ADR-002-enforcement-topology.md) accepts SDK-native enforcement as the baseline profile and Gateway API resource-boundary enforcement as a complementary profile.
+[ADR-002](./ADR-002-enforcement-topology.md) accepts the Envoy-compatible Gateway as the enforcement plane: `jwt_authn` validates inbound tokens, `ext_authz` asks AIB for allow/deny resource decisions, and `ext_proc` performs RFC 8693 token exchange.
 
-[ADR-004](./ADR-004-aib-responsibility-boundary.md) accepts AIB as the authorization and delegated-token broker, while placing Kubernetes ServiceAccount/SPIFFE workload binding in the advanced/hardened profile.
+[ADR-004](./ADR-004-aib-responsibility-boundary.md) accepts AIB as the authorization and delegated-token broker, while placing Kubernetes ServiceAccount/SPIFFE workload binding in future hardening.
 
-[ADR-005](./ADR-005-authorization-and-policy-model.md) accepts simple AIB grant tables for the SDK-native baseline and treats OPA/Rego, Keycloak Authorization Services, and MCP tool/argument policy as optional policy extensions.
+[ADR-005](./ADR-005-authorization-and-policy-model.md) accepts simple AIB grant tables for resource authorization and treats OPA/Rego, Keycloak Authorization Services, and MCP tool/argument policy as optional policy extensions.
 
-[ADR-006](./ADR-006-re-authentication-execution-model.md) accepts fail-closed resource grants, user-grant-required outcomes, and fail-with-URL-and-retry for third-party re-authentication.
+[ADR-006](./ADR-006-re-authentication-execution-model.md) accepts fail-closed resource grants, user-grant-required outcomes, and fail-with-URL-and-retry for third-party re-authentication surfaced through the gateway path.
 
-This ADR decides the baseline hardening model for TLS, network boundaries, and optional network-level hardening layers.
-
+This ADR decides the transport security and network boundary requirements for the gateway-centric security model.
 
 ---
 
@@ -65,60 +62,59 @@ Relevant facts:
 Implication:
 
 - KAOS currently has a useful Gateway routing layer, but not a complete TLS/certificate management story.
-- Requiring Gateway TLS as the only acceptable baseline-profile mode would require chart/controller changes.
-- Production hardening should still target external TLS termination, but the baseline profile should not depend on service mesh or in-cluster mTLS.
+- Production hardening should target external TLS termination at the ingress/gateway boundary, without requiring a particular certificate automation mechanism.
+- Security-enabled deployments need gateway enforcement plus NetworkPolicy bypass prevention, even if certificate automation is supplied by the surrounding platform.
 
 ## Decision scope
 
 This ADR fixes the following scope:
 
-1. Whether TLS is required at the Gateway boundary in the baseline profile.
+1. Whether TLS is required at the ingress/gateway boundary.
 2. Whether cert-manager should be mandatory or recommended.
 3. Whether in-cluster mTLS, SPIFFE, or service mesh are required by default.
 4. Whether native Agent/MCPServer/ModelAPI TLS is required by default.
-5. Whether NetworkPolicy is part of the mandatory baseline.
-6. Which advanced network security layers belong to optional profiles.
+5. Whether NetworkPolicy is part of the mandatory secured target.
+6. Which network security layers remain future optional hardening.
 
 ---
 
 ## Annex: Alternatives considered
 
-### Option A: Minimal transport hardening (baseline profile) with external TLS
+### Option A: External TLS without additional in-cluster hardening
 
-This option keeps the SDK-native baseline simple. KAOS requires TLS at the external production boundary but does not introduce service mesh, SPIFFE, native intra-service TLS, in-cluster mTLS, NetworkPolicy, or mandatory cert-manager into the baseline profile.
+This option requires TLS at the external production boundary but does not introduce service mesh, SPIFFE, native intra-service TLS, in-cluster mTLS, or mandatory cert-manager.
 
-The baseline is:
+The minimal transport posture is:
 
 ```text
 External user/client traffic:
   terminate TLS at ingress/Gateway/load balancer/reverse proxy
 
 KAOS runtime-to-runtime traffic:
-  use SDK-level auth/context/grant checks
-  keep direct in-cluster HTTP acceptable for the baseline profile
+  carry verified identity/context for gateway enforcement
+  require NetworkPolicy in security-enabled deployments to prevent direct ClusterIP bypass
 ```
 
-This option accepts that the baseline profile does not solve every network-level threat. It relies on ADR-002 through ADR-006 for SDK-level context propagation, authorization, and consent behavior. Network-level bypass hardening is provided by the Gateway resource-boundary profile and optional advanced/hardened profile.
+This option remains useful because it avoids forcing a specific ingress controller, cert-manager setup, service mesh, or in-cluster certificate model. However, external TLS by itself is not enough for the secured target unless paired with gateway enforcement and NetworkPolicy bypass prevention.
 
 Pros:
 
-- Keeps the baseline implementation small and understandable.
+- Keeps the default transport requirement small and understandable.
 - Matches current KAOS Gateway and runtime capabilities.
 - Avoids forcing a specific ingress controller, cert-manager setup, service mesh, or in-cluster certificate model.
 
 Cons:
 
 - Does not cryptographically protect every in-cluster hop.
-- Does not prevent ClusterIP bypass by itself.
-- Requires deployment guidance for production TLS rather than fully enforcing it in code.
-- Leaves workload identity and service-to-service mTLS to optional hardening profiles.
+- Requires deployment guidance for production TLS rather than fully enforcing certificate provisioning in KAOS code.
+- Must be paired with gateway enforcement and NetworkPolicy to prevent ClusterIP bypass.
 
 Best fit:
 
-- Baseline profile.
-- Development and early production deployments that want secure defaults without platform lock-in.
+- External transport requirement for the secured target.
+- Development and production deployments that want secure transport without platform lock-in.
 
-### Option B: Gateway TLS and cert-manager as mandatory baseline
+### Option B: Gateway TLS and cert-manager as mandatory transport automation
 
 This option requires all external KAOS traffic to enter through a TLS-enabled Gateway and requires cert-manager as the default certificate automation mechanism.
 
@@ -134,26 +130,25 @@ Clients:
   only use https:// gateway URLs
 ```
 
-This is a stronger production posture than Option A and is a good recommended deployment shape. However, KAOS's current chart creates HTTP listeners by default and does not expose full TLS/certificate configuration. Making this mandatory for the baseline profile would couple security architecture acceptance to Gateway chart work.
+This is a strong production posture and a good Kubernetes-native deployment shape. However, KAOS's current chart creates HTTP listeners by default and does not expose full TLS/certificate configuration. Making cert-manager mandatory would force a certificate automation choice even in environments with cloud load balancer certificates, corporate ingress, or external reverse proxies.
 
 Pros:
 
-- Stronger external transport security.
+- Strong external transport security.
 - Clear production posture.
 - cert-manager is a common Kubernetes-native certificate automation tool.
 
 Cons:
 
-- Requires chart/controller work before the architecture can be implemented.
+- Requires chart/controller work before it can be fully managed by KAOS.
 - Forces cert-manager even in environments with cloud load balancer certificates, corporate ingress, or external reverse proxies.
-- Still does not solve in-cluster mTLS or ClusterIP bypass.
+- Still does not solve in-cluster mTLS or ClusterIP bypass by itself.
 
 Best fit:
 
-- Recommended production profile.
-- Gateway/profile chart enhancement, not mandatory for the SDK-native baseline.
+- Future optional chart/controller enhancement for Kubernetes-native certificate automation.
 
-### Option C: Full in-cluster mTLS and workload identity as the default baseline
+### Option C: Full in-cluster mTLS and workload identity as the default
 
 This option requires service-to-service mTLS, workload identity, and cryptographic binding for Agents, MCPServers, ModelAPIs, and AIB.
 
@@ -166,28 +161,27 @@ Kubernetes projected ServiceAccount tokens
 Gateway/client certificate validation
 ```
 
-This is the strongest network and workload-identity posture. It would help prove that `kaos://agent/researcher` is actually running as the expected workload and not just claiming that identity in an SDK call.
+This is the strongest network and workload-identity posture. It would help prove that `kaos://agent/researcher` is actually running as the expected workload and not just claiming that identity.
 
-However, ADR-001 and ADR-004 place workload binding and ServiceAccount/SPIFFE identity in the advanced/hardened profile. Requiring this in the baseline profile would expand the scope substantially and force KAOS to choose a mesh/workload identity strategy before the basic AIB integration is proven.
+However, requiring this by default would expand the scope substantially and force KAOS to choose a mesh/workload identity strategy before the basic AIB integration is proven.
 
 Pros:
 
 - Strong service-to-service identity.
 - Reduces risk of in-cluster spoofing.
-- Helps prevent direct bypass of Gateway/SDK assumptions.
+- Helps prevent direct bypass of gateway assumptions.
 - Aligns with high-security production environments.
 
 Cons:
 
 - High operational complexity.
-- Requires choosing or integrating SPIFFE, service mesh, or K8s SA token validation.
-- Changes runtime/operator deployment model.
-- Overkill for the baseline AIB integration.
+- Requires choosing or integrating SPIFFE, service mesh, or Kubernetes ServiceAccount token validation.
+- Changes runtime/operator deployment shape.
+- More than required for the AIB authorization/token integration.
 
 Best fit:
 
-- Advanced/hardened security profile.
-- Regulated or multi-tenant environments that require optional hardening beyond the baseline and Gateway profiles.
+- Future optional hardening for regulated or multi-tenant environments.
 
 ### Option D: Configurable native intra-service TLS
 
@@ -204,7 +198,7 @@ MCPServer pod:
   serves HTTPS
 ```
 
-This is different from full mTLS or service mesh. Native intra-service TLS encrypts the connection to the server, but it does not necessarily prove client workload identity unless mutual TLS is also configured. It is a useful middle layer between Gateway-only TLS and full mesh/SPIFFE identity.
+This is different from full mTLS or service mesh. Native intra-service TLS encrypts the connection to the server, but it does not necessarily prove client workload identity unless mutual TLS is also configured. It is a useful middle layer between gateway-only TLS and full mesh/SPIFFE identity.
 
 To support this properly, KAOS would need runtime and operator changes:
 
@@ -212,7 +206,7 @@ To support this properly, KAOS would need runtime and operator changes:
 - MCP runtimes must support serving HTTPS.
 - Agent runtime must support serving HTTPS for inbound A2A/chat if exposed internally.
 - ModelAPI integrations must support HTTPS or be wrapped behind a TLS-capable proxy.
-- CRDs or chart values must model TLS Secret references, CA bundles, scheme selection, and possibly certificate rotation behavior.
+- CRDs or chart values must model TLS Secret references, CA bundles, scheme selection, and certificate rotation behavior.
 - Probes, generated endpoints, and Gateway routes must use the correct scheme/ports.
 
 Pros:
@@ -220,43 +214,42 @@ Pros:
 - Encrypts in-cluster traffic without requiring a full service mesh.
 - Lets security-sensitive deployments harden service-to-service communication incrementally.
 - Keeps the mechanism configurable per runtime/resource.
-- Can be combined in advanced/hardened deployments with client certificate auth or workload identity.
+- Can be combined with client certificate auth or workload identity.
 
 Cons:
 
 - Requires runtime support across Agent, MCPServer, and ModelAPI surfaces.
 - Certificate provisioning and rotation become KAOS deployment concerns.
 - Does not by itself prevent ClusterIP bypass or prove caller identity.
-- More work than required for the baseline AIB authorization/token integration.
+- More work than required for the AIB authorization/token integration.
 
 Best fit:
 
-- Configurable production hardening layer for the advanced/hardened profile.
-- Environments that want in-cluster encryption but do not want a service mesh.
+- Future optional hardening layer for environments that want in-cluster encryption but do not want a service mesh.
 
 ### Option E: Gateway + NetworkPolicy boundary hardening
 
-This option adds Kubernetes NetworkPolicies so Agents can only reach MCPServers, ModelAPIs, and AIB through approved paths, or so direct ClusterIP bypass is restricted.
+This option adds Kubernetes NetworkPolicies so Agents, MCPServers, and ModelAPIs use the gateway path for protected resource-to-resource calls and direct ClusterIP bypass is restricted.
 
 Example:
 
 ```text
 NetworkPolicy:
-  allow Agent -> Gateway/AIB
+  allow KAOS workload -> Gateway/AIB
   deny Agent -> MCPServer direct ClusterIP
   deny Agent -> ModelAPI direct ClusterIP
 ```
 
-This is less complex than service mesh and can significantly improve enforcement if the cluster CNI supports NetworkPolicy correctly.
+This is less complex than service mesh and is required for gateway-centric enforcement. The gateway can only be the enforcement plane if workloads cannot bypass it with direct ClusterIP calls.
 
-The limitation is that KAOS does not currently create these policies, and enforcement depends on the CNI. It also requires careful namespace, label, and traffic modeling to avoid breaking valid internal flows.
+The limitation is that enforcement depends on the CNI. It also requires careful namespace, label, and traffic modeling to avoid breaking valid internal flows.
 
 Pros:
 
-- Stronger boundary than SDK-only checks.
+- Prevents bypass of gateway authorization.
 - Kubernetes-native.
 - Lower complexity than service mesh.
-- Good fit for the Gateway resource-boundary profile.
+- Required for the secured target when security is enabled.
 
 Cons:
 
@@ -267,10 +260,9 @@ Cons:
 
 Best fit:
 
-- Part of the Gateway resource-boundary profile.
-- Production profile when Gateway enforcement is adopted.
+- Required part of the security-enabled target model.
 
-### Option F: Service mesh as default platform baseline
+### Option F: Service mesh as the default platform requirement
 
 This option requires a service mesh such as Istio or Linkerd for mTLS, traffic policy, identity, and observability.
 
@@ -291,16 +283,16 @@ Cons:
 
 Best fit:
 
-- Optional advanced deployment profile, not default.
+- Future optional hardening for organizations that already operate a mesh.
 
 ---
 
 ## Decision summary
 
-1. The baseline profile uses minimal transport hardening, not service mesh or mandatory in-cluster mTLS.
-2. Production external user/client traffic must use TLS at ingress, Gateway, load balancer, or trusted reverse proxy.
-3. cert-manager is recommended for Kubernetes-native certificate automation but not mandatory.
-4. Gateway TLS support is a recommended chart/controller enhancement for Gateway-profile deployments, not a prerequisite for the SDK-native baseline.
-5. Gateway + NetworkPolicy boundary hardening is part of the Gateway resource-boundary profile.
-6. Native Agent/MCPServer/ModelAPI TLS is an optional configurable hardening layer, not mandatory by default.
-7. SPIFFE, service mesh, and cryptographic workload binding are advanced/hardened profile features.
+1. External TLS at the ingress, Gateway, load balancer, or trusted reverse proxy boundary is the baseline transport requirement.
+2. When KAOS security is enabled, the Envoy-compatible Gateway is required and is the enforcement path.
+3. NetworkPolicy restricting direct ClusterIP workload-to-workload access is required when security is enabled because it prevents bypassing the gateway.
+4. Resource-to-resource authorization happens at the gateway through `jwt_authn`, `ext_authz`, and `ext_proc`, not in Python/SDK code.
+5. cert-manager is useful certificate automation but is not mandatory; deployments may use cloud load balancer certificates, corporate ingress, or trusted reverse proxies.
+6. Native Agent/MCPServer/ModelAPI TLS is future optional hardening, not mandatory by default.
+7. mTLS, SPIFFE, service mesh, and cryptographic workload binding are future optional hardening.

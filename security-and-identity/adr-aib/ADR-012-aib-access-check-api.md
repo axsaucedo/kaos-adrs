@@ -38,6 +38,15 @@ Gateway integration and SDK integration should share one internal AIB domain ser
 
 The access-check implementation MUST verify the user subject token as part of the decision. AIB must not treat user identity headers or unauthenticated request metadata as proof of the user unless a separately configured trusted boundary has already authenticated and signed/validated that identity.
 
+### Two identities: subject (user) and actor (calling agent)
+
+The decision uses two distinct identities, and is keyed on the **actor**:
+
+- **Subject** = the user principal, from a Keycloak/OIDC-issued user token. Used for user-delegated third-party grants.
+- **Actor** = the **calling agent**, from the agent's own **AIB-issued identity** (its actor token or client assertion), which AIB issues via `client_credentials`. AIB derives the actor from the caller's authenticated agent identity, **not from `subject_token.azp`**.
+
+The decision is therefore `actor (calling agent) -> resource`. This is what makes multi-agent delegation correct: when Agent B calls a resource, the actor is B's own AIB identity, so the decision is `B -> resource`, never the original user-token `azp`. The Gateway is the primary caller (via `ext_authz`); the HTTP `POST /api/access/check` path is for custom servers run off-gateway. Context is passed using neutral `kaos.resource`/`kaos.action` values so the same contract serves AIB or an alternate backend (e.g. OPA).
+
 ---
 
 ## Context
@@ -192,17 +201,17 @@ Therefore the access-check API can be implemented in two phases:
 
 ### User Story 1 - SDK performs resource access check (P1)
 
-A Python Agent or MCPServer uses the AIB SDK to check whether the current principal and actor can access a target resource before executing a protected call.
+A Python Agent or MCPServer uses the AIB SDK to check whether the calling agent (actor) can access a target resource before executing a protected call.
 
 **Independent test**:
 
-Given a valid subject token, an active grant, and a target resource covered by the grant, `POST /api/access/check` returns `allowed: true`.
+Given a valid actor token, an approved resource grant for that actor, and a target resource, `POST /api/access/check` returns `allowed: true`.
 
 **Acceptance scenarios**:
 
-1. Given a valid subject token and resource, when the SDK calls the access-check API, then AIB validates the token and extracts the principal and agent.
-2. Given an active matching grant, when AIB checks access, then the response is `allowed: true`.
-3. Given no matching grant, when AIB checks access, then the response is `allowed: false` with reason `grant_missing`.
+1. Given a valid actor token and resource, when the SDK calls the access-check API, then AIB validates the actor token and derives the actor from it (not from any subject `azp`).
+2. Given an approved resource grant for the actor, when AIB checks access, then the response is `allowed: true`.
+3. Given no matching grant for the actor, when AIB checks access, then the response is `allowed: false` with reason `grant_missing`.
 4. Given an expired grant, when AIB checks access, then the response is `allowed: false` with reason `grant_expired`.
 
 ### User Story 2 - Gateway enforces route-level access before backend (P1)
@@ -211,14 +220,14 @@ An Envoy-compatible Gateway calls AIB before forwarding a request to a protected
 
 **Independent test**:
 
-Given a request to a protected route without an allowed resource grant, the Gateway integration rejects the request before it reaches the backend.
+Given a request to a protected route whose actor has no approved resource grant, the Gateway integration rejects the request before it reaches the backend.
 
 **Acceptance scenarios**:
 
-1. Given a Gateway request with a valid subject token, actor, and target resource, when the Gateway calls AIB, then AIB returns a deterministic allow/deny decision.
+1. Given a Gateway request with a valid actor token, an optional subject token, and a target resource, when the Gateway calls AIB, then AIB returns a deterministic allow/deny decision keyed on the actor.
 2. Given an allow decision, when the Gateway receives the response, then it forwards the request.
 3. Given a deny decision, when the Gateway receives the response, then it rejects the request without calling the backend.
-4. Given no Bearer token or unusable authentication context, when the Gateway calls AIB or its auth-required layer, then the request fails closed.
+4. Given no authenticated actor, when the Gateway calls AIB or its auth-required layer, then the request fails closed.
 
 ### User Story 3 - Decision API does not exchange tokens (P1)
 
@@ -226,28 +235,30 @@ Operators want route/resource authorization without retrieving third-party acces
 
 **Independent test**:
 
-Given a valid grant but no live third-party OAuth2 session, the access-check API still returns the resource authorization decision and does not return `invalid_grant` for missing third-party session.
+Given an approved resource grant but no live third-party OAuth2 session, the access-check API still returns the resource authorization decision and does not return `invalid_grant` for a missing third-party session.
 
 **Acceptance scenarios**:
 
-1. Given the user has a resource grant but no third-party session, when access check runs, then AIB does not attempt session lookup.
+1. Given the actor has a resource grant but no third-party session, when access check runs, then AIB does not attempt session lookup.
 2. Given the check is allowed, then the response contains no access token.
 3. Given a third-party session is missing, then the response does not include a re-auth URL unless the checked resource explicitly requires session availability.
 
-### User Story 4 - Bootstrap mode reuses existing grant model (P2)
+### User Story 4 - Bootstrap mode for actor-to-resource grants (P2)
 
-AIB can support early SDK/Gateway access checks before first-class platform/resource grants exist.
+AIB can support early SDK/Gateway access checks before first-class platform/resource grants exist, using a synthetic internal service plus PermissionSet scopes — kept distinct from user-delegated `UserGrant`s.
 
 **Independent test**:
 
-Given a target resource URI mapped through `protected_resources` and a grant that covers the mapped service through PermissionSets, access check returns the expected decision.
+Given a target resource URI mapped to the synthetic platform service, and a bootstrap grant for the **actor** covering it, access check returns the expected `actor -> resource` decision.
 
 **Acceptance scenarios**:
 
-1. Given a resource URI matching one service's `protected_resources`, when AIB checks access, then it resolves that service.
-2. Given a user grant with permission sets that include the service, then the decision is allowed.
-3. Given a user grant that does not include the service, then the decision is denied.
-4. Given multiple services match the same resource, then the decision fails closed with `ambiguous_resource`.
+1. Given a resource URI matching the synthetic platform service mapping, when AIB checks access, then it resolves that resource.
+2. Given a bootstrap grant for the actor that covers the resource, then the decision is allowed.
+3. Given no bootstrap grant for the actor covering the resource, then the decision is denied.
+4. Given an ambiguous resource mapping, then the decision fails closed with `ambiguous_resource`.
+
+Note: a user-delegated `UserGrant` alone never grants KAOS resource access; the two grant families stay distinct (ADR-004).
 
 ### User Story 5 - Target mode supports platform resources (P2)
 
@@ -277,10 +288,10 @@ The endpoint should be available on the broker API surface used by trusted SDK/G
 
 ```json
 {
+  "actor_token": "eyJhbGciOi...",
   "subject_token": "eyJhbGciOi...",
   "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
   "resource": "kaos://mcpserver/default/github",
-  "actor": "kaos://agent/default/researcher",
   "action": "access",
   "context": {
     "request_id": "req-123",
@@ -293,12 +304,14 @@ Fields:
 
 | Field | Required | Description |
 |---|---:|---|
-| `subject_token` | yes | Token containing the user principal and, where configured, agent/actor claims |
-| `subject_token_type` | yes | Token type; initially access token |
-| `resource` | yes | Target resource URI, e.g. `kaos://...` or bootstrap HTTP protected resource |
-| `actor` | no | Explicit actor/calling agent if not extracted from token |
+| `actor_token` | yes | The calling agent's AIB-issued identity token; the decision keys on this (the actor). At the gateway this is the `x-agent-authorization` token. |
+| `subject_token` | no | The user principal token (Keycloak/OIDC), used only for user-delegated third-party grants. Absent for autonomous (actor-only) calls. |
+| `subject_token_type` | no | Subject token type when a subject is present. |
+| `resource` | yes | Target resource URI, e.g. `kaos://...` |
 | `action` | no | Requested action; default `access` |
 | `context` | no | Non-secret correlation and route metadata |
+
+The actor MUST be derived from the authenticated `actor_token` (the calling agent's own AIB identity), **never** from `subject_token.azp`.
 
 ### Envoy `ext_authz` endpoint for Gateway callers
 
@@ -327,9 +340,9 @@ extAuth:
     - authorization
     - x-request-id
   contextExtensions:
-    - name: aib.resource
+    - name: kaos.resource
       value: kaos://mcpserver/default/github
-    - name: aib.action
+    - name: kaos.action
       value: access
   failOpen: false
   timeout: 500ms
@@ -341,8 +354,8 @@ The Gateway adapter maps Envoy `CheckRequest` to the same internal access decisi
 | Access decision field | Envoy `CheckRequest` source |
 |---|---|
 | `subject_token` | `attributes.request.http.headers["authorization"]`, after removing `Bearer ` |
-| `resource` | `context_extensions["aib.resource"]`, derived by KAOS from the target route/backend |
-| `action` | `context_extensions["aib.action"]`, default `access` |
+| `resource` | `context_extensions["kaos.resource"]`, derived by KAOS from the target route/backend |
+| `action` | `context_extensions["kaos.action"]`, default `access` |
 | `actor` | verified token claim via CEL, or trusted Gateway-provided context/header only if configured |
 | `request_id` | `attributes.request.http.headers["x-request-id"]` |
 | HTTP metadata | `attributes.request.http.method`, `path`, `host`, and selected route metadata |
@@ -429,15 +442,15 @@ configuration_error
 ## Functional requirements
 
 - **FR-001**: AIB MUST expose a standalone access-check API that returns allow/deny decisions without issuing tokens.
-- **FR-002**: The API MUST validate `subject_token` using the same JWT validation infrastructure used by token exchange where applicable, including signature, issuer, audience, expiration, and not-before checks.
-- **FR-003**: The API MUST extract principal using configurable CEL expression, aligned with token exchange defaults.
-- **FR-004**: The API MUST extract or accept actor identity using configurable CEL expression and/or explicit request field.
+- **FR-002**: The API MUST validate the `actor_token` (the calling agent's AIB-issued identity) and, when present, the `subject_token`, using the JWT validation infrastructure (signature, issuer, audience, expiration, not-before).
+- **FR-003**: The API MUST derive the actor (calling agent) from the authenticated `actor_token`, never from `subject_token.azp`.
+- **FR-004**: The API MUST decide `actor -> resource`; the subject principal, when present, is used only to evaluate user-delegated third-party grants. Autonomous (actor-only) calls have no subject.
 - **FR-005**: The API MUST validate the caller is authorized to request access decisions.
-- **FR-006**: The API MUST fail closed on malformed tokens, missing resource, ambiguous resource, repository errors, and policy evaluation errors.
+- **FR-006**: The API MUST fail closed on a missing/invalid actor token, malformed tokens, missing resource, ambiguous resource, repository errors, and policy evaluation errors.
 - **FR-007**: The API MUST return structured allow/deny decisions and machine-readable reason codes.
 - **FR-008**: The API MUST not retrieve, refresh, return, or require third-party OAuth2 tokens.
-- **FR-009**: Bootstrap mode MAY resolve `resource` through existing `ThirdpartyOAuth2Service.protected_resources`.
-- **FR-010**: Bootstrap mode MAY verify service coverage through existing `UserGrant.granted_permission_sets` and PermissionSet `ServiceScope`.
+- **FR-009**: Bootstrap mode MAY encode KAOS platform/resource grants through a synthetic internal service plus PermissionSet scopes — kept distinct from user-delegated `UserGrant`s and marked explicitly temporary — to resolve `actor -> resource` decisions until first-class resource grants exist.
+- **FR-010**: Resource-access decisions MUST remain `actor -> resource`; a user-delegated `UserGrant` MUST NOT by itself be treated as KAOS resource access.
 - **FR-011**: Target mode SHOULD support first-class platform/resource grants without changing the API contract.
 - **FR-012**: The API MUST emit structured audit logs for allow and deny decisions.
 - **FR-013**: The API MUST redact tokens and secrets from logs, traces, and error messages.
@@ -448,7 +461,7 @@ configuration_error
 
 ## Gateway integration requirements
 
-- **GW-001**: Gateway integration MUST fail closed when no authenticated subject is available.
+- **GW-001**: Gateway integration MUST fail closed when no authenticated **actor** is available.
 - **GW-002**: Gateway integration MUST not rely on current token-exchange ExtProc no-Bearer pass-through behavior for authorization.
 - **GW-003**: Gateway integration SHOULD use Envoy `ext_authz` gRPC as the primary fail-closed Gateway authorization contract.
 - **GW-004**: Gateway integration MUST map route/backend target to the `resource` value sent to AIB deterministically.
