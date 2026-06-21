@@ -258,7 +258,7 @@ Given a target resource URI mapped to the synthetic platform service, and a boot
 3. Given no bootstrap grant for the actor covering the resource, then the decision is denied.
 4. Given an ambiguous resource mapping, then the decision fails closed with `ambiguous_resource`.
 
-Note: a user-delegated `UserGrant` alone never grants KAOS resource access; the two grant families stay distinct (ADR-KAOS-004).
+Note: a user-delegated `UserGrant` alone never grants KAOS resource access; the two grant families stay distinct ([ADR-KAOS-004](../adr-kaos/ADR-KAOS-004-aib-responsibility-boundary.md)).
 
 ### User Story 5 - Target mode supports platform resources (P2)
 

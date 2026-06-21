@@ -18,7 +18,7 @@ Agent / external client
   -> protected MCPServer / ModelAPI / Agent
 ```
 
-Resource-to-resource authorization happens **only at the Gateway**, not in Python/SDK code. The SDK is propagation-only: it carries the verified identities across hops so the Gateway can enforce end-to-end. There is no partial SDK-enforced mode; security enabled is binary and **requires both the Gateway and NetworkPolicy** (below). mTLS/SPIFFE/service-mesh workload binding is future hardening.
+Resource-to-resource authorization happens **only at the Gateway**, not in Python/SDK code. The SDK is **not the enforcement boundary**: it carries the verified identities across hops and keeps the agent token fresh so the Gateway can enforce end-to-end (its optional access-check/token-exchange helpers are for custom off-gateway servers only). There is no partial SDK-enforced mode; security enabled is binary and **requires both the Gateway and NetworkPolicy** (below). mTLS/SPIFFE/service-mesh workload binding is out of scope (revisit only on concrete need).
 
 ### Two-identity authentication
 
@@ -29,7 +29,7 @@ Each protected request carries two identities, validated by Envoy `jwt_authn` wi
 | User principal (subject) | `Authorization: Bearer` | Keycloak/OIDC | `userAuth.issuer` |
 | Calling agent (actor) | `x-agent-authorization: Bearer` | AIB | `agentAuth.issuer` |
 
-`ext_authz` then decides **actor (calling agent) -> resource**, using the user principal for user-delegated third-party grants. The decision keys on the calling agent's own AIB-issued identity, **never on `subject_token.azp`**, which is what makes multi-agent delegation correct (see ADR-KAOS-004). Autonomous runs have no user subject (actor-only). The SDK sets `x-agent-authorization` from the agent's AIB machine token and forwards the inbound user `Authorization`.
+`ext_authz` then decides **actor (calling agent) -> resource**, using the user principal for user-delegated third-party grants. The decision keys on the calling agent's own AIB-issued identity, **never on `subject_token.azp`**, which is what makes multi-agent delegation correct (see [ADR-KAOS-004](./ADR-KAOS-004-aib-responsibility-boundary.md)). Autonomous runs have no user subject (actor-only). The SDK sets `x-agent-authorization` from the agent's AIB machine token and forwards the inbound user `Authorization`.
 
 ### NetworkPolicy is required, not optional
 
@@ -64,7 +64,7 @@ ExtProc and external authorization are different Envoy extension points; AIB ser
 
 ## Context
 
-[ADR-KAOS-002](./ADR-KAOS-002-enforcement-topology.md) establishes gateway-centric enforcement, with the SDK as a propagation-only layer.
+[ADR-KAOS-002](./ADR-KAOS-002-enforcement-topology.md) establishes gateway-centric enforcement, with the SDK as a propagation/token-lifecycle layer that is not the enforcement boundary.
 
 [ADR-KAOS-003](./ADR-KAOS-003-user-request-context-propagation.md) defines propagated context headers such as:
 
@@ -276,6 +276,8 @@ Mapping to AIB:
 
 Envoy `jwt_authn` validates **both** tokens before `ext_authz`: the user subject token against `userAuth.issuer` (Keycloak) and the agent actor token against `agentAuth.issuer` (AIB). `ext_authz` then decides **actor -> resource**, using the subject only for user-delegated grants. The actor is the calling agent's own AIB identity, never `subject_token.azp`. Autonomous calls have no subject (actor-only).
 
+Both filters are required and the split is intentional: `ext_authz` is an allow/deny **decision** call and does **not** cryptographically validate the JWTs itself. `jwt_authn` does the signature/issuer/audience/expiry verification against JWKS first and exposes verified claims, so the decision backend receives already-trusted identity. This keeps AIB (or an OPA drop-in) a pure decision point instead of re-implementing JWKS validation, and is the standard Envoy composition (`jwt_authn` → `ext_authz`).
+
 ---
 
 ## Enforcement flow
@@ -286,8 +288,7 @@ There is one enforcement model, not a ladder of profiles. Two deployment states 
 development only; direct ClusterIP access is open and there is no authorization.
 
 **Secured (gateway enabled):** the required target. Operator-injected runtime URLs use Gateway routes,
-NetworkPolicy restricts direct ClusterIP bypass, and every protected request flows through the inline
-gateway pipeline:
+NetworkPolicy restricts direct ClusterIP bypass, and every protected request flows through the inline gateway pipeline:
 
 ```text
 caller request
@@ -300,15 +301,11 @@ caller request
 
 Properties:
 
-- Gateway is the only enforcement point; the SDK only propagates the two identities so the gateway can
-  decide end-to-end.
-- Resource access keys on the calling agent's own AIB-issued identity (the actor), never on
-  `subject_token.azp` — this is what makes multi-agent delegation correct (ADR-KAOS-004).
+- Gateway is the only enforcement point; the SDK only propagates the two identities so the gateway can decide end-to-end.
+- Resource access keys on the calling agent's own AIB-issued identity (the actor), never on `subject_token.azp` — this is what makes multi-agent delegation correct ([ADR-KAOS-004](./ADR-KAOS-004-aib-responsibility-boundary.md)).
 - NetworkPolicy is required so the gateway cannot be bypassed via ClusterIP.
-- The gateway handles the coarse resource boundary and token exchange; MCP tool/argument semantics and
-  user-facing grant/re-auth flows remain runtime/SDK or deferred concerns.
-- The `ext_authz` backend is swappable (AIB default; OPA drop-in) via the standard contract and neutral
-  `kaos.resource`/`kaos.action` context_extensions.
+- The gateway handles the coarse resource boundary and token exchange; MCP tool/argument semantics and user-facing grant/re-auth flows remain runtime/SDK or deferred concerns.
+- The `ext_authz` backend is swappable (AIB default; OPA drop-in) via the standard contract and neutral `kaos.resource`/`kaos.action` context_extensions.
 
 ## Required KAOS changes
 
@@ -345,7 +342,7 @@ aibExtProc
 networkPolicy
 ```
 
-This should be driven by global security configuration (ADR-KAOS-001 keeps per-resource config to `spec.security.id` only).
+This should be driven by global security configuration ([ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md) keeps per-resource config to `spec.security.id` only).
 
 ### Header conventions
 
@@ -389,7 +386,7 @@ security:
     credentialSecretPrefix: kaos-aib                                # per-agent credential Secret (operator mounts; sync creates)
 ```
 
-`userAuth` and `agentAuth` become two Envoy `jwt_authn` providers. The AIB admin URL/credentials are not here — they live in the sync-service config ([ADR-KAOS-008](./ADR-KAOS-008-aib-integration-and-synchronization-architecture.md)). Per-resource configuration is `spec.security.id` only (ADR-KAOS-001).
+`userAuth` and `agentAuth` become two Envoy `jwt_authn` providers. The AIB admin URL/credentials are not here — they live in the sync-service config ([ADR-KAOS-008](./ADR-KAOS-008-aib-integration-and-synchronization-architecture.md)). Per-resource configuration is `spec.security.id` only ([ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md)).
 
 The operator generates, per protected route, an Envoy `SecurityPolicy` `extAuth.grpc` pointing at `agentAuth.extAuthzUrl`, with `headersToExtAuth` including `authorization` and `x-agent-authorization`, `contextExtensions` `kaos.resource`/`kaos.action` derived from the target identity, and fail-closed behavior (`failOpen: false`, `statusOnError: 503`). Token exchange uses `agentAuth.extProcUrl` when a protected call needs a delegated third-party token.
 
@@ -441,7 +438,7 @@ AIB ExtProc exchanges tokens and mutates `Authorization`, but it is not an autho
 
 Accepted as the target Gateway authorization integration.
 
-Envoy `ext_authz` is the right native contract for route-level allow/deny. AIB exposes an `envoy.service.auth.v3.Authorization/Check` implementation (ADR-AIB-002). Existing AIB ExtProc remains useful for token exchange, but it is not the authorization contract.
+Envoy `ext_authz` is the right native contract for route-level allow/deny. AIB exposes an `envoy.service.auth.v3.Authorization/Check` implementation ([ADR-AIB-002](../adr-aib/ADR-AIB-002-aib-access-check-api.md)). Existing AIB ExtProc remains useful for token exchange, but it is not the authorization contract.
 
 ### Option C2: Gateway-level `require_access` for all authorization
 
@@ -471,7 +468,7 @@ Sidecars can help for local egress token injection or runtimes that cannot route
 - Makes the Gateway the application access path for protected resources when security is enabled.
 - Prevents direct ClusterIP bypass through required NetworkPolicy.
 - Covers all runtimes (including ModelAPI and non-Python servers) uniformly, with no per-runtime security code.
-- Keeps the SDK to propagation only, avoiding per-language enforcement duplication.
+- Keeps the SDK off the enforcement path (propagation + token lifecycle), avoiding per-language enforcement duplication.
 
 ### Negative
 
@@ -497,7 +494,7 @@ Sidecars can help for local egress token injection or runtimes that cannot route
 3. Security is binary: it requires both the Gateway and NetworkPolicy (gateway routing without NetworkPolicy is not a security mode).
 4. The gateway enforces resource-boundary `require_access` via AIB `ext_authz`, plus `jwt_authn` (two providers) and `ext_proc` token exchange.
 5. Decisions key on the calling agent's AIB-issued identity (the actor), never `subject_token.azp`; the user subject is used for user-delegated grants.
-6. The SDK is propagation-only; tool/argument/workflow semantics are future or runtime-specific controls, not part of this enforcement model.
+6. The SDK is not the enforcement boundary (propagation + token lifecycle, optional off-gateway helpers); tool/argument/workflow semantics are future or runtime-specific controls, not part of this enforcement model.
 7. The `ext_authz` backend is swappable (AIB default, OPA drop-in) over the standard contract with neutral `kaos.resource`/`kaos.action`.
 8. KAOS defines a resource-naming convention shared between Gateway routes and AIB records.
-9. mTLS/SPIFFE/service-mesh workload binding and sidecars are deferred future hardening.
+9. mTLS/SPIFFE/service-mesh workload binding and sidecars are out of scope (revisit only on concrete need).

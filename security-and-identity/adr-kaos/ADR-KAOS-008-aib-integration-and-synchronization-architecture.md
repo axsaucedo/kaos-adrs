@@ -11,48 +11,28 @@ KAOS separates **AIB lifecycle** from **AIB integration**, and owns only the lat
 
 ### Lifecycle (KAOS does not own it)
 
-KAOS does not own, upgrade, or lifecycle-manage AIB or the IdP (Keycloak) as part of its
-reconciliation. Their storage, keys, migrations, and upgrades are managed externally through their own
-Helm charts / operators. Production deployments are expected to run externally-managed AIB and Keycloak.
+KAOS does not own, upgrade, or lifecycle-manage AIB or the IdP (Keycloak) as part of its reconciliation. Their storage, keys, migrations, and upgrades are managed externally through their own Helm charts / operators. Production deployments are expected to run externally-managed AIB and Keycloak.
 
 ### Integration (KAOS owns it, via the CLI, like other platform integrations)
 
-KAOS configures itself to **use** AIB and Keycloak, following the same flow as other `kaos system install`
-integrations (otel, gateway, metallb). As a bootstrap convenience the CLI can install the Keycloak and
-AIB Helm charts and wire the operator security config; it can equally point at externally-managed
-instances:
+KAOS configures itself to **use** AIB and Keycloak, following the same flow as other `kaos system install` integrations (otel, gateway, metallb). A single `--auth-enabled` flag is the convenience path: it installs the Keycloak and AIB Helm charts, deploys the KAOS→AIB sync service, and wires the operator security config (`security.tls` / `security.userAuth` / `security.agentAuth`, see [ADR-KAOS-009](./ADR-KAOS-009-gateway-api-resource-boundary-enforcement.md)):
 
 ```text
-# Convenience: install Keycloak + AIB charts and wire everything
-kaos system install --aib-enabled --keycloak-enabled
-
-# External: use already-managed instances
-kaos system install --aib-enabled \
-  --idp-issuer https://keycloak.example.com/realms/kaos \
-  --aib-issuer https://aib.example.com \
-  --aib-ext-authz-url aib-ext-authz.aib-system.svc.cluster.local:9002 \
-  --aib-ext-proc-url  aib-extproc.aib-system.svc.cluster.local:50051 \
-  --aib-admin-url https://aib.example.com:14000 \
-  --aib-admin-credentials-secret aib-admin-credentials
+# Convenience: install Keycloak + AIB + sync service and wire operator security config
+kaos system install --auth-enabled
 ```
 
-Installing the charts as a convenience is **not** KAOS taking ownership of their lifecycle — it is a
-bootstrap, and operators may disable it and manage AIB/Keycloak themselves. The CLI renders the
-operator `security.userAuth` / `security.agentAuth` config (ADR-KAOS-009) and the sync-service config.
+`--auth-enabled` activates the whole authentication/authorization stack as one switch. Granular override flags — pointing at externally-managed Keycloak/AIB, custom issuers, or custom `ext_authz`/`ext_proc`/admin endpoints — are a deliberate **future addition**, added only when a deployment needs them; they are not required for the initial integration. Installing the charts as a convenience is **not** KAOS taking ownership of their lifecycle — it is a bootstrap, and operators may disable it and manage AIB/Keycloak themselves.
 
 ### Synchronization (lightweight external service)
 
-KAOS-to-AIB synchronization is not embedded into KAOS core and not into AIB core. It is a **lightweight
-external synchronization service** that watches KAOS resources, computes desired AIB records, calls AIB
-admin APIs, and reports drift/status:
+KAOS-to-AIB synchronization is not embedded into KAOS core and not into AIB core. It is a **lightweight external synchronization service** that watches KAOS resources, computes desired AIB records, calls AIB admin APIs, and reports drift/status:
 
 ```text
 watch/list KAOS resources -> compute AIB desired records -> call AIB admin APIs -> report drift/status
 ```
 
-It does not require a Go/Kubebuilder operator, new CRDs, or code inside the KAOS operator, and may be
-implemented in any language with Kubernetes watch support. The AIB admin URL/credentials live in this
-sync-service config (not in the operator/gateway enforcement config).
+It does not require a Go/Kubebuilder operator, new CRDs, or code inside the KAOS operator, and may be implemented in any language with Kubernetes watch support. The AIB admin URL/credentials live in this sync-service config (not in the operator/gateway enforcement config).
 
 The synchronization service is responsible for: 
 
@@ -77,19 +57,26 @@ The synchronization service is responsible for:
 
 5. **Agent identity and credential provisioning**
    - Ensure required AIB agent records, third-party service records, and PermissionSets exist when KAOS declares or references them.
-   - Generate and rotate **per-agent AIB client credentials** through the AIB admin API for each identity-bearing caller. This is **required when security is enabled** (it is how an agent authenticates as the actor; see ADR-KAOS-004), not optional.
-   - Write the resulting client credentials into per-agent Kubernetes Secrets (named by `credentialSecretPrefix`, e.g. `kaos-aib-<agentid>`). The **operator mounts** these Secrets into the agent/MCPServer pods (ADR-KAOS-009); Kubernetes keeps a pod `Pending` until its Secret exists, which orders provisioning naturally.
+   - Generate and rotate **per-agent AIB client credentials** through the AIB admin API for each identity-bearing caller. This is **required when security is enabled** (it is how an agent authenticates as the actor; see [ADR-KAOS-004](./ADR-KAOS-004-aib-responsibility-boundary.md)), not optional.
+   - Write the resulting client credentials into per-agent Kubernetes Secrets (named by `credentialSecretPrefix`, e.g. `kaos-aib-<agentid>`). The **operator mounts** these Secrets into the agent/MCPServer pods ([ADR-KAOS-009](./ADR-KAOS-009-gateway-api-resource-boundary-enforcement.md)); Kubernetes keeps a pod `Pending` until its Secret exists, which orders provisioning naturally.
 
 6. **Status and drift reporting**
    - Report synchronization state through service logs, metrics, and optional Kubernetes annotations/status integration.
    - Report AIB unreachable, AIB record drift, missing credentials, stale external IDs, and unsupported requested edges.
    - Never silently fall back to insecure behavior when synchronization fails.
 
-In summary, the sync service projects, at a high level: KAOS logical identities (`external_id`), requested
-access edges (kept distinct from approved grants), third-party services and PermissionSets, **per-agent
-client credentials** (into Secrets), and drift/status. It may live in a separate repository, an
-AIB-adjacent integration repository, or initially as documented sample code. It should not make KAOS own
-AIB lifecycle and should not make AIB itself KAOS-specific.
+In summary, the sync service projects, at a high level: KAOS logical identities (`external_id`), requested access edges (kept distinct from approved grants), third-party services and PermissionSets, **per-agent client credentials** (into Secrets), and drift/status. It should not make KAOS own AIB lifecycle and should not make AIB itself KAOS-specific.
+
+### Packaging and distribution (CLI-installed)
+
+Although the sync service is **not** part of KAOS core (it is a separate process, not the operator, and holds AIB admin credentials), it is part of the **KAOS install experience**: `kaos system install
+--auth-enabled` deploys it alongside the Keycloak/AIB charts so users get a working integration without
+assembling components by hand. Packaging follows a start-simple-then-extract path:
+
+1. **Now — same repo, CLI-deployed.** The sync service lives in the KAOS repository (e.g. a small Go or Python Deployment with its own image and a minimal Helm chart/manifest) and is rendered/applied by the CLI under `--auth-enabled`. This keeps versioning, CI, and release in lockstep with KAOS while the contract with AIB stabilizes.
+2. **Later — own repository.** Once the AIB admin contract and the sync logic are stable, the service can be extracted into its own repository (or an AIB-adjacent integration repo) and consumed by the CLI as a versioned external chart/image, exactly as KAOS already consumes Keycloak and AIB.
+
+Either way the CLI is the integration point: it installs the chart and wires the sync-service config (AIB admin URL/credentials, watch scope). Operators may disable the bundled sync service and run their own. This deliberately avoids embedding the sync logic into the operator (see Option B) while still giving a one-command install.
 
 ---
 
@@ -362,7 +349,7 @@ Manual administration is useful for simple or early deployments, but it does not
 - Allows AIB integration without coupling KAOS releases to AIB releases.
 - Allows a lightweight sync implementation in Go, Python, or another Kubernetes-watch-capable runtime.
 - Keeps AIB orchestrator-neutral.
-- Preserves CLI simplicity by giving KAOS an `--aib-enabled` style configuration path.
+- Preserves CLI simplicity by giving KAOS a single `--auth-enabled` configuration path.
 
 ### Negative
 
@@ -374,7 +361,7 @@ Manual administration is useful for simple or early deployments, but it does not
 
 ### Risks
 
-- Users may assume `--aib-enabled` installs AIB unless CLI docs and validation are explicit.
+- `--auth-enabled` bootstrap-installs AIB/Keycloak by default; CLI docs and validation must make clear KAOS does not then own their lifecycle and that external instances can be used instead.
 - Insecure AIB evaluation defaults such as memory storage could be used accidentally if KAOS does not document production expectations.
 - A sync service with broad Kubernetes watch permissions and AIB admin credentials becomes security-sensitive.
 - If requested edges are mistaken for approved grants, synchronization could become over-permissive.
@@ -383,10 +370,10 @@ Manual administration is useful for simple or early deployments, but it does not
 
 ## Final decision
 
-1. KAOS does not install, upgrade, or lifecycle-manage AIB.
-2. AIB is installed externally, normally through the AIB Helm chart or another AIB-owned distribution path.
-3. KAOS provides CLI/runtime/operator configuration hooks for using an existing AIB installation.
-4. `--aib-enabled` style UX configures KAOS to use AIB; it does not install AIB.
+1. KAOS does not own, upgrade, or lifecycle-manage AIB or Keycloak; their storage, keys, migrations, and upgrades stay external.
+2. `--auth-enabled` may **bootstrap-install** the AIB and Keycloak Helm charts and the sync service as a convenience, but this is not lifecycle ownership; operators may disable it and point at externally-managed AIB/Keycloak.
+3. KAOS provides CLI/runtime/operator configuration hooks for using a bootstrapped or externally-managed AIB installation.
+4. `--auth-enabled` is a single switch that activates the whole stack; granular external-instance/override flags are a future addition.
 5. Automatic KAOS-to-AIB synchronization lives outside KAOS core as a lightweight external sync service.
 6. The external sync service may be implemented in Go, Python, or any language with Kubernetes watch support.
 7. The external sync service does not need to be a full Kubernetes operator with CRDs.

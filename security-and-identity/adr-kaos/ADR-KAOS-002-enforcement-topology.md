@@ -15,15 +15,17 @@ The Envoy gateway is the enforcement plane:
 - `ext_proc` -> AIB performs RFC 8693 token exchange.
 - NetworkPolicy restricts direct ClusterIP workload-to-workload traffic.
 
-Resource-to-resource authorization happens **only at the gateway**, not in Python or SDK code. The SDK is propagation-only: it carries verified identity and request context across hops so the gateway can enforce end-to-end. SDK access-check and token-exchange client helpers are optional helpers for custom servers deliberately run off-gateway; token exchange at the gateway through `ext_proc` is the standard path.
+Resource-to-resource authorization happens **only at the gateway**, not in Python or SDK code. The SDK is **not the enforcement boundary**: in the standard path it carries verified identity and request context across hops and keeps the agent actor token fresh, so the gateway can enforce end-to-end. SDK access-check and token-exchange client helpers exist but are optional, for custom servers deliberately run off-gateway; token exchange at the gateway through `ext_proc` is the standard path.
 
-Security is binary. When KAOS security is enabled, the gateway is enabled and NetworkPolicy restricts intra-cluster ClusterIP access for workloads. Without the gateway, KAOS provides propagation only for local and development use; it does not enforce authentication, authorization, or token exchange. mTLS, SPIFFE, service mesh, and workload identity are future hardening, not selectable deployment modes.
+Security is binary. When KAOS security is enabled, the gateway is enabled and NetworkPolicy restricts intra-cluster ClusterIP access for workloads. Without the gateway, KAOS provides propagation only for local and development use; it does not enforce authentication, authorization, or token exchange. mTLS, SPIFFE, service mesh, sidecars, and pod-level workload identity are **out of scope** (not deferred): possession of the AIB credential under Kubernetes Secret isolation plus NetworkPolicy is the accepted trust model, and these layers are revisited only if a concrete requirement appears.
+
+The gateway pipeline calls **both** `jwt_authn` and `ext_authz`, and this is intentional, not redundant: `jwt_authn` cryptographically validates each token (signature against JWKS, issuer, audience, expiry) and exposes verified claims, while `ext_authz` is purely an allow/deny decision call. `ext_authz` does **not** validate token signatures on its own. Validating in `jwt_authn` first means the decision backend (AIB, or an OPA drop-in) receives already-verified identity and stays a pure decision point rather than re-implementing JWKS validation — see [ADR-KAOS-009](./ADR-KAOS-009-gateway-api-resource-boundary-enforcement.md).
 
 ModelAPI is covered uniformly by the gateway. Agents, MCPServers, and ModelAPIs use the same resource-boundary enforcement path, so ModelAPI does not need per-runtime authentication logic. LiteLLM remains responsible for model allowlists, budgets, rate limits, and model-internal policy. Ollama is treated as a backend model server behind LiteLLM or another protected KAOS surface.
 
 Per-resource security configuration is `spec.security.id` only. Authentication, authorization, token exchange, and credential wiring are operator-wide integration concerns; CRD authors cannot override them per resource.
 
-Sidecars are deferred. They may be reconsidered only for concrete future requirements such as local egress token injection or unsupported runtimes that cannot be placed behind the gateway.
+Sidecars are not selected, instead decision is to use gateway approach as per [ADR-KAOS-009](./ADR-KAOS-009-gateway-api-resource-boundary-enforcement.md). They may be reconsidered only for concrete future requirements such as local egress token injection or unsupported runtimes that cannot be placed behind the gateway.
 
 ---
 
@@ -63,19 +65,29 @@ The gateway is the only layer that can consistently enforce before requests reac
 
 Gateway enforcement also pairs with NetworkPolicy. Without NetworkPolicy, direct ClusterIP calls can bypass a gateway route. With NetworkPolicy, protected workloads accept resource-to-resource traffic through the gateway path instead of direct workload-to-workload access.
 
-### Why the SDK is propagation-only
+### Why the SDK is not the enforcement boundary
 
-The SDK remains important because it preserves request context across Agent, MCPServer, ModelAPI, A2A, autonomous, and third-party flows. It should not authenticate users or enforce KAOS resource authorization. Keeping the SDK propagation-only avoids duplicating gateway decisions in application code and keeps custom Python/SDK behavior from becoming the security boundary.
+The SDK preserves request context across Agent, MCPServer, ModelAPI, A2A, autonomous, and third-party flows, and keeps the agent's AIB actor token fresh. That is its job in the standard architecture; it does not authenticate users or enforce KAOS resource authorization.
 
-The SDK may still expose helper clients for off-gateway custom servers, but those helpers are exceptions for deliberately custom deployments. They are not the standard KAOS enforcement path.
+The SDK *does* ship explicit authorization helpers — `check_access` / `require_access` (call the AIB access-check API) and `get_token` / `exchange_token` (RFC 8693 token exchange) — described in [ADR-AIB-001](../adr-aib/ADR-AIB-001-aib-python-sdk-design.md). Using them as the primary enforcement path inside application/agent code was considered and **deliberately rejected**: it would duplicate the gateway decision in every runtime and language, let custom Python become the de-facto security boundary, and make the posture depend on application correctness. Instead, the gateway's `ext_authz` enforces the resource boundary uniformly for SDK and non-SDK runtimes alike.
+
+The helpers remain relevant at the **custom-MCP / off-gateway** level: a server intentionally run outside the gateway can call `require_access` itself to make a finer-grained decision. For example, a custom MCP server might gate an individual tool:
+
+```python
+# custom MCP server deliberately run off-gateway
+client.require_access(subject=ctx.user, actor=ctx.agent,
+                      resource="kaos://mcpserver/github", action="call")
+```
+
+This is an exception for custom deployments, not the standard path. KAOS does **not** currently plan tool-granular or argument-granular authorization at the gateway; coarse resource-boundary `access` is the modeled decision, and tool-level checks (if needed) are a runtime/SDK concern. Keeping enforcement at the gateway avoids duplicating decisions in application code and stops custom SDK behavior from becoming the security boundary.
 
 ### Why ModelAPI is covered by the gateway
 
 ModelAPI contains multiple runtime shapes. LiteLLM has useful model allowlist, budget, and rate controls, while Ollama is not an identity-aware enforcement point. Placing ModelAPI behind the same gateway enforcement path avoids per-runtime auth logic and gives Agent-to-ModelAPI access the same AIB resource-grant decision as Agent-to-MCPServer and Agent-to-Agent access.
 
-### Why mTLS, SPIFFE, sidecars, and mesh are future hardening
+### Why mTLS, SPIFFE, sidecars, and mesh are out of scope
 
-mTLS, SPIFFE, service mesh, workload identity, and sidecars can strengthen workload binding or local egress control, but they are not required to define KAOS resource authorization. Selecting the gateway plus NetworkPolicy as the required secured target keeps the architecture simple while leaving room for future hardening.
+mTLS, SPIFFE, service mesh, workload identity, and sidecars can strengthen workload binding or local egress control, but they are not required to define KAOS resource authorization and add substantial complexity. They are therefore **out of scope** rather than a planned future phase: the gateway plus NetworkPolicy, with possession of the AIB credential under Kubernetes Secret isolation, is the accepted trust model. These layers are revisited only if a concrete requirement (e.g. cryptographic pod-to-identity proof in a hostile multi-tenant cluster) actually appears.
 
 ---
 
@@ -132,4 +144,4 @@ mTLS, SPIFFE, service mesh, workload identity, and sidecars can strengthen workl
 2. Update operator URL injection so secured Agent-to-Agent, Agent-to-MCPServer, and Agent-to-ModelAPI calls use gateway routes.
 3. Define the AIB `ext_authz` and `ext_proc` request context, including neutral resource/action fields.
 4. Keep SDK work focused on context propagation, actor token lifecycle, and optional off-gateway helpers.
-5. Keep sidecar design deferred until a concrete future requirement appears.
+5. Treat sidecars, mTLS, SPIFFE, and mesh as out of scope; reconsider only if a concrete future requirement appears.

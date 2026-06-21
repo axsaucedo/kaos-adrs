@@ -7,7 +7,7 @@
 
 ## Decision
 
-Adopt **external TLS at the ingress/gateway boundary** as the baseline transport requirement.
+Adopt **external TLS at the ingress/gateway boundary** as the baseline transport requirement, and make Gateway-listener TLS **first-class and configurable** in the KAOS install so a secured deployment has a working certificate path out of the box.
 
 Because KAOS security enforcement is gateway-centric, security enabled means:
 
@@ -18,7 +18,28 @@ Because KAOS security enforcement is gateway-centric, security enabled means:
 
 Without the gateway, KAOS provides propagation only for local/dev use and no resource-to-resource enforcement.
 
-mTLS, SPIFFE, service mesh, native intra-service TLS, cert-manager chart support, and workload identity binding remain future optional hardening, not required transport security for the target model.
+### Gateway TLS configuration
+
+KAOS exposes a `security.tls` block that configures the HTTPS Gateway listener using common Kubernetes practice. There are three modes, all producing a standard `kubernetes.io/tls` Secret that the Gateway listener references:
+
+```yaml
+security:
+  tls:
+    mode: selfSigned            # selfSigned | certManager | provided
+    certManager:                # mode=certManager: reuse an existing cluster issuer (no new issuer is created)
+      issuerRef:
+        name: letsencrypt-prod
+        kind: ClusterIssuer      # ClusterIssuer | Issuer
+    secretName: ""              # mode=provided: name of an existing tls.crt/tls.key Secret
+```
+
+- **`selfSigned` (default, simplest).** The CLI/operator generates a self-signed certificate Secret and points the Gateway HTTPS listener at it. This gives a working TLS endpoint for dev, KIND, and quick installs with no external dependency. Clients trust it explicitly or skip verification in dev.
+- **`certManager` (recommended for production when present).** If cert-manager is already installed, KAOS creates a `Certificate` referencing an **existing** `Issuer`/`ClusterIssuer` (`issuerRef`); cert-manager provisions and rotates the Secret. KAOS does not install or own cert-manager and does not create issuers.
+- **`provided`.** The operator references an existing TLS Secret (from a cloud LB controller, corporate PKI, or a manually-created Secret). KAOS wires it to the listener and does no certificate management.
+
+The Gateway listener is rendered as HTTPS/443 with the resolved Secret when `security.tls` is set; plain HTTP remains the default only for non-secured/dev installs. cert-manager remains optional — it is one mode, not a hard dependency.
+
+mTLS, SPIFFE, service mesh, native intra-service (in-cluster pod-to-pod) TLS, and cryptographic workload binding are **out of scope** (not deferred): the gateway-terminated external TLS plus NetworkPolicy is the accepted transport posture, revisited only if a concrete requirement appears.
 
 ---
 
@@ -26,7 +47,7 @@ mTLS, SPIFFE, service mesh, native intra-service TLS, cert-manager chart support
 
 [ADR-KAOS-002](./ADR-KAOS-002-enforcement-topology.md) accepts the Envoy-compatible Gateway as the enforcement plane: `jwt_authn` validates inbound tokens, `ext_authz` asks AIB for allow/deny resource decisions, and `ext_proc` performs RFC 8693 token exchange.
 
-[ADR-KAOS-004](./ADR-KAOS-004-aib-responsibility-boundary.md) accepts AIB as the authorization and delegated-token broker, while placing Kubernetes ServiceAccount/SPIFFE workload binding in future hardening.
+[ADR-KAOS-004](./ADR-KAOS-004-aib-responsibility-boundary.md) accepts AIB as the authorization and delegated-token broker, while placing Kubernetes ServiceAccount/SPIFFE workload binding out of scope.
 
 [ADR-KAOS-005](./ADR-KAOS-005-authorization-and-policy-model.md) accepts simple AIB grant tables for resource authorization and treats OPA/Rego, Keycloak Authorization Services, and MCP tool/argument policy as optional policy extensions.
 
@@ -61,9 +82,9 @@ Relevant facts:
 
 Implication:
 
-- KAOS currently has a useful Gateway routing layer, but not a complete TLS/certificate management story.
-- Production hardening should target external TLS termination at the ingress/gateway boundary, without requiring a particular certificate automation mechanism.
-- Security-enabled deployments need gateway enforcement plus NetworkPolicy bypass prevention, even if certificate automation is supplied by the surrounding platform.
+- KAOS currently has a useful Gateway routing layer but no TLS/certificate values; this ADR adds a first-class `security.tls` block (selfSigned/certManager/provided) so the Gateway listener has a working certificate path.
+- The chart needs an HTTPS listener and a `kubernetes.io/tls` Secret reference driven by `security.tls`; `selfSigned` generates the Secret, `certManager` provisions it via an existing issuer, `provided` reuses one.
+- Security-enabled deployments need gateway enforcement plus NetworkPolicy bypass prevention regardless of which TLS mode supplies the certificate.
 
 ## Decision scope
 
@@ -74,7 +95,7 @@ This ADR fixes the following scope:
 3. Whether in-cluster mTLS, SPIFFE, or service mesh are required by default.
 4. Whether native Agent/MCPServer/ModelAPI TLS is required by default.
 5. Whether NetworkPolicy is part of the mandatory secured target.
-6. Which network security layers remain future optional hardening.
+6. Which network security layers are out of scope (revisit only on concrete need).
 
 ---
 
@@ -293,6 +314,7 @@ Best fit:
 2. When KAOS security is enabled, the Envoy-compatible Gateway is required and is the enforcement path.
 3. NetworkPolicy restricting direct ClusterIP workload-to-workload access is required when security is enabled because it prevents bypassing the gateway.
 4. Resource-to-resource authorization happens at the gateway through `jwt_authn`, `ext_authz`, and `ext_proc`, not in Python/SDK code.
-5. cert-manager is useful certificate automation but is not mandatory; deployments may use cloud load balancer certificates, corporate ingress, or trusted reverse proxies.
-6. Native Agent/MCPServer/ModelAPI TLS is future optional hardening, not mandatory by default.
-7. mTLS, SPIFFE, service mesh, and cryptographic workload binding are future optional hardening.
+5. Gateway-listener TLS is first-class and configurable via `security.tls` with three modes: `selfSigned` (default; generated cert for dev/simple installs), `certManager` (provision via an existing cluster issuer; KAOS does not install cert-manager), and `provided` (reuse an existing TLS Secret).
+6. cert-manager is one supported mode, not mandatory; deployments may use self-signed, cloud load balancer certificates, corporate ingress, or trusted reverse proxies.
+7. Native Agent/MCPServer/ModelAPI (in-cluster pod-to-pod) TLS is out of scope, revisited only on concrete need.
+8. mTLS, SPIFFE, service mesh, sidecars, and cryptographic workload binding are out of scope (not deferred), revisited only on concrete need.

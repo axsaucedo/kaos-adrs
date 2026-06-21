@@ -95,33 +95,18 @@ This matches:
 
 ### Per-agent authentication identity (AIB-issued)
 
-The logical identity above is an *identifier* used for grant lookup. It is not, by itself, a way for
-a workload to **authenticate as itself**. Multi-agent delegation requires that a calling agent prove
-which agent it is (see ADR-KAOS-004), so each identity-bearing **caller** (every Agent, and an MCPServer
-when it calls out) also has a first-class **authentication credential**:
+The logical identity above is an *identifier* used for grant lookup. It is not, by itself, a way for a workload to **authenticate as itself**. Multi-agent delegation requires that a calling agent prove which agent it is (see [ADR-KAOS-004](./ADR-KAOS-004-aib-responsibility-boundary.md)), so each identity-bearing **caller** (every Agent, and an MCPServer when it calls out) also has a first-class **authentication credential**:
 
-- The agent is registered with **AIB**, which issues it per-agent client credentials
-  (`client_id`/`client_secret`) through its admin API.
-- AIB acts as the OAuth2 authorization server for agents: the agent runs a `client_credentials` grant
-  against AIB's token endpoint to obtain a short-lived, AIB-signed **actor token** whose `sub`/`azp`
-  resolves to its KAOS logical identity.
-- AIB issues agent identity tokens; **Keycloak/Dex/OIDC remain human-only** (see ADR-KAOS-004 and ADR-KAOS-000).
-- Client authentication defaults to the `client_secret` (Argon2id-hashed by AIB); `private_key_jwt`
-  is a stronger option; mTLS/SPIFFE workload binding remains future hardening.
+- The agent is registered with **AIB**, which issues it per-agent client credentials (`client_id`/`client_secret`) through its admin API.
+- AIB acts as the OAuth2 authorization server for agents: the agent runs a `client_credentials` grant against AIB's token endpoint to obtain a short-lived, AIB-signed **actor token** whose `sub`/`azp` resolves to its KAOS logical identity.
+- AIB issues agent identity tokens; **Keycloak/Dex/OIDC remain human-only** (see [ADR-KAOS-004](./ADR-KAOS-004-aib-responsibility-boundary.md) and [ADR-KAOS-000](./ADR-KAOS-000-target-picture.md)).
+- Client authentication defaults to the `client_secret` (Argon2id-hashed by AIB); `private_key_jwt` is a stronger option; mTLS/SPIFFE workload binding is out of scope (revisit only on concrete need).
 
-The credential is provisioned by the external sync service into a Kubernetes Secret and **mounted into
-the pod by the operator** (see ADR-KAOS-008 and ADR-KAOS-009). The trust assumption is possession of the
-credential, protected by Kubernetes Secret isolation; cryptographic proof that the pod *is* the agent
-(mTLS/SPIFFE) is deferred future hardening.
+The credential is provisioned by the external sync service into a Kubernetes Secret and **mounted into the pod by the operator** (see [ADR-KAOS-008](./ADR-KAOS-008-aib-integration-and-synchronization-architecture.md) and [ADR-KAOS-009](./ADR-KAOS-009-gateway-api-resource-boundary-enforcement.md)). The trust assumption is possession of the credential, protected by Kubernetes Secret isolation; cryptographic proof that the pod *is* the agent (mTLS/SPIFFE) is out of scope (revisit only on concrete need).
 
 ### CRD surface: `spec.security.id` only
 
-`spec.security.id` is the **only** per-resource security field. Authentication and authorization are
-configured operator-wide (see ADR-KAOS-009), and identity/credentials are auto-provisioned. This is a
-deliberate design choice: there are **no per-resource `authentication`/`authorization`/public
-overrides**, so a CRD author cannot weaken the enforced security posture of the cluster. Requested
-access edges are expressed through existing wiring fields (`spec.mcpServers`, `spec.modelAPI`,
-`spec.agentNetwork`), not through `spec.security`.
+`spec.security.id` is the **only** per-resource security field. Authentication and authorization are configured operator-wide (see [ADR-KAOS-009](./ADR-KAOS-009-gateway-api-resource-boundary-enforcement.md)), and identity/credentials are auto-provisioned. This is a deliberate design choice: there are **no per-resource `authentication`/`authorization`/public overrides**, so a CRD author cannot weaken the enforced security posture of the cluster. Requested access edges are expressed through existing wiring fields (`spec.mcpServers`, `spec.modelAPI`, `spec.agentNetwork`), not through `spec.security`.
 
 ## Context
 
@@ -142,7 +127,7 @@ KAOS needs a target identity model that keeps Kubernetes authoritative for resou
 
 ### Cluster identity
 
-For now, do **not** include cluster identity in the KAOS logical identity.
+For now, do **not** include kubernetes cluster identity in the KAOS logical identity; we currently assume cluster contained identity (as opposed to assuming one AIB that oversees multiple k8s clusters with KAOS installed..
 
 Implication:
 
@@ -151,7 +136,7 @@ Implication:
 
 ### Grant survival
 
-Grants should survive Agent delete/recreate.
+Grants should survive Agent delete/recreate. This means that when a kaos resource is deleted, the permissions do not get automatically removed.
 
 Implication:
 
@@ -166,13 +151,13 @@ Tradeoff:
 
 ### ServiceAccounts
 
-Exclude ServiceAccounts from the initial implementation.
+Exclude ServiceAccounts from the initial implementation; workload/agent identity is provided by AIB integration, see [ADR-KAOS-008](./ADR-KAOS-008-aib-integration-and-synchronization-architecture.md).
 
 Implication:
 
 - The first implementation should not require Kubernetes ServiceAccount token validation or workload identity binding.
-- ServiceAccounts remain a future production hardening path.
-- SPIFFE/SPIRE remains an even later advanced option.
+- ServiceAccounts are out of scope; agent identity comes from AIB integration (see [ADR-KAOS-008](./ADR-KAOS-008-aib-integration-and-synchronization-architecture.md)).
+- SPIFFE/SPIRE is out of scope; revisited only if a concrete workload-attestation requirement appears.
 
 ### Identity-bearing resource types
 
@@ -181,7 +166,7 @@ Keep Agent, MCPServer, and ModelAPI in the target identity model for now.
 Implication:
 
 - Treat all three as KAOS-managed service identities conceptually.
-- ADR-KAOS-002 enforces Agent, MCPServer, and ModelAPI access at the gateway, while leaving ModelAPI model/budget internals to LiteLLM.
+- [ADR-KAOS-002](./ADR-KAOS-002-enforcement-topology.md) enforces Agent, MCPServer, and ModelAPI access at the gateway, while leaving ModelAPI model/budget internals to LiteLLM.
 
 ### CRD surface
 
@@ -194,7 +179,7 @@ Implication:
 
 ### KAOS/AIB synchronization
 
-Use a separate simple sync service, not KAOS operator push logic.
+Use a separate simple sync service, not KAOS operator push logic. See [ADR-KAOS-008](./ADR-KAOS-008-aib-integration-and-synchronization-architecture.md).
 
 Implication:
 
@@ -204,12 +189,13 @@ Implication:
 
 ### Workload verification for token exchange
 
-Do not require workload identity verification for AIB token exchange initially.
+Distinguish **agent authentication** from **workload (pod) identity verification**. Agent authentication *is* required: a caller must present its AIB-issued actor token (obtained via `client_credentials` using its per-agent client credential) for the gateway and AIB token exchange to act on it. What is **out of scope** is cryptographically verifying that the *pod* running the workload is bound to that identity (Kubernetes ServiceAccount / SPIFFE attestation).
 
 Implication:
 
-- Initial AIB flow can trust the relevant subject/client token model without additionally validating a ServiceAccount/SPIFFE identity.
-- Workload binding can be added later.
+- AIB token exchange trusts the verified agent actor token and user subject token; it does not additionally validate a ServiceAccount/SPIFFE workload attestation.
+- The trust assumption is **possession** of the agent credential, protected by Kubernetes Secret isolation and NetworkPolicy.
+- Cryptographic pod-to-identity binding (mTLS/SPIFFE) is out of scope and revisited only on concrete need (see [ADR-KAOS-002](./ADR-KAOS-002-enforcement-topology.md)).
 
 ### Autonomous run identity
 
@@ -218,7 +204,7 @@ Keep autonomous identity simple for now.
 Implication:
 
 - Autonomous runs use Agent identity plus run/session correlation initially.
-- Run-bound grants or run-scoped identities are deferred beyond the ADR-KAOS-006 approval/consent model.
+- Run-bound grants or run-scoped identities are deferred beyond the [ADR-KAOS-006](./ADR-KAOS-006-re-authentication-execution-model.md) approval/consent model.
 
 ## Consequences
 
@@ -228,8 +214,8 @@ Implication:
 - Each identity-bearing caller additionally has an AIB-issued per-agent authentication credential so it can authenticate as itself (the actor) for delegation; Keycloak stays human-only.
 - A separate KAOS-AIB sync service reconciles KAOS resources into AIB records and provisions per-agent credentials into Secrets; the operator mounts them into pods.
 - Grants survive delete/recreate when the resolved logical identity is the same.
-- ServiceAccounts and SPIFFE/mTLS workload binding are deferred future hardening.
-- Agent, MCPServer, and ModelAPI remain in the identity target picture. ADR-KAOS-009 uses those identities for gateway-enforced access decisions.
+- ServiceAccounts and SPIFFE/mTLS workload binding are out of scope (revisit only on concrete need).
+- Agent, MCPServer, and ModelAPI remain in the identity target picture. [ADR-KAOS-009](./ADR-KAOS-009-gateway-api-resource-boundary-enforcement.md) uses those identities for gateway-enforced access decisions.
 - Autonomous run identity remains Agent-level plus correlation for now (actor-only, no user subject).
 
 ## Follow-up
