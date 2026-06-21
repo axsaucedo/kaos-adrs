@@ -1,6 +1,6 @@
 # P0 — Feasibility validation and hypothesis testing (progress)
 
-**Phase**: P0 of [`../../security-and-identity/plan/proposed-split.md`](../../security-and-identity/plan/proposed-split.md)
+**Phase**: P0 of [`../../plan/proposed-split.md`](../../plan/proposed-split.md)
 **Status**: Complete — go.
 **Date**: 2026-06-21
 **Tracking issue**: axsaucedo/kaos#231

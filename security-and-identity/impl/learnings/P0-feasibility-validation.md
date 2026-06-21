@@ -1,6 +1,6 @@
 # P0 — Feasibility validation and hypothesis testing (learnings)
 
-**Phase**: P0 of [`../../security-and-identity/plan/proposed-split.md`](../../security-and-identity/plan/proposed-split.md)
+**Phase**: P0 of [`../../plan/proposed-split.md`](../../plan/proposed-split.md)
 **Date**: 2026-06-21
 
 This is the most consequential P0 output: what was confirmed, what surprised us, the groundwork uncovered, and the concrete changes proposed for `proposed-split.md`. The proposed plan-deltas at the end are **for review, not yet applied**.

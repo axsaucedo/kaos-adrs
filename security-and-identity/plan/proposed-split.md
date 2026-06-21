@@ -55,7 +55,7 @@ P0 validates and gates everything. P1–P8 build and wire the MVP bottom-up. P9�
 
 **Realises**: de-risks [ADR-AIB-002](../adr-aib/ADR-AIB-002-aib-access-check-api.md), [ADR-AIB-001](../adr-aib/ADR-AIB-001-aib-python-sdk-design.md) (propagation slice), [ADR-KAOS-004](../adr-kaos/ADR-KAOS-004-aib-responsibility-boundary.md)/[005](../adr-kaos/ADR-KAOS-005-authorization-and-policy-model.md) (encoding), [ADR-KAOS-008](../adr-kaos/ADR-KAOS-008-aib-integration-and-synchronization-architecture.md) (sync + install).
 
-**Depends on**: nothing. **Outputs**: a go/no-go + concrete plan-deltas. **Result**: complete — go. All hypotheses confirmed against a live AIB (locally and deployed to KIND): the synthetic-service/PermissionSet encoding, actor-token minting for LocalClients, actor-keyed allow/deny with fail-closed, two-identity propagation, KAOS→AIB sync, and a memory-backend KIND deploy. The deployability findings and the proposed plan-deltas this version incorporates are in [`../../impl/learnings/P0-feasibility-validation.md`](../../impl/learnings/P0-feasibility-validation.md).
+**Depends on**: nothing. **Outputs**: a go/no-go + concrete plan-deltas. **Result**: complete — go. All hypotheses confirmed against a live AIB (locally and deployed to KIND): the synthetic-service/PermissionSet encoding, actor-token minting for LocalClients, actor-keyed allow/deny with fail-closed, two-identity propagation, KAOS→AIB sync, and a memory-backend KIND deploy. The deployability findings and the proposed plan-deltas this version incorporates are in [`../impl/learnings/P0-feasibility-validation.md`](../impl/learnings/P0-feasibility-validation.md).
 
 ### P1 — Python SDK and header propagation (temporary home)
 
