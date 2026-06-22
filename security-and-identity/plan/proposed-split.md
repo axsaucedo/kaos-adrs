@@ -39,7 +39,7 @@ This grounds why the phases are shaped the way they are.
 
 ## The proposed phases
 
-P0 validates and gates everything. P1–P8 build and wire the MVP bottom-up. P9–P12 productionise, P13 documents, and P14 contributes the AIB-side work upstream. P0 learnings may reorder P5 (sync) and P6 (user auth) earlier.
+P0 validates and gates everything. P1–P3 and P5–P8 build and wire the MVP bottom-up. P9–P12 productionise, P13 documents, and P14 contributes the AIB-side work upstream. **Phase numbers are stable identifiers; the sections below are listed in execution order.** P4 (bypass prevention + TLS) is **resequenced to run after P11**, immediately before P12, because gateway-only enforcement (deny-direct-ClusterIP + TLS) breaks the current frontend's direct workload access and must land together with the coordinated frontend changes that move the UI onto the gateway path — and it is not needed by any of the earlier phases (only P12 consumes it). P0 learnings may reorder P5 (sync) and P6 (user auth) earlier.
 
 ### P0 — Feasibility validation and hypothesis testing — **complete (go)**
 
@@ -86,16 +86,6 @@ P0 validates and gates everything. P1–P8 build and wire the MVP bottom-up. P9�
 **Realises**: [ADR-KAOS-008](../adr-kaos/ADR-KAOS-008-aib-integration-and-synchronization-architecture.md) (integration/install), install UX in [ADR-KAOS-000](../adr-kaos/ADR-KAOS-000-target-picture.md), credential mounting from [ADR-KAOS-001](../adr-kaos/ADR-KAOS-001-identity-model-and-source-of-truth.md)/[009](../adr-kaos/ADR-KAOS-009-gateway-api-resource-boundary-enforcement.md).
 
 **Depends on**: P1, P2, and the AIB foundation (ADR-AIB-000). **Demoable**: a one-command install yields a cluster where an agent→MCP call is propagated and authorized end to end.
-
-### P4 — Bypass prevention and transport security
-
-**Goal**: make the gateway the *only* path and encrypt it.
-
-**Scope**: NetworkPolicy generation to deny direct ClusterIP workload-to-workload application traffic (so the gateway cannot be bypassed), and Gateway TLS (`selfSigned` / `certManager` / `provided`) on an HTTPS listener.
-
-**Realises**: NetworkPolicy from [ADR-KAOS-009](../adr-kaos/ADR-KAOS-009-gateway-api-resource-boundary-enforcement.md)/[002](../adr-kaos/ADR-KAOS-002-enforcement-topology.md) and TLS from [ADR-KAOS-007](../adr-kaos/ADR-KAOS-007-transport-security-and-hardening-baseline.md).
-
-**Depends on**: P3 (in-cluster wiring exists). **Demoable**: direct ClusterIP access is blocked; gateway traffic is TLS-terminated.
 
 ### P5 — Sync service to MVP-robust (external, in-repo)
 
@@ -167,6 +157,16 @@ P0 validates and gates everything. P1–P8 build and wire the MVP bottom-up. P9�
 
 **Depends on**: P2, and the AIB foundation (ADR-AIB-000).
 
+### P4 — Bypass prevention and transport security — **resequenced after P11**
+
+**Goal**: make the gateway the *only* path and encrypt it.
+
+**Scope**: NetworkPolicy generation to deny direct ClusterIP workload-to-workload application traffic (so the gateway cannot be bypassed), and Gateway TLS (`selfSigned` / `certManager` / `provided`) on an HTTPS listener.
+
+**Realises**: NetworkPolicy from [ADR-KAOS-009](../adr-kaos/ADR-KAOS-009-gateway-api-resource-boundary-enforcement.md)/[002](../adr-kaos/ADR-KAOS-002-enforcement-topology.md) and TLS from [ADR-KAOS-007](../adr-kaos/ADR-KAOS-007-transport-security-and-hardening-baseline.md).
+
+**Depends on**: P3 (in-cluster wiring exists). **Resequenced to run after P11**, immediately before P12: deliberately deferred out of the early MVP wave because locking traffic to the gateway-only path (deny-direct-ClusterIP + TLS) breaks the current frontend, which still reaches workloads directly. It must therefore land together with the coordinated frontend changes that move the UI onto the gateway path, and no earlier phase needs it — its only downstream consumer, P12, already sits after it. **Demoable**: direct ClusterIP access is blocked; gateway traffic is TLS-terminated.
+
 ### P12 — Enforcement and operational hardening
 
 **Goal**: complete the operational correctness story.
@@ -217,7 +217,6 @@ graph LR
   F --> P3[P3 Wire + install]
   P1 --> P3
   P2 --> P3
-  P3 --> P4[P4 NetworkPolicy + TLS]
   P3 --> P5[P5 Sync MVP-robust]
   P3 --> P6[P6 Keycloak user-auth]
   P3 --> P8[P8 CRD id override]
@@ -225,6 +224,8 @@ graph LR
   P1 --> P9[P9 SDK productionisation]
   P5 --> P10[P10 Sync productionisation + extract]
   P2 --> P11[P11 AIB API productionisation]
+  P11 --> P4[P4 NetworkPolicy + TLS]
+  P3 -.-> P4
   P4 --> P12[P12 Enforcement + ops hardening]
   P6 --> P12
   P7 --> P12
@@ -243,7 +244,6 @@ graph LR
 | P1 SDK + propagation | KAOS python (temp) | AIB-001 (propagation), KAOS-003 | P0 |
 | P2 Gateway `ext_authz` | KAOS + AIB | KAOS-009 (ext_authz), AIB-002 | P0, AIB foundation |
 | P3 Wire + install | KAOS (+ AIB deploy) | KAOS-008/000/001 | P1, P2, AIB foundation |
-| P4 NetworkPolicy + TLS | KAOS | KAOS-009/002/007 | P3 |
 | P5 Sync MVP-robust | KAOS (in-repo) | KAOS-008 | P3 (may move earlier) |
 | P6 Keycloak user-auth | KAOS | KAOS-001/009 | P3 (may move earlier) |
 | P7 `ext_proc` token exchange | KAOS + AIB | KAOS-009/004 | P3, P6 |
@@ -251,6 +251,7 @@ graph LR
 | P9 SDK productionisation | KAOS python | AIB-001, KAOS-006 | P1 |
 | P10 Sync productionisation + extract | KAOS → own repo | KAOS-008 | P5 |
 | P11 AIB API productionisation | AIB | AIB-002, KAOS-004/005 | P2, AIB foundation |
+| P4 NetworkPolicy + TLS *(resequenced)* | KAOS | KAOS-009/002/007 | P3 (data); runs after P11 |
 | P12 Enforcement + ops hardening | KAOS | KAOS-006/005/007 | P4, P6, P7 |
 | P13 Documentation | all | all | P9–P12 |
 | P14 Upstream AIB work (via fork) | AIB fork | ADR-AIB-000, AIB-001, AIB-002 | P9, P11 |
