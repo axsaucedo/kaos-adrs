@@ -1,13 +1,13 @@
 # ADR-AIB-001: AIB Python SDK design
 
-**Status**: Proposed
+**Status**: Accepted
 **Date**: 2026-06-20
 
 ---
 
 ## Decision
 
-Proposed decision: design the SDK as a **small third-party Python SDK for AIB interoperability**.
+Design the SDK as a **small third-party Python SDK for AIB interoperability**.
 
 The SDK should focus first on **automatic request context propagation**, using the same ergonomics as OpenTelemetry propagation:
 
@@ -195,17 +195,15 @@ Precedence:
 
 The SDK should support context enrichment at instrumentation time because most clients will not know the first agent server's local runtime identity. A typical incoming request may include no request ID, no actor, and no AIB-specific context. The first trusted server should fill the safe defaults.
 
-Default environment variables:
+Default environment variables, provided by the operator as the provider-agnostic `AGENT_AUTH_*` environment:
 
 ```text
-AIB_ACTOR
-AIB_PRINCIPAL
-AIB_SERVICE
-AIB_CONTEXT_ID
-AIB_SESSION_ID
+AGENT_AUTH_IDENTITY
+AGENT_AUTH_PRINCIPAL
+AGENT_AUTH_TOKEN
 ```
 
-`AIB_ACTOR` is the most important default for agent servers and MCP servers. It identifies the local runtime actor, for example `agent://researcher` or another deployment-defined opaque string. `AIB_PRINCIPAL` should be optional and is only appropriate when the process has a fixed trusted principal; user-specific principal values should normally come from verified request authentication or a resolver.
+`AGENT_AUTH_IDENTITY` is the most important default for agent servers and MCP servers. It identifies the local runtime actor (honouring `spec.security.id`), for example `agent://researcher` or another deployment-defined opaque string, and is the value the instrumentation injects as the actor. `AGENT_AUTH_PRINCIPAL` should be optional and is only appropriate when the process has a fixed trusted principal; user-specific principal values should normally come from verified request authentication or a resolver. `AGENT_AUTH_TOKEN` carries the runtime's AIB-issued actor token when one is pre-provisioned.
 
 Instrumentation should also accept explicit values and resolver callbacks:
 
@@ -222,7 +220,7 @@ aib.instrument_fastapi(
 Equivalent environment-driven setup should work without code-level identity arguments:
 
 ```bash
-export AIB_ACTOR="agent://researcher"
+export AGENT_AUTH_IDENTITY="agent://researcher"
 ```
 
 ```python
@@ -358,7 +356,7 @@ KAOS-specific identity mapping remains outside the SDK. KAOS can provide the act
 
 ```yaml
 env:
-  - name: AIB_ACTOR
+  - name: AGENT_AUTH_IDENTITY
     value: kaos://agent/default/researcher
 ```
 
@@ -510,19 +508,18 @@ Initial client construction:
 import aib
 
 client = aib.Client(
-    base_url="https://aib.example.com",
-    api_key_env="AIB_API_KEY",
+    base_url="https://aib.example.com",   # or AGENT_AUTH_BASE_URL
 )
 ```
 
 Default environment variables:
 
 ```text
-AIB_BASE_URL
-AIB_API_KEY
+AGENT_AUTH_BASE_URL
+AGENT_AUTH_TOKEN_ENDPOINT
 ```
 
-If `base_url` is not passed, the client should read `AIB_BASE_URL`. If an API key or workload credential is not passed, the client should read the configured env var. The SDK should not prescribe the final AIB server authentication mechanism; it should support the current AIB deployment while leaving room for workload identity later.
+If `base_url` is not passed, the client reads `AGENT_AUTH_BASE_URL`. The off-gateway client authenticates to AIB with the agent's AIB-issued actor token (minted from the `AGENT_AUTH_*` credentials) rather than a prescribed API key, so it supports the current AIB deployment while leaving room for workload identity later.
 
 ### Machine identity and actor-token lifecycle
 
@@ -535,9 +532,9 @@ import aib
 
 # Credentials come from the mounted Secret (provisioned by the sync service, mounted by the operator).
 aib.instrument_agent_identity(
-    issuer_env="AIB_ISSUER",                 # AIB OIDC issuer (mints agent tokens; exposes JWKS)
-    client_id_env="AIB_CLIENT_ID",
-    client_secret_file="/var/run/aib/client_secret",   # projected file; watched for rotation
+    issuer_env="AGENT_AUTH_ISSUER",                 # AIB OIDC issuer (mints agent tokens; exposes JWKS)
+    client_id_env="AGENT_AUTH_CLIENT_ID",
+    client_secret_file="/var/run/aib/client_secret",   # projected file; watched for rotation (AGENT_AUTH_CLIENT_SECRET_FILE)
 )
 
 token = aib.actor_token()                    # cached, always-fresh AIB actor token (sub/azp = this agent)
@@ -641,6 +638,10 @@ aib.AIBUnavailable
 
 `ReauthenticationRequired` should expose the relevant URL and structured decision details so callers can return a retryable response to the user. Missing or expired user grants should be represented as an access-denied or user-grant-required outcome, because current AIB token exchange does not expose a dedicated grant-renewal URL field.
 
+### Detecting gateway outcomes from responses
+
+Because enforcement happens at the gateway, the SDK also surfaces gateway-produced outcomes from ordinary instrumented responses, not only from explicit `check_access` calls. Detection keys off response headers rather than the HTTP status code or body: the presence of `x-kaos-access-reason` signals that a KAOS gateway enforcement outcome applies (for any status), and `x-kaos-reauth-url` promotes the outcome to a re-authentication. The SDK exposes `outcome_from_response`, which maps these headers to a typed `AccessDecision`, and `raise_for_gateway_outcome`, which raises `AccessDenied` or `ReauthenticationRequired` (with the URL) accordingly. Responses without `x-kaos-access-reason` are treated as ordinary results and pass through untouched.
+
 ### Delegated token retrieval
 
 For third-party APIs, callers should ask AIB for a delegated token rather than storing or refreshing third-party tokens locally:
@@ -717,7 +718,7 @@ The following flows define what KAOS needs from the SDK across Agent, MCPServer,
 
 ### Flow 1: user invokes an agent
 
-An incoming request reaches the first agent server. The SDK instrumentation extracts trusted headers, generates `request_id` if absent, enriches `actor` from `AIB_ACTOR` or explicit configuration, and resolves `principal` from verified user authentication.
+An incoming request reaches the first agent server. The SDK instrumentation extracts trusted headers, generates `request_id` if absent, enriches `actor` from `AGENT_AUTH_IDENTITY` or explicit configuration, and resolves `principal` from verified user authentication.
 
 The agent server checks root access:
 

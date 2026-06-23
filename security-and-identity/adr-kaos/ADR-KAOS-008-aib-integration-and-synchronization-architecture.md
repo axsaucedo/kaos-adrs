@@ -52,8 +52,9 @@ The synchronization service is responsible for:
    - Avoid auto-approving access because an Agent references an MCPServer, ModelAPI, or sub-agent.
 
 4. **Bootstrap mapping**
-   - For the current AIB model, optionally encode early KAOS resource access through a synthetic internal service and PermissionSet scopes.
-   - Mark this as compatibility encoding, not the target platform/resource grant model.
+   - For the current AIB model, encode early KAOS resource access through a synthetic internal service and PermissionSet scopes.
+   - In this encoding the projection binds each CRD-referenced edge as a bound PermissionSet, and AIB allows the call whenever a bound set covers the requested scope, so the CRD reference is effectively the grant today. The projection never mints an approval status of its own and keeps projected `granted_resources` distinct from the binding, so the bootstrap binding stays the single source of the decision.
+   - Mark this as compatibility encoding, not the target platform/resource grant model; a first-class requested-versus-approved separation is deferred.
 
 5. **Agent identity and credential provisioning**
    - Ensure required AIB agent records, third-party service records, and PermissionSets exist when KAOS declares or references them.

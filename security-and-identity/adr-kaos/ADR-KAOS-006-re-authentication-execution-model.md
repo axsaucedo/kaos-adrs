@@ -21,7 +21,9 @@ By default, the gateway-centric target model must treat these outcomes separatel
 | Runtime-created admin approval request | Deferred; not implemented in current AIB. | Not surfaced by KAOS today. |
 | MCP tool/argument approval | Deferred; not modeled in the target model. | Not surfaced by KAOS today. |
 | A2A task pause/resume via `input-required` | Deferred; KAOS has the state but not the durable resume workflow. | Future durable task workflow. |
-| Autonomous run needs a user action | Stop/skip the protected action and record a structured `user_action_required` event; do not block indefinitely or auto-grant. | Agent/task event handling after the gateway response. |
+| Autonomous run needs a user action | Record a single structured `user_action_required` event and end the run gracefully; do not block indefinitely or auto-grant. | Agent/task event handling after the gateway response. |
+
+These outcomes are surfaced to the runtime through machine-readable response headers, not through the HTTP status code or response body, so detection is uniform across the `ext_authz` and `ext_proc` paths. The gateway-surfaced response carries `x-kaos-access-reason` (the reason code above) whenever an outcome applies, and `x-kaos-reauth-url` when a re-authentication URL is available. The runtime treats the presence of `x-kaos-access-reason` as the signal that a KAOS enforcement outcome occurred, and promotes the outcome to a re-authentication when `x-kaos-reauth-url` is present. `platform_grant_missing` and `user_grant_required` carry no URL; `third_party_reauth_required` carries `x-kaos-reauth-url`.
 
 The standard path is gateway enforcement:
 
@@ -224,7 +226,7 @@ deny:
   reauth_url: https://aib.example.com/api/third-party/{serviceId}/oauth2/authorize
 ```
 
-The gateway `ext_proc` path surfaces an immediate response from AIB token exchange with the re-auth URL, using the RFC 8693 error response shape including `error_uri` where applicable. The user reconnects or re-authorizes the third-party service and retries the operation.
+The gateway `ext_proc` path surfaces an immediate response from AIB token exchange carrying the re-auth URL. The immediate response is an HTTP 200 JSON-RPC error (code `-32042`) whose `data.reason` is `third_party_reauth_required` and whose `data.reauth_url` is the third-party authorization URL (derived from the AIB OAuth2 session `error_uri`); the same values are mirrored onto the `x-kaos-access-reason` and `x-kaos-reauth-url` response headers so the runtime can detect the outcome from headers alone. The user reconnects or re-authorizes the third-party service and retries the operation.
 
 If only the third-party access token is expired and the refresh token is valid, AIB should refresh internally and return a usable access token. The runtime should not involve the user in that case.
 
@@ -246,17 +248,17 @@ These require a separate task/UI approval model and policy vocabulary.
 
 Autonomous runs must not reconnect third-party accounts or wait indefinitely for a human.
 
-If an autonomous run encounters a missing user grant or third-party re-authentication requirement:
+When an autonomous run encounters a missing user grant or third-party re-authentication requirement, the run records exactly one structured `user_action_required` event (and sets `user_action_required` on the task metadata) and then ends gracefully:
 
 ```text
 record event:
-  user_action_required
+  user_action_required   # exactly once, with the access reason + reauth_url when present
 
-stop/skip protected action:
-  depending on agent task semantics
+end the run:
+  the protected action is not retried; the task completes rather than looping
 ```
 
-The detailed policy for pausing/resuming autonomous runs is deferred until KAOS has durable task approval support.
+Recording a single event and ending avoids both a retry storm against the same denial and an indefinite block waiting on a human. The detailed policy for durable pausing/resuming autonomous runs is deferred until KAOS has durable task approval support.
 
 ---
 
@@ -273,7 +275,7 @@ Relevant facts:
 - The JSON-RPC route supports `tasks/send`, `tasks/get`, `tasks/list`, and `tasks/cancel`.
 - There is no explicit resume/continue method that attaches user approval input to an existing `input-required` task.
 - `LocalTaskManager` stores tasks in process memory.
-- Current execution paths transition tasks directly to `COMPLETED` or `FAILED`; they do not surface structured approval requests.
+- The synchronous execution paths transition tasks to `COMPLETED` or `FAILED`; on a gateway-surfaced access outcome the autonomous path records a single `user_action_required` event and metadata before completing, rather than pausing on a durable approval request.
 
 Implication:
 
@@ -359,7 +361,7 @@ Rejected as the production/default security behavior. It conflicts with no-permi
 ## Decision summary
 
 1. The target model separates platform resource grants, user delegated grants, third-party OAuth2 sessions, and runtime human approvals.
-2. These structured outcomes are surfaced through the gateway path: `ext_authz` denied responses for grant decisions and `ext_proc` immediate responses for token-exchange or third-party re-authentication `error_uri` handling.
+2. These structured outcomes are surfaced through the gateway path and detected by the runtime from response headers (`x-kaos-access-reason`, and `x-kaos-reauth-url` when a URL applies) rather than from the status code or body: `ext_authz` denied responses carry the grant-decision reason, and `ext_proc` immediate responses carry the token-exchange or third-party re-authentication reason and URL.
 3. Current AIB supports admin configuration, user grants, OAuth2 sessions, and token exchange; it does not currently support runtime-created admin approval requests.
 4. Missing platform resource grants fail closed with `platform_grant_missing`; no user action URL should be returned for that case.
 5. Missing or expired user delegated grants fail with `user_grant_required`; current AIB token exchange does not expose a dedicated grant-renewal URL field.
@@ -368,6 +370,6 @@ Rejected as the production/default security behavior. It conflicts with no-permi
 8. Synchronous requests must not block while waiting for re-authentication or additional approval.
 9. A2A `input-required` pause/resume is deferred until KAOS has durable tasks, resume APIs, approval payloads, and UI support.
 10. Runtime human approval for specific tool actions is deferred until KAOS models tool/argument permissions or approval policies explicitly.
-11. Autonomous runs must not wait indefinitely; they should record structured user-action-required events and stop/skip protected actions.
+11. Autonomous runs must not wait indefinitely; on a gateway-surfaced access outcome they record exactly one structured `user_action_required` event (plus task metadata) and end the run gracefully without retrying the protected action.
 12. CRD references must not auto-create approved resource grants in production/default security behavior.
 13. SDK access-check and token-exchange helpers are only for custom off-gateway servers; the standard enforcement and token-exchange path is the gateway.

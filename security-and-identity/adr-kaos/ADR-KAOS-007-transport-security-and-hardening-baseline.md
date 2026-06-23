@@ -13,8 +13,9 @@ Because KAOS security enforcement is gateway-centric, security enabled means:
 
 1. The Envoy-compatible Gateway is enabled and is the required enforcement path.
 2. External user/client traffic uses TLS at the ingress, Gateway, load balancer, or trusted reverse proxy boundary.
-3. NetworkPolicy restricts direct ClusterIP workload-to-workload traffic for KAOS workloads so resource-to-resource calls cannot bypass the gateway.
-4. Resource-to-resource authorization happens at the gateway through Envoy `jwt_authn`, `ext_authz`, and `ext_proc`, not in Python/SDK code.
+3. NetworkPolicy restricts direct ClusterIP workload-to-workload traffic for KAOS workloads so resource-to-resource calls cannot bypass the gateway. Ingress restriction is the baseline; an optional egress NetworkPolicy (default-off, gated by `SECURITY_NETWORK_POLICY_EGRESS_ENABLED`) additionally constrains outbound traffic to the allowed set — DNS, the gateway, the operator, and AIB — with ModelAPI workloads additionally permitted provider egress.
+4. The Gateway HTTPS listener negotiates a minimum TLS version of 1.2, enforced through a Gateway `ClientTrafficPolicy`.
+5. Resource-to-resource authorization happens at the gateway through Envoy `jwt_authn`, `ext_authz`, and `ext_proc`, not in Python/SDK code.
 
 Without the gateway, KAOS provides propagation only for local/dev use and no resource-to-resource enforcement.
 
@@ -37,7 +38,7 @@ security:
 - **`certManager` (recommended for production when present).** If cert-manager is already installed, KAOS creates a `Certificate` referencing an **existing** `Issuer`/`ClusterIssuer` (`issuerRef`); cert-manager provisions and rotates the Secret. KAOS does not install or own cert-manager and does not create issuers.
 - **`provided`.** The operator references an existing TLS Secret (from a cloud LB controller, corporate PKI, or a manually-created Secret). KAOS wires it to the listener and does no certificate management.
 
-The Gateway listener is rendered as HTTPS/443 with the resolved Secret when `security.tls` is set; plain HTTP remains the default only for non-secured/dev installs. cert-manager remains optional — it is one mode, not a hard dependency.
+The Gateway listener is rendered as HTTPS/443 with the resolved Secret when `security.tls` is set; plain HTTP remains the default only for non-secured/dev installs. The HTTPS listener negotiates a minimum TLS version of 1.2 through a Gateway `ClientTrafficPolicy`. cert-manager remains optional — it is one mode, not a hard dependency.
 
 mTLS, SPIFFE, service mesh, native intra-service (in-cluster pod-to-pod) TLS, and cryptographic workload binding are **out of scope** (not deferred): the gateway-terminated external TLS plus NetworkPolicy is the accepted transport posture, revisited only if a concrete requirement appears.
 
@@ -75,7 +76,7 @@ Relevant facts:
 - The default listener is:
   - `port: 80`
   - `protocol: HTTP`
-- Gateway listener TLS configuration is not currently modeled in chart values.
+- Gateway listener TLS is modeled in chart values through the `security.tls` block decided by this ADR (`selfSigned`/`certManager`/`provided`), rendering an HTTPS/443 listener backed by a `kubernetes.io/tls` Secret; plain HTTP/80 remains the default for non-secured/dev installs.
 - Generated Gateway endpoints use `http://{gatewayHost}/...`.
 - HTTPRoutes are created for Agents, MCPServers, and ModelAPIs when Gateway API is enabled.
 - HTTPRoute rules include URL rewrite and request timeout support.
@@ -255,10 +256,15 @@ This option adds Kubernetes NetworkPolicies so Agents, MCPServers, and ModelAPIs
 Example:
 
 ```text
-NetworkPolicy:
+NetworkPolicy (ingress, baseline):
   allow KAOS workload -> Gateway/AIB
   deny Agent -> MCPServer direct ClusterIP
   deny Agent -> ModelAPI direct ClusterIP
+
+NetworkPolicy (egress, optional, default-off via SECURITY_NETWORK_POLICY_EGRESS_ENABLED):
+  allow KAOS workload -> DNS, Gateway, operator, AIB
+  allow ModelAPI workload -> provider egress
+  deny other outbound
 ```
 
 This is less complex than service mesh and is required for gateway-centric enforcement. The gateway can only be the enforcement plane if workloads cannot bypass it with direct ClusterIP calls.
@@ -312,9 +318,9 @@ Best fit:
 
 1. External TLS at the ingress, Gateway, load balancer, or trusted reverse proxy boundary is the baseline transport requirement.
 2. When KAOS security is enabled, the Envoy-compatible Gateway is required and is the enforcement path.
-3. NetworkPolicy restricting direct ClusterIP workload-to-workload access is required when security is enabled because it prevents bypassing the gateway.
+3. NetworkPolicy restricting direct ClusterIP workload-to-workload access is required when security is enabled because it prevents bypassing the gateway. Ingress restriction is the baseline; an optional egress NetworkPolicy (default-off, gated by `SECURITY_NETWORK_POLICY_EGRESS_ENABLED`) constrains outbound traffic to DNS, the gateway, the operator, and AIB, with ModelAPI workloads additionally allowed provider egress.
 4. Resource-to-resource authorization happens at the gateway through `jwt_authn`, `ext_authz`, and `ext_proc`, not in Python/SDK code.
-5. Gateway-listener TLS is first-class and configurable via `security.tls` with three modes: `selfSigned` (default; generated cert for dev/simple installs), `certManager` (provision via an existing cluster issuer; KAOS does not install cert-manager), and `provided` (reuse an existing TLS Secret).
+5. Gateway-listener TLS is first-class and configurable via `security.tls` with three modes: `selfSigned` (default; generated cert for dev/simple installs), `certManager` (provision via an existing cluster issuer; KAOS does not install cert-manager), and `provided` (reuse an existing TLS Secret). The HTTPS listener enforces a minimum TLS version of 1.2 via a Gateway `ClientTrafficPolicy`.
 6. cert-manager is one supported mode, not mandatory; deployments may use self-signed, cloud load balancer certificates, corporate ingress, or trusted reverse proxies.
 7. Native Agent/MCPServer/ModelAPI (in-cluster pod-to-pod) TLS is out of scope, revisited only on concrete need.
 8. mTLS, SPIFFE, service mesh, sidecars, and cryptographic workload binding are out of scope (not deferred), revisited only on concrete need.

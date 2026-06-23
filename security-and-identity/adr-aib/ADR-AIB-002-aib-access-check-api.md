@@ -211,8 +211,9 @@ Given a valid actor token, an approved resource grant for that actor, and a targ
 
 1. Given a valid actor token and resource, when the SDK calls the access-check API, then AIB validates the actor token and derives the actor from it (not from any subject `azp`).
 2. Given an approved resource grant for the actor, when AIB checks access, then the response is `allowed: true`.
-3. Given no matching grant for the actor, when AIB checks access, then the response is `allowed: false` with reason `grant_missing`.
-4. Given an expired grant, when AIB checks access, then the response is `allowed: false` with reason `grant_expired`.
+3. Given no matching platform grant for the actor, when AIB checks access, then the response is `allowed: false` with reason `platform_grant_missing`.
+4. Given a platform grant but no current user delegation for the required permission set, when AIB checks access, then the response is `allowed: false` with reason `user_grant_required`.
+5. Given an expired grant, when AIB checks access, then the response is `allowed: false` with reason `grant_expired`.
 
 ### User Story 2 - Gateway enforces route-level access before backend (P1)
 
@@ -404,7 +405,7 @@ It is not the primary Gateway authorization API because current behavior passes 
   "resource": "kaos://mcpserver/default/github",
   "action": "access",
   "decision_id": "dec-124",
-  "reason": "grant_missing",
+  "reason": "platform_grant_missing",
   "message": "No active grant allows this actor to access the requested resource"
 }
 ```
@@ -426,7 +427,9 @@ Reason codes:
 
 ```text
 allowed
-grant_missing
+platform_grant_missing
+user_grant_required
+third_party_reauth_required
 grant_expired
 resource_not_found
 ambiguous_resource
@@ -436,6 +439,8 @@ policy_denied
 unsupported_resource_type
 configuration_error
 ```
+
+`platform_grant_missing` is returned when no platform resource grant binds the actor to the target (no user action URL is available). `user_grant_required` is returned when the platform grant exists but the user has not delegated, or no longer delegates, the required permission set; it is produced through the optional consent check and also carries no URL on the `ext_authz` path. `third_party_reauth_required` is produced by the `ext_proc` token-exchange path when the user's third-party OAuth2 session is missing, expired beyond refresh, revoked, or under-scoped, and it carries a `reauth_url`.
 
 ---
 

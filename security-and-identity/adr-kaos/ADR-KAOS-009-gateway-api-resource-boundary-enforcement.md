@@ -410,6 +410,8 @@ NetworkPolicy is part of the required secured target. The operator generates pol
 - allow workload egress to Gateway and AIB,
 - deny direct workload-to-protected-service application traffic.
 
+Ingress restriction is the baseline. An optional egress policy (default-off, gated by `SECURITY_NETWORK_POLICY_EGRESS_ENABLED`) additionally constrains outbound traffic to the allowed set — DNS, the Gateway, the operator, and AIB — with ModelAPI workloads also permitted provider egress so they can reach upstream LLM providers.
+
 ClusterIP Services still exist for Kubernetes mechanics, but protected application traffic is only reachable through the Gateway. Effectiveness depends on CNI NetworkPolicy support, which must be validated per cluster.
 
 ---

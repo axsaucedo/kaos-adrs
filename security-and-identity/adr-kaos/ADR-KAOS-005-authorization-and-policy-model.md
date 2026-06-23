@@ -64,7 +64,7 @@ Per-resource security configuration is `spec.security.id` only. Authentication, 
 
 ### Backend-neutral authorization integration
 
-The authorization integration is backend-neutral: it uses the standard Envoy `ext_authz` gRPC contract (`envoy.service.auth.v3.Authorization/Check`) and neutral `kaos.resource` / `kaos.action` `context_extensions`. AIB is the default backend. OPA is swappable as a drop-in backend via opa-envoy with no Envoy or KAOS configuration change, provided it has equivalent policy and data. Keycloak-as-authz would need an adapter because it is the IdP, not an `ext_authz` backend.
+The authorization integration is backend-neutral: it uses the standard Envoy `ext_authz` gRPC contract (`envoy.service.auth.v3.Authorization/Check`) and neutral `kaos.resource` / `kaos.action` `context_extensions`. The backend is selected purely by configuration — the operator derives the `ext_authz` backend from `--ext-authz-url` (`security.agentAuth.extAuthzUrl`) — so swapping backends requires no Envoy filter change and no KAOS code change. AIB is the default backend. OPA is a proven drop-in alternative via opa-envoy when it is fed equivalent policy and data: the repository ships a reference drop-in (Rego policy, grant data bundle, and opa-envoy manifest under `docs/security/opa-drop-in/`), and the operator's policy construction is config-driven so pointing the backend URL at OPA needs no controller change. Keycloak-as-authz would need an adapter because it is the IdP, not an `ext_authz` backend.
 
 ---
 
@@ -256,7 +256,7 @@ The model has two distinct grant families:
 
 Policy is primarily grant lookup, expiry/status checks, and simple metadata checks.
 
-In practice, an Agent that references an MCPServer in its CRD would not automatically be allowed to call it. The CRD reference becomes a requested edge. AIB needs a matching approved resource grant before the gateway allows the call.
+In the target model, an Agent that references an MCPServer in its CRD is not automatically allowed to call it: the CRD reference is the requested edge, and AIB needs a matching approved resource grant before the gateway allows the call. The current implementation encodes this as a bootstrap binding rather than a first-class approval workflow. The sync service projects each CRD-referenced edge into AIB as a bound permission set, and AIB's runtime decision (`Decide`) allows whenever a bound permission set covers the requested actor, target, and action — it does not yet filter on an explicit `status=approved` flag. The CRD reference is therefore effectively the grant today. A first-class requested-versus-approved model (an explicit approval gate distinct from the CRD wiring) is deferred; the projection deliberately never mints an approval status of its own, and the operator writes no approval state, so the bootstrap binding stays the single source of the decision until that model is added.
 
 Example:
 
