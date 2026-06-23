@@ -1,0 +1,37 @@
+# P12 — Enforcement and operational hardening (progress)
+
+**Phase**: P12 of [`../../plan/proposed-split.md`](../../plan/proposed-split.md)
+**Plan**: [`../../plan/P12-enforcement-and-hardening.md`](../../plan/P12-enforcement-and-hardening.md)
+**Status**: Implementation complete. The gateway enforcement (P2 ext_authz, P6 user-auth, P7 ext_proc token exchange), bypass prevention (P4 ingress NetworkPolicy + TLS), and the sync/SDK machinery now have the missing operational-correctness layer: when enforcement denies or needs a human action, the system surfaces a structured, machine-readable outcome end to end, and the secured posture is hardened with egress NetworkPolicy and a TLS minimum version. The requested-vs-approved separation is guarded, and the ext_authz integration is demonstrated backend-neutral with an OPA drop-in.
+**Date**: 2026-06-23
+**Repos / branches**: KAOS `feat/enforcement-and-hardening` (stacked on `feat/network-policy-and-tls`, PR #242); AIB `feat/aib-outcome-reason-codes` (stacked on `feat/aib-access-check`, `aib-tmp` review PR #4).
+
+## Outcome
+
+Before P12 the gateway could deny or require re-authentication, but the runtime had no handling for either outcome — a denied outbound call surfaced only as a generic error, and an autonomous run would re-hit the same denial every iteration. AIB also emitted a single generic `grant_missing` reason that did not distinguish a missing platform grant from a missing user-delegated grant, and carried no re-auth URL on the token-exchange path. P12 closes this without changing default-off behaviour:
+
+- **AIB outcome taxonomy (ADR-006).** The access-check `grant_missing` reason is split into `platform_grant_missing` (no actor→resource platform grant) and `user_grant_required` (a resource needing a user-delegated grant that is missing/expired, detected via the broker's existing `consent.VerifyAgentAccess` building block where a grant verifier is wired, falling back to the platform reason otherwise). Both surface on the HTTP body and the gRPC ext_authz `x-kaos-access-reason` header. The ext_proc token-exchange immediate response is formalised to carry a structured `third_party_reauth_required` reason plus `reauth_url` (from the OAuth2 session `error_uri`) in the JSON-RPC error shape, and sets matching `x-kaos-access-reason` / `x-kaos-reauth-url` response headers. `platform_grant_missing` carries no URL.
+- **Runtime synchronous outcome consumption.** The SDK-instrumented outbound `httpx` path interprets gateway-surfaced outcomes **from response headers** into typed SDK results: an `x-kaos-access-reason` header (any status) maps to a typed authorization outcome, and the presence of `x-kaos-reauth-url` promotes it to a re-authentication outcome carrying the URL. The runtime surfaces these in the synchronous chat/A2A response — the assistant message states the denied resource and reason, and "reconnect `<service>` at `<reauth_url>`" when a URL is present — without blocking and without auto-granting. When security is off or no such header is seen, behaviour is unchanged.
+- **Autonomous `user_action_required` event.** In the autonomous loop, an access outcome raised during an iteration is detected (walking the exception cause/context chain), recorded as exactly one structured `user_action_required` event plus `task.metadata["user_action_required"]`, sets the last response, and ends the run gracefully — never looping on the same denial, never blocking indefinitely, never auto-granting.
+- **Requested-vs-approved guard.** The KAOS→AIB projection is locked to never emit an approval status of its own: platform grants are represented only as the bootstrap permission-set binding, kept structurally distinct from the requested CRD edges (`granted_resources`), so a future approval gate can sit between them without restructuring the projection. The operator writes no approval/grant state at all.
+- **Backend-neutral OPA drop-in.** A sample Rego policy + opa-envoy ext_authz manifest under `docs/security/opa-drop-in`, plus a test asserting the generated `SecurityPolicy.spec.extAuth.grpc.backendRef` follows the configured `ext_authz` URL for both the default AIB backend and an opa-envoy backend — proving the integration is swappable by configuration alone (`--ext-authz-url` / `security.agentAuth.extAuthzUrl`) with no Envoy/KAOS code change.
+- **Transport hardening.** Egress NetworkPolicy (default-off, gated by `SECURITY_NETWORK_POLICY_EGRESS_ENABLED`) allowing DNS/gateway/operator/AIB for all secured workloads and provider egress (`0.0.0.0/0`) for ModelAPI, plus a TLS minimum-version `ClientTrafficPolicy` (`spec.tls.minVersion: "1.2"`), wired through the chart and a CLI flag.
+
+## Deliverables
+
+| Area | Deliverable |
+|---|---|
+| AIB reason split | `internal/domain/accesscheck/service.go` — `denyMissingGrant` -> `platform_grant_missing` / `user_grant_required` via optional `userGrants` (`consent.VerifyAgentAccess`), nil-safe fallback; gRPC `x-kaos-access-reason` carries the reason. |
+| AIB ext_proc reauth | `internal/extproc/server/server.go` — `urlElicitationResponse` returns HTTP 200 JSON-RPC `-32042` with `data.reason: third_party_reauth_required` + `data.reauth_url`, and sets `x-kaos-access-reason` / `x-kaos-reauth-url` response headers. |
+| SDK outcome parsing | `pydantic-ai-server/aib/instrument.py` (`HEADER_ACCESS_REASON` / `HEADER_REAUTH_URL`, `_raise_for_gateway_outcome` on sync/async send), `aib/client.py` (`outcome_from_response`, `raise_for_gateway_outcome`), `aib/__init__.py` exports. |
+| Runtime surfacing | `pydantic-ai-server/pais/outcomes.py` (shared `find_access_outcome` / `format_access_outcome` / `access_event_data`); `pais/server.py` (`_process_message` surfaces outcome + `access_outcome` memory event); `pais/a2a.py` (`EVENT_USER_ACTION_REQUIRED`, records one event + metadata then ends the autonomous run). |
+| Requested-vs-approved guard | `sync-service/tests/test_projection.py` — guards that admin bodies carry no approval keys, bindings carry only a mandatory requirement type, and requested edges stay distinct from the binding. |
+| OPA drop-in | `docs/security/opa-drop-in/{README.md,kaos_authz.rego,kaos_grants.json,opa-envoy.yaml}`; `operator/pkg/security/securitypolicy_test.go` — `TestConstructSecurityPolicyBackendRefIsConfigDriven`. |
+| Egress + TLS | `operator/pkg/security/{networkpolicy,config}.go` (egress gated by `SECURITY_NETWORK_POLICY_EGRESS_ENABLED`, TLS min-version `ClientTrafficPolicy`); chart values + CLI flag. |
+
+## Validation
+
+- **Per-TODO + final.** pydantic-ai-server: `275 passed, 10 skipped`, `make lint` (black + ty) green. sync-service: `77 passed`, `black --check` clean. operator: `go test ./pkg/security/... ./controllers/...` green; manifests/generate no drift. AIB: `go test -race ./internal/...` green (access-check domain/HTTP/gRPC + ext_proc assert the new reasons/headers; existing allow/deny unchanged).
+- **OPA sample.** `opa check` clean; `opa eval` proves `data.kaos.authz.allow` is `true` for the granted edge (`researcher` → `mcpserver/demo/github:call`) and `false` for an ungranted resource — the same allow/deny outcome AIB produces over the identical ext_authz contract.
+- **CI.** Go Tests / Python Tests / E2E Tests dispatched on `feat/enforcement-and-hardening` (PR #242).
+- **In-cluster.** Calico KIND `kaos-sec-e2e` retained for the cross-component outcome story; see learnings and the security-enforcement runbook for the deny → structured-reason, third-party → reauth_url, autonomous → `user_action_required`, and egress/TLS checks.

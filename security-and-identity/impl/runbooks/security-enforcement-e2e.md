@@ -168,3 +168,49 @@ kind delete cluster --name kaos-sec-e2e
 - `operator/tests/e2e/test_security_generation_e2e.py` (generation tier, kindnet/CI): install with `--network-policy --gateway-routing`; assert the three NetworkPolicy objects, the gateway-routed agent env, the operator configmap keys, and the absence of `gateways ... forbidden` in operator logs (gateways-RBAC regression guard).
 - `operator/tests/e2e/test_security_enforcement_e2e.py` (enforcement tier, Calico-gated, skipped when the CNI does not enforce NetworkPolicy): TEST A direct-bypass-blocked and TEST B gateway-path-401, reusing `gateway_url` from `conftest.py`.
 - Both tiers reuse `create_custom_resource`, `wait_for_deployment`, and `wait_for_modelapi_ready`. Gate the enforcement tier behind an env flag (e.g. `KAOS_SEC_E2E_ENFORCEMENT=1`) so the default CI run stays on kindnet.
+
+## Step 8 — Operational-correctness outcome story (enforcement tier)
+
+These checks extend the deny baseline above into the structured-outcome layer. They require the broker deployed with the access-check ext_authz service (`aib-access-check-grpc:9191`) and, for the re-auth check, the ext_proc token-exchange wiring. All outcomes are detected by the runtime from response headers (`x-kaos-access-reason`, `x-kaos-reauth-url`) — a non-secured gateway never sets these, so the security-off path is unchanged.
+
+```bash
+# 8a. Denied platform grant -> structured reason in the synchronous response.
+# Call an agent whose actor has no approved platform grant for the target MCP/ModelAPI.
+# The gateway ext_authz denies with x-kaos-access-reason: platform_grant_missing (no URL);
+# the chat/A2A reply states the denied resource + reason, and the run does NOT hang.
+# Verify the SDK surfaced it (not a generic 500): the assistant message names the resource
+# and reason; the memory carries an access_outcome event.
+
+# 8b. User-grant-required -> reason without a renewal URL.
+# For a resource needing a user-delegated grant that is missing/expired, the denied reason
+# is user_grant_required (still no dedicated URL on the ext_authz path).
+
+# 8c. Third-party re-auth -> reauth_url on the ext_proc path.
+# A token-exchange that needs user re-consent returns the ext_proc immediate response:
+# HTTP 200, headers x-kaos-access-reason: third_party_reauth_required + x-kaos-reauth-url,
+# JSON-RPC error data.reason/data.reauth_url. The sync reply says "reconnect <service> at <url>".
+
+# 8d. Autonomous run -> one user_action_required event + stop.
+# Trigger the same denial inside an autonomous agent. Assert the Task has exactly one
+# user_action_required event and task.metadata["user_action_required"] is set, and the run
+# ends (COMPLETED) without re-hitting the denial every iteration.
+
+# 8e. Requested-only -> denied until the grant is approved.
+# A CRD reference projects the requestable catalog + the bootstrap binding. Until the binding
+# exists in the broker the access-check denies; once the permission set is bound the actor is
+# allowed. (The first-class approval gate is a later phase; here the binding == bootstrap grant.)
+
+# 8f. OPA drop-in equivalence (config-only swap).
+kubectl apply -f docs/security/opa-drop-in/opa-envoy.yaml
+kubectl -n opa-system rollout status deploy/opa-envoy
+kaos system install --auth-enabled \
+  --ext-authz-url opa-envoy.opa-system.svc.cluster.local:9191 --wait
+# A granted edge allows and an ungranted one denies equivalently to AIB — no Envoy/KAOS change.
+
+# 8g. Egress + TLS hardening.
+# Install with egress NetworkPolicy enabled and a TLS mode; assert a secured workload can reach
+# DNS/gateway/operator/AIB (and provider egress for ModelAPI) but not arbitrary off-list egress,
+# and that the gateway path is TLS-terminated at the pinned minimum version (1.2).
+```
+
+These map one-to-one to the P12 outcome behaviours and are the basis for the automated outcome-tier e2e (mock third-party API that echoes the inbound Authorization to prove the ext_proc swap, plus an agent with and without an approved grant). AIB remains the default authorization backend; the OPA check is a demonstration of backend-neutrality.
