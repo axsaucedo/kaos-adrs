@@ -117,15 +117,17 @@ P0 validates and gates everything. P1–P3 and P5–P8 build and wire the MVP bo
 
 **Depends on**: P3, P6 (user-delegated grants). **Demoable**: a protected call needing a third-party token gets one exchanged inline.
 
-### P8 — CRD identity override
+### P8 — CRD identity override (removed)
 
 **Goal**: expose the user-configurable logical identity.
 
-**Scope**: add `spec.security.id` (override on top of the `kaos://{kind}/{namespace}/{name}` default the earlier phases rely on) with collision/adoption handling, and test it end to end.
+**Status**: Implemented, then **removed**. The `spec.security.id` override and its collision/adoption handling were stripped out (see [`P8-crd-identity-override-removal.md`](./P8-crd-identity-override-removal.md) and the Amendment in [ADR-KAOS-001](../adr-kaos/ADR-KAOS-001-identity-model-and-source-of-truth.md)). Logical identity is always `kaos://{kind}/{namespace}/{name}` — unique by construction, with no winner/adoption logic on either the operator or the sync plane.
 
-**Realises**: CRD surface of [ADR-KAOS-001](../adr-kaos/ADR-KAOS-001-identity-model-and-source-of-truth.md) (incl. its pre-implementation collision/adoption follow-up).
+**Scope (original)**: add `spec.security.id` (override on top of the `kaos://{kind}/{namespace}/{name}` default the earlier phases rely on) with collision/adoption handling, and test it end to end.
 
-**Depends on**: P3. **Demoable**: an explicit `spec.security.id` resolves and survives delete/recreate; duplicates are rejected.
+**Realises**: CRD surface of [ADR-KAOS-001](../adr-kaos/ADR-KAOS-001-identity-model-and-source-of-truth.md), now superseded by that ADR's removal amendment.
+
+**Depends on**: P3.
 
 ### P9 — SDK productionisation
 

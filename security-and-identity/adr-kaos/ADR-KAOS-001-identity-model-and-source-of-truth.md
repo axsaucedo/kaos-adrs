@@ -1,6 +1,28 @@
 # ADR-KAOS-001: Identity model and source of truth
 
-**Status**: Accepted
+**Status**: Accepted, then amended — the `spec.security.id` identity override and its collision/adoption handling were removed. Logical identity is now **always** `kaos://{kind}/{namespace}/{name}`. The original decision is retained below as the historical record; the Amendment section that follows is authoritative where the two differ.
+
+---
+
+## Amendment: identity override removed
+
+The `spec.security.id` override (and the namespace-independent `kaos://{kind}/{id}` form it produced) has been **removed**. Logical identity is always the namespace-scoped default `kaos://{kind}/{namespace}/{name}`, which is unique by construction.
+
+**What changed**
+
+- The CRD `spec.security` surface (`SecuritySpec`/`security.id`) is gone from Agent, MCPServer and ModelAPI.
+- The operator-side `pkg/identity` package, including `conflict.go` and the three controller conflict gates, is removed; `AGENT_AUTH_IDENTITY` is now injected inline as `kaos://agent/{namespace}/{name}`.
+- The sync projection no longer threads a security id or computes winners/conflicts; both the operator and the sync service derive identity directly from namespace/name and therefore agree by construction with no cross-component resolution to keep in sync.
+
+**Why**
+
+The override's only benefit was identity continuity across a namespace move or rename — speculative for current alpha usage. Because an explicit id is shared by construction, it required collision/adoption resolution (oldest-creationTimestamp wins) implemented twice (operator and sync) that had to agree byte-for-byte on a security-sensitive path. The design also forbade concurrent shared identity (a duplicate marked the younger resource `Failed`), so it did not even serve the most plausible future "shared identity" use case. Removing it deletes every winner/adoption code path on both planes and makes identity trivially unique.
+
+**Deferred design note (shared identity)**
+
+A future "single logical identity intentionally shared across multiple instances or namespaces" capability is out of scope. If it is ever introduced it must be designed to **permit concurrent holders**; the removed oldest-wins model would actively fight that use case and would have to be redesigned regardless, so removing it now burns no useful future foundation. Until then, every Agent/MCPServer/ModelAPI has exactly one identity, derived from its namespace and name.
+
+The original decision text below — first-class `spec.security.id`, the override resolution table, the oldest-wins collision follow-up — is **superseded** by this amendment.
 
 ---
 

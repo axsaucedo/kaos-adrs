@@ -2,7 +2,7 @@
 
 **Phase**: P8 of [`../../plan/proposed-split.md`](../../plan/proposed-split.md)
 **Plan**: [`../../plan/P8-crd-identity-override.md`](../../plan/P8-crd-identity-override.md)
-**Status**: Complete — every Agent, MCPServer and ModelAPI now has a first-class logical security identity that defaults to namespace-scoped (`kaos://<kind>/<ns>/<name>`) and can be pinned to a stable, namespace-independent value via `spec.security.id` (`kaos://<kind>/<id>`). The operator resolves the identity, wires it into the agent actor environment, and enforces oldest-wins collision/adoption with a `Failed` status on the loser; the sync projection mirrors the identical resolution and surfaces duplicate-identity conflicts in logs and metrics.
+**Status**: Superseded — the `spec.security.id` identity override and its collision/adoption handling were subsequently **removed** (see [`../../plan/P8-crd-identity-override-removal.md`](../../plan/P8-crd-identity-override-removal.md) and the Amendment in [`../../adr-kaos/ADR-KAOS-001-identity-model-and-source-of-truth.md`](../../adr-kaos/ADR-KAOS-001-identity-model-and-source-of-truth.md)). Logical identity is now always `kaos://<kind>/<namespace>/<name>`; the operator `pkg/identity` package, the controller conflict gates, and the sync winners/conflicts logic no longer exist. The record below describes the override as originally implemented and is kept for historical context only.
 **Date**: 2026-06-22
 **PR**: stacked onto `feat/extproc-token-exchange` (the P7 branch)
 

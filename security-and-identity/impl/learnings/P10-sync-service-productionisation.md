@@ -39,5 +39,5 @@ The Python sync service was subsequently rewritten as a Go `controller-runtime` 
 ### Carry-forward
 
 - The Secret name contract (`<prefix>-<agent>`) is derivable by both the sync service and the operator, so the prefix is part of the API surface even though the Secret contents are broker-issued; any change must move both sides together.
-- `spec.security.id` collision resolution is duplicated by construction — the operator gates reconcile on it and the projection mirrors the same oldest-wins rule so both agree on the winner. If the identity-override surface is reduced, both copies and their tests collapse together.
+- `spec.security.id` collision resolution **was** duplicated by construction — the operator gated reconcile on it and the projection mirrored the same oldest-wins rule so both agreed on the winner. The identity-override surface was subsequently removed entirely (logical identity is always `kaos://{kind}/{namespace}/{name}`), and both copies and their tests collapsed away together — confirming the predicted simplification.
 - The opt-in AIB end-to-end credential test (sync creates the Secret → operator mounts it into the agent Deployment → pod starts authenticated) remains the only check that covers the cross-service boundary; the unit suites cover projection and apply logic but cannot exercise it.
