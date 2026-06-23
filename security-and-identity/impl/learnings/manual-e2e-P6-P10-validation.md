@@ -35,6 +35,8 @@ The request was explicitly a brief pass to catch glaring bugs, not an exhaustive
 
 ## Recommended automated follow-ups
 
+A reproducible how-to for everything below — exact cluster config, install flags, workload manifest, and TEST A/TEST B commands, each paired with the assertion a programmatic test should make and the existing `conftest.py` helper to use — is captured in the companion runbook `impl/runbooks/security-enforcement-e2e.md`. It is written to seed both documentation and a two-tier e2e suite (a kindnet/CI-runnable generation tier and a Calico-gated enforcement tier).
+
 - An operator e2e assertion (CI-runnable on kindnet, since generation does not need enforcement) that `--network-policy --gateway-routing` causes the operator to (a) generate the three NetworkPolicy objects and (b) inject gateway-routed MCP/ModelAPI URLs into the agent. Enforcement itself cannot be asserted in the kindnet CI and is documented as a Calico-only manual check.
 - Add the `gateways` RBAC rule to any RBAC regression check so the informer/watch dependency is not dropped again.
 - Track the dev-preset access-check omission so a future reproducible full-stack e2e can assert the positive 200 path.
