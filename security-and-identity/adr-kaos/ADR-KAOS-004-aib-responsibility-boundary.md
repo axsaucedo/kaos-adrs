@@ -63,7 +63,7 @@ The workaround must not make requested CRD wiring an approved grant automaticall
 
 | Component | Owns |
 |---|---|
-| KAOS CRDs/operator | Resource existence, topology, service wiring, `spec.security.id`, requested access edges, mounting AIB agent credentials into pods |
+| KAOS CRDs/operator | Resource existence, topology, service wiring, logical identity (namespace/name-derived), requested access edges, mounting AIB agent credentials into pods |
 | KAOS-AIB sync service | Mirroring KAOS identities and requested access edges into AIB; provisioning per-agent AIB credentials into Secrets |
 | KAOS/AIB SDK | Runtime context propagation (subject + actor) and agent machine-token lifecycle; optional AIB client calls for custom off-gateway servers |
 | AIB | Agent identities (per-agent client credentials + issued actor tokens), KAOS logical resource grants, user delegated grants, third-party services, PermissionSets, consent, token vault, token exchange, `ext_authz` access decisions |

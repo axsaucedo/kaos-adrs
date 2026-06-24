@@ -60,7 +60,7 @@ Use CEL only for:
 
 Do not make OPA/Rego or Keycloak Authorization Services mandatory. Treat them as optional future enterprise PDP integrations to reconsider only when simple grants are no longer enough. OPA is specifically a drop-in Envoy `ext_authz` backend through opa-envoy when it is fed equivalent policy and data.
 
-Per-resource security configuration is `spec.security.id` only. Authentication, authorization, and backend selection are operator-wide integration concerns.
+There is no per-resource security configuration; the former `spec.security.id` override was removed. Authentication, authorization, identity, credential wiring, and backend selection are operator-wide integration concerns.
 
 ### Backend-neutral authorization integration
 
@@ -530,4 +530,4 @@ Best fit:
 11. Keycloak Authorization Services is an optional future enterprise integration; Keycloak/Dex/OIDC remains human identity/SSO by default.
 12. ModelAPI internal model/budget/rate authorization remains LiteLLM-owned.
 13. MCP tool/argument-level policy remains optional until KAOS models tool permissions explicitly.
-14. Optional external PDP compatibility must not broaden the per-resource configuration surface beyond `spec.security.id`.
+14. Optional external PDP compatibility must not introduce any per-resource security configuration surface.

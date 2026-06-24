@@ -64,7 +64,7 @@ This keeps the model simple:
 - no-permission-by-default applies when security is enabled.
 - OPA/Rego, Keycloak Authorization Services, MCP tool/argument policy, and autonomous run-scoped grants are deferred.
 
-[ADR-KAOS-002](./ADR-KAOS-002-enforcement-topology.md) defines the gateway as the enforcement plane. Resource-to-resource authorization happens at the gateway, not in Python/SDK code. Per-resource configuration is `spec.security.id` only.
+[ADR-KAOS-002](./ADR-KAOS-002-enforcement-topology.md) defines the gateway as the enforcement plane. Resource-to-resource authorization happens at the gateway, not in Python/SDK code. There is no per-resource security configuration.
 
 This ADR decides what happens operationally when an agent action cannot proceed because a platform grant, user delegated grant, or third-party OAuth2 session is missing or expired.
 

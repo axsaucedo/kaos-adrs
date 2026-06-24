@@ -342,7 +342,7 @@ aibExtProc
 networkPolicy
 ```
 
-This should be driven by global security configuration ([ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md) keeps per-resource config to `spec.security.id` only).
+This should be driven by global security configuration ([ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md): there is no per-resource security config).
 
 ### Header conventions
 
@@ -386,7 +386,7 @@ security:
     credentialSecretPrefix: kaos-aib                                # per-agent credential Secret (operator mounts; sync creates)
 ```
 
-`userAuth` and `agentAuth` become two Envoy `jwt_authn` providers. The AIB admin URL/credentials are not here — they live in the sync-service config ([ADR-KAOS-008](./ADR-KAOS-008-aib-integration-and-synchronization-architecture.md)). Per-resource configuration is `spec.security.id` only ([ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md)).
+`userAuth` and `agentAuth` become two Envoy `jwt_authn` providers. The AIB admin URL/credentials are not here — they live in the sync-service config ([ADR-KAOS-008](./ADR-KAOS-008-aib-integration-and-synchronization-architecture.md)). There is no per-resource security configuration ([ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md)).
 
 The operator generates, per protected route, an Envoy `SecurityPolicy` `extAuth.grpc` pointing at `agentAuth.extAuthzUrl`, with `headersToExtAuth` including `authorization` and `x-agent-authorization`, `contextExtensions` `kaos.resource`/`kaos.action` derived from the target identity, and fail-closed behavior (`failOpen: false`, `statusOnError: 503`). Token exchange uses `agentAuth.extProcUrl` when a protected call needs a delegated third-party token.
 

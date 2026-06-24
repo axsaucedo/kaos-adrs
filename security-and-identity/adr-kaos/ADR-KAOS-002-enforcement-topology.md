@@ -23,7 +23,7 @@ The gateway pipeline calls **both** `jwt_authn` and `ext_authz`, and this is int
 
 ModelAPI is covered uniformly by the gateway. Agents, MCPServers, and ModelAPIs use the same resource-boundary enforcement path, so ModelAPI does not need per-runtime authentication logic. LiteLLM remains responsible for model allowlists, budgets, rate limits, and model-internal policy. Ollama is treated as a backend model server behind LiteLLM or another protected KAOS surface.
 
-Per-resource security configuration is `spec.security.id` only. Authentication, authorization, token exchange, and credential wiring are operator-wide integration concerns; CRD authors cannot override them per resource.
+There is no per-resource security configuration; the former `spec.security.id` override was removed. Authentication, authorization, token exchange, identity, and credential wiring are operator-wide integration concerns; CRD authors cannot override them per resource.
 
 Sidecars are not selected, instead decision is to use gateway approach as per [ADR-KAOS-009](./ADR-KAOS-009-gateway-api-resource-boundary-enforcement.md). They may be reconsidered only for concrete future requirements such as local egress token injection or unsupported runtimes that cannot be placed behind the gateway.
 

@@ -113,12 +113,13 @@ MCPServer custom code is broader than Agent custom code. MCP runtimes may need t
 
 ## Context
 
-[ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md) defines stable KAOS security identities through `spec.security.id`, resolving to:
+> **Amendment — `spec.security.id` override removed (out of scope).** The user-configurable override was implemented and then removed (PR-ADR-KAOS-7 dropped). Logical identity is now **always** the namespace-scoped default `kaos://{kind}/{namespace}/{name}`, unique by construction, with no collision/adoption logic on either the operator or the sync plane. See [ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md) (Amendment) for the authoritative current model.
+
+[ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md) defines stable KAOS security identities derived from Kubernetes namespace/name, resolving to:
 
 | Case | Resolved identity |
 |---|---|
-| `spec.security.id` omitted | `kaos://{kind}/{namespace}/{name}` |
-| `spec.security.id` provided | `kaos://{kind}/{id}` |
+| always | `kaos://{kind}/{namespace}/{name}` |
 
 KAOS needs a way for authenticated request context to survive agent execution, A2A delegation, MCP calls, async tasks, autonomous runs, and AIB grant/token-exchange flows.
 
