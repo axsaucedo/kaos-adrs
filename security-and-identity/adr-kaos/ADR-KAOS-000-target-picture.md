@@ -36,14 +36,15 @@ correct. The SDK is **not the enforcement boundary**: in the standard path it pr
 
 ## Identity model
 
-KAOS resources carry a first-class, user-configurable logical security identity through `spec.security.id`, with a Kubernetes namespace/name default:
+> **Amendment — `spec.security.id` override removed (out of scope).** The user-configurable override described below was implemented and then removed (PR-ADR-KAOS-7 dropped). Logical identity is now **always** the namespace-scoped default `kaos://{kind}/{namespace}/{name}`, unique by construction, with no collision/adoption logic on either the operator or the sync plane. The text below is retained as historical context; see [ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md) (Amendment) for the authoritative current model.
+
+KAOS resources carry a logical security identity derived from their Kubernetes namespace and name:
 
 | Case | Resolved external identity |
 |---|---|
-| `spec.security.id` omitted | `kaos://{kind}/{namespace}/{name}` |
-| `spec.security.id` provided | `kaos://{kind}/{id}` |
+| always | `kaos://{kind}/{namespace}/{name}` |
 
-This identity is what AIB stores as `external_id`; it is stable across delete/recreate so grants survive, human-readable, and namespace-independent when set. **`spec.security.id` is the only per-resource security field** — authn/authz are operator-wide and identity/credentials are auto-provisioned, so a CRD author cannot weaken the enforced posture.
+This identity is what AIB stores as `external_id`; it is stable across delete/recreate so grants survive and is unique by construction. There is **no per-resource security field** — authn/authz are operator-wide and identity/credentials are auto-provisioned, so a CRD author cannot weaken the enforced posture.
 
 The logical id is an *identifier*. Each identity-bearing **caller** (every Agent, and an MCPServer when it calls out) additionally has an **AIB-issued authentication credential**: AIB registers the agent and issues per-agent client credentials; the agent runs a `client_credentials` grant against AIB to obtain a short-lived, AIB-signed **actor token** (`sub`/`azp` = its logical identity). **Keycloak issues human tokens only; AIB issues agent identities.** Client auth defaults to `client_secret` (`private_key_jwt` stronger); cryptographic pod binding via mTLS/SPIFFE is out of scope (revisit only on concrete need). See [ADR-KAOS-001](./ADR-KAOS-001-identity-model-and-source-of-truth.md) and [ADR-KAOS-004](./ADR-KAOS-004-aib-responsibility-boundary.md).
 
@@ -159,7 +160,7 @@ security:
     credentialSecretPrefix: kaos-aib                                # per-agent credential Secret (operator mounts; sync creates)
 ```
 
-Per-resource config is `spec.security.id` only. TLS modes follow [ADR-KAOS-007](./ADR-KAOS-007-transport-security-and-hardening-baseline.md): `selfSigned` (operator/CLI generates a self-signed cert for simple/dev installs), `certManager` (reuse an existing cluster issuer), or `provided` (bring an existing Secret).
+There is no per-resource security config (the former `spec.security.id` override was removed). TLS modes follow [ADR-KAOS-007](./ADR-KAOS-007-transport-security-and-hardening-baseline.md): `selfSigned` (operator/CLI generates a self-signed cert for simple/dev installs), `certManager` (reuse an existing cluster issuer), or `provided` (bring an existing Secret).
 
 ---
 
