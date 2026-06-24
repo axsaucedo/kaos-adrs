@@ -4,6 +4,8 @@
 **Date**: 2026-06-22
 **Context**: introducing a first-class logical security identity for Agent/MCPServer/ModelAPI — namespace-scoped by default, pinnable via `spec.security.id` — resolved identically by the operator (Go) and the sync projection (Python), with oldest-wins collision/adoption.
 
+> **Superseded — the `spec.security.id` override was subsequently removed.** Logical identity is now always `kaos://<kind>/<namespace>/<name>` (unique by construction), so the override, the oldest-wins collision/adoption logic, and the dual-side parity hazard described below no longer exist. This note is retained as a historical record of why the feature was built and what it cost to maintain. See [`ADR-KAOS-001`](../../adr-kaos/ADR-KAOS-001-identity-model-and-source-of-truth.md) for the removal amendment and the deferred shared-identity design note, and [`manual-e2e-identity-removal-validation.md`](manual-e2e-identity-removal-validation.md) for the end-to-end validation that the default-identity path stayed intact after removal.
+
 ## Key findings
 
 ### One identity rule, two implementations — keep them byte-identical and prove it
