@@ -12,6 +12,7 @@ Authoring conventions for the memory research documents in `research/` and any f
 - Research documents use the `KAOS-R<n>` prefix, where `<n>` is the research stage (`KAOS-R1` … `KAOS-R7`).
 - `KAOS-R1` documents the current KAOS memory implementation and is the requirements baseline that later stages refer back to.
 - Per-tool deep dives in stage 5 use a compound suffix: `KAOS-R5-<n>-<toolname>` (for example `KAOS-R5-1-mem0`). The `<n>` ordering and tool set are fixed by the `KAOS-R4` shortlist.
+- Numbers continue past `KAOS-R7` for follow-on research that supports the architecture-decision records under `adrs/` (for example `KAOS-R8`, `KAOS-R9`). These keep the same `KAOS-R<n>` prefix and conventions but answer questions raised during the decision phase rather than belonging to the original staged pipeline.
 
 ## Cross-references
 
