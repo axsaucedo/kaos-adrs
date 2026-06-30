@@ -26,7 +26,7 @@ The working tier is bounded by a configurable token budget rather than a fixed e
 
 ### Working tier storage: a plain table on the shared Postgres
 
-Working memory is persisted as plain relational rows — session, role, content, created time, metadata — on the **same Postgres instance** that backs Mem0's pgvector long-term store, with no embeddings and recency-ordered retrieval. This consolidates the platform onto a single datastore and removes the separate Redis dependency for memory, while keeping the working tier a cheap insert-and-recency-scan rather than a vector operation ([KAOS-R11](../research/KAOS-R11-short-term-memory-storage.md)). The provisioning of that Postgres instance is an [ADR 0004](./adr_0004_deployment-topology-and-control-plane.md) concern; this record fixes only that the working tier is relational and shares the long-term instance.
+Working memory is persisted as plain relational rows — session, role, content, created time, metadata — co-located with the long-term store, with no embeddings and recency-ordered retrieval. It is never on Redis and never delegated to Mem0; it is a cheap insert-and-recency-scan rather than a vector operation ([KAOS-R11](../research/KAOS-R11-short-term-memory-storage.md)). [ADR 0004](./adr_0004_deployment-topology-and-control-plane.md) realises "co-located" per storage mode: in `external` mode the working table lives on the **same Postgres instance** that backs Mem0's pgvector long-term store; in `local` mode it is a SQLite table in the same single container as the embedded Chroma store. Either way the working tier follows the storage mode automatically and shares the long-term store's datastore rather than introducing a separate one. The provisioning of that datastore is an [ADR 0004](./adr_0004_deployment-topology-and-control-plane.md) concern; this record fixes only that the working tier is relational and co-resident with the long-term store.
 
 ### Message-history bridge: full-fidelity replay
 
@@ -59,7 +59,7 @@ OpenTelemetry instrumentation sits at the `Memory` abstraction method boundary, 
 ## Consequences
 
 - The data plane gains a tiered memory contract: a relational, token-budgeted, summarizing working tier and a Mem0-backed long-term tier, behind one abstraction.
-- The platform consolidates onto a single Postgres instance for both tiers and drops the separate Redis memory dependency.
+- The platform consolidates the working and long-term tiers onto one datastore — a shared Postgres in `external` mode or a single-container SQLite-plus-Chroma in `local` mode ([ADR 0004](./adr_0004_deployment-topology-and-control-plane.md)) — and drops the separate Redis memory dependency.
 - Continuing and autonomous runs replay full-fidelity history including tool and delegation steps, fixing a real loss in the current bridge.
 - Recall is cheap and deterministic by default, with agent-driven memory tools available when wanted; both are per-agent configuration consumed by the control plane.
 - Tenant isolation is enforced in the data plane at the backend boundary, not delegated to the engine, and fails closed.

@@ -22,7 +22,7 @@ KAOS adopts **Mem0** as the long-term memory engine, and adopts exactly one. The
 
 ### Tier ownership: KAOS keeps working, Mem0 owns long-term
 
-The one firm invariant from [ADR 0001](./adr_0001_memory-model-and-lifecycle-operations.md) holds: KAOS and Pydantic AI own the live per-run message-history bridge through the existing working-memory backends (Local, Redis, Null), unchanged. Mem0 backs only the semantic and episodic long-term tier. Mem0 has no live conversation-buffer concept, so it is never asked to serve working memory. Adoption is therefore additive — existing agents keep working with no long-term tier until one is configured.
+The one firm invariant from [ADR 0001](./adr_0001_memory-model-and-lifecycle-operations.md) holds: KAOS and Pydantic AI own the live per-run message-history bridge rather than delegating it to Mem0, which has no live conversation-buffer concept and is never asked to serve working memory. Mem0 backs only the semantic and episodic long-term tier. Long-term adoption is therefore **additive at the feature level** — an existing agent gains no long-term tier until one is configured. This is distinct from the working-tier *internals*: [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md), under the alpha no-backward-compatibility stance, redesigns the working tier (token-budget bound, rolling summary, relational persistence) and replaces the Local/Redis/Null `MEMORY_*` surface. So KAOS keeps *owning* working memory, but its implementation and configuration are not preserved unchanged.
 
 ### Integration: a hand-written `Mem0Memory` backend behind the existing ABC
 
@@ -59,7 +59,7 @@ Mem0's write path is gated by one or more LLM calls for fact extraction, and KAO
 
 ### Storage and deployment posture
 
-The vector store defaults to **pgvector** — a bring-your-own, operationally familiar backend that adds no new datastore class and is externally operated per the bring-your-own datastore stance of [KAOS-R7](../research/KAOS-R7-target-picture.md); Qdrant remains a supported Mem0 backend option. Mem0 runs as a **central shared service** for a multi-tenant fleet rather than embedded per agent, matching the hot-path central-service topology; its singleton-instance and per-container history-store caveats ([KAOS-R5-1](../research/KAOS-R5-1-mem0.md)) are made highly-available in ADR 0004. Storage selection and the deployment and high-availability engineering are owned by ADR 0004; this record fixes the defaults and the rationale.
+The vector store defaults to **pgvector** — a bring-your-own, operationally familiar backend that adds no new datastore class and is externally operated per the bring-your-own datastore stance of [KAOS-R7](../research/KAOS-R7-target-picture.md). [ADR 0004](./adr_0004_deployment-topology-and-control-plane.md) later generalises this into a `storage.type` switch with a zero-dependency `local` mode (embedded Chroma) and an `external` mode (pgvector on shared Postgres); pgvector remains the production default and the choice narrows to Chroma and pgvector — both pre-filter scope during the vector query, which Qdrant-class post-filtering stores do not guarantee for multi-tenant recall. Mem0 runs as a **central shared service** for a multi-tenant fleet rather than embedded per agent, matching the hot-path central-service topology; its singleton-instance and per-container history-store caveats ([KAOS-R5-1](../research/KAOS-R5-1-mem0.md)) are made highly-available in ADR 0004. Storage selection and the deployment and high-availability engineering are owned by ADR 0004; this record fixes the defaults and the rationale.
 
 ### What KAOS supplies around the engine
 
@@ -67,7 +67,7 @@ Mem0's gaps are filled at the KAOS integration layer rather than by the engine: 
 
 ## Consequences
 
-- Long-term memory becomes available as an additive tier with no change to existing working-memory behaviour or configuration.
+- Long-term memory becomes available as an additive, opt-in capability; an agent without a configured store is unaffected at the feature level, even though the working-tier internals and `MEMORY_*` configuration are themselves redesigned under the alpha breaking-change stance ([ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md)).
 - The semantic and episodic placeholders in [ADR 0001](./adr_0001_memory-model-and-lifecycle-operations.md) can be closed: retrieval is Mem0 relevance search, extraction is Mem0 infer-on-write run in the background, and conflict resolution uses Mem0's update semantics.
 - KAOS owns a hand-written Pydantic AI integration as a first-class component, with the upside of a reusable public adapter and the cost of tracking Mem0's API churn ([KAOS-R5-1](../research/KAOS-R5-1-mem0.md)).
 - Tenant isolation, OpenTelemetry, and Kubernetes packaging are KAOS responsibilities, deliberately, because Mem0 does not provide them at the level KAOS requires.
