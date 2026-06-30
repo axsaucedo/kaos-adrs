@@ -95,7 +95,7 @@ spec:
   extraction: { concurrency: 4 }
 ```
 
-The two model roles mirror the Agent's existing `{modelAPI, model}` shape and reference an existing `ModelAPI` rather than carrying inline credentials; the `summarization` role drives both Mem0's long-term fact extraction and the working-tier rolling summary. There is no quota block: capacity is bounded by the PersistentVolume size in `local` mode and by Postgres sizing in `external` mode — meaningful, infrastructure-enforced limits rather than an arbitrary item count. Per-tenant rate and fair-share enforcement is a governance concern deferred to [ADR 0005](./adr_high_level_components.md).
+The two model roles mirror the Agent's existing `{modelAPI, model}` shape and reference an existing `ModelAPI` rather than carrying inline credentials; the `summarization` role drives both Mem0's long-term fact extraction and the working-tier rolling summary. There is no quota block: capacity is bounded by the PersistentVolume size in `local` mode and by Postgres sizing in `external` mode — meaningful, infrastructure-enforced limits rather than an arbitrary item count. Per-tenant rate and fair-share enforcement is a governance concern deferred to [ADR 0005](./adr_0005_multi-tenancy-agent-grouping-and-governance.md).
 
 The Agent CRD keeps a **slim memory block** holding only runtime behaviour, selecting a store by name and setting per-agent knobs:
 
@@ -110,7 +110,7 @@ spec:
       failureMode: soft                  # soft | strict
 ```
 
-The working-tier token budget, the summarization toggle, the recall presentation from [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md), and the failure mode live here and nowhere else, removing the duplication of behavioural settings across two resources. The token budget and summarization toggle are **executed by the memory service** — which owns the shared working tier and holds the `summarization` model — and supplied as per-agent policy on each request, while the agent runtime only calls recall and receives assembled context. The per-agent memory `scope` is owned by [ADR 0005](./adr_high_level_components.md) and is not set here.
+The working-tier token budget, the summarization toggle, the recall presentation from [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md), and the failure mode live here and nowhere else, removing the duplication of behavioural settings across two resources. The token budget and summarization toggle are **executed by the memory service** — which owns the shared working tier and holds the `summarization` model — and supplied as per-agent policy on each request, while the agent runtime only calls recall and receives assembled context. The per-agent memory `scope` is owned by [ADR 0005](./adr_0005_multi-tenancy-agent-grouping-and-governance.md) and is not set here.
 
 ### Operator reconciliation and schema ownership
 
@@ -136,7 +136,7 @@ Reconciling a `MemoryStore` deploys the memory-service `Deployment` and `Service
 - **FAISS as the local vector store.** Rejected: Mem0's FAISS path post-filters metadata after the nearest-neighbour search, so a tenant's relevant memories can be silently dropped from a shared index; Chroma pre-filters and is correct for multi-tenant recall. FAISS remains a possible documented single-tenant, ephemeral option.
 - **A durable job queue for background writes in this version.** Rejected now: Mem0 provides none, a write is a single-call unit re-derivable from the durable working tier, and a queue is added complexity for unproven value at this stage; recorded as a follow-up.
 - **A second Postgres or Redis for the working tier.** Rejected: consolidating both tiers onto one datastore is a goal, and the working tier follows the storage mode automatically ([ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md), [KAOS-R11](../research/KAOS-R11-short-term-memory-storage.md)).
-- **Application-level per-tenant quotas in this version.** Rejected: the engine provides none, an item count is an arbitrary limit, and infrastructure sizing already bounds capacity; fair-share enforcement is deferred to [ADR 0005](./adr_high_level_components.md).
+- **Application-level per-tenant quotas in this version.** Rejected: the engine provides none, an item count is an arbitrary limit, and infrastructure sizing already bounds capacity; fair-share enforcement is deferred to [ADR 0005](./adr_0005_multi-tenancy-agent-grouping-and-governance.md).
 - **Behavioural settings on the `MemoryStore`.** Rejected: token budget, summarization, recall presentation, and failure mode are per-agent behaviour and belong on the Agent block; the store stores and the agent decides how it uses memory.
 
 ## Follow-up
