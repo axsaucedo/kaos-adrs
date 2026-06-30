@@ -5,6 +5,17 @@
 
 > **Stacking-base note (read first).** Per [`proposed-split.md`](./proposed-split.md): `M1 → M2 → {M3, M4}`. M2 composes the M1 stores into a deployable central service. It stacks directly on `feat/memory-atomic-stores`. M3 (runtime client) and M4 (operator) are **siblings** off M2; whichever lands first, the other rebases onto its tip. **Before starting, re-read [`../impl/learnings/M1-atomic-stores.md`](../impl/learnings/M1-atomic-stores.md)** and fold its deltas in.
 
+## Recalibration from M1 (fold into the TODOs below)
+
+The M1 stores landed exactly as planned; the following concrete deltas from [`../impl/learnings/M1-atomic-stores.md`](../impl/learnings/M1-atomic-stores.md) refine M2's implementation without changing its scope:
+
+- **Stack: FastAPI + uvicorn** (the runtime's stack — `pydantic-ai-server` depends on `fastapi`/`uvicorn`), not bare Starlette. Use a FastAPI app and `opentelemetry-instrumentation-fastapi` for span context, matching `pais/server.py`.
+- **Lazy model binding for readiness.** `LongTermStore`/`ModelClient` dial the endpoint on first use, so `/readyz` must reflect **store reachability** (working-tier DB ping + Mem0 vector-store reachability), not model reachability — a not-yet-reachable `ModelAPI` must not fail readiness.
+- **Recall pass-through.** `LongTermStore.recall` already returns Mem0's native `{"memory": str, score, id, metadata}` dicts; `/v1/recall` passes these through unmodified so the runtime sees scores/metadata for later relevance work. Empty recall is a **valid, common** result (pgvector's 0.1 threshold is strict; Chroma is lenient) — the assembled block must render cleanly when long-term recall is empty, falling back to working-only.
+- **Dims-per-mode.** Keep `embedding_model_dims` out of the local-mode Mem0 config (Chroma rejects it); only set it for `external`. The M1 `StorageConfig.resolved()` already encodes this — reuse it, do not re-derive the Mem0 config in the service.
+- **Reuse the M1 offline test harness.** `tests/_fakes.py::DeterministicEmbedder` + `tests/conftest.py` (`offline_models`, `pgvector_dsn`) let the service suite run without network/API keys; the pgvector path stays opt-in behind the `pgvector` marker, and CI already stands up the `pgvector/pgvector:pg16` service container.
+- **`shared` scope carries the reserved owner id** end to end; the service must not treat any scope as owner-less when calling the stores.
+
 ## Execution rules (TOP PRIORITY — every task)
 
 - Numbered TODOs one by one, no skipping. Per task: change → validate tests pass → commit (comprehensive, functional message; **no** phase/task/ADR references in messages, branches, code comments, or PR text) with the `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>` trailer on KAOS commits.
