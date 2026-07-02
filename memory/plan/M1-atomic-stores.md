@@ -27,6 +27,9 @@ Build the two smallest independently-testable building blocks of the memory arch
 
 Create a new top-level Python package **`memory-service/`** (sibling to `pydantic-ai-server/` and `mcp-servers/`), with an importable package `kaos_memory` and the standard repo toolchain (`pyproject.toml`, `Makefile` with `lint`/`test`, `uv`/venv, `black` + `ty`, `pytest`). M1 populates only the storage layer; M2 adds the HTTP service in the same package. Module layout:
 
+> **Note (superseded layout).** The per-responsibility module split below was the initial implementation. It has since been consolidated by layer into `stores.py` / `config.py` / `app.py` — see [`refactor-store-restructure-and-summarisation.md`](./refactor-store-restructure-and-summarisation.md). The short-term rolling summary is now opt-in (default off) with off-hot-path batched folding, and both stores use a single `add` verb.
+
+
 - `kaos_memory/config.py` — typed config: `StorageConfig(type: local|external, local{provider,path}, external{provider,dsn})`, `ModelConfig(base_url, model, api_key)` for `summarization` and `embedding`, `ShortTermTierConfig(token_budget, rolling_summary, hard_event_cap)`.
 - `kaos_memory/scope.py` — the `Scope` value object (principal, agent_client_id, session_id, plus the `private|user|shared` selector from [adr_0005](../adrs/adr_0005_multi-tenancy-agent-grouping-and-governance.md)) and the mapping to Mem0 filter keys (`private`→`agent_id`, `user`→`user_id`, `session`→`run_id`, `shared`→a reserved shared owner id — never an empty filter, since Mem0 2.x rejects owner-less searches). M1 ships the data shape and the mapping function; non-optional **enforcement** is M5 (here it is just a correct translation).
 - `kaos_memory/longterm.py` — `LongTermStore`: constructs `mem0.Memory`/`AsyncMemory` from `StorageConfig`+`ModelConfig`; `write(scope, messages)`, `recall(scope, query, top_k)`, `delete(scope)`/`delete_all(scope)`. The only importer of `mem0`.

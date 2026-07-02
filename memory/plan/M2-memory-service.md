@@ -38,6 +38,9 @@ Build the **central memory service**: a thin KAOS-owned Python service that impo
 
 Add to the `memory-service/` package an ASGI app (FastAPI/Starlette, matching the runtime's stack) `kaos_memory/service.py` with an entrypoint `kaos_memory/__main__.py`, plus a `Dockerfile` and a Helm-free container build wired into the existing image pipeline (image name `axsauze/kaos-memory-service`, added to `defaultImages` in M4). Surface:
 
+> **Note (superseded layout).** The HTTP layer has since been consolidated into a single `kaos_memory/app.py` (schemas, routes, presentation, background runner, `main()`), with `settings.py` merged into `config.py` and the entrypoint at `python -m kaos_memory.app` — see [`refactor-store-restructure-and-summarisation.md`](./refactor-store-restructure-and-summarisation.md). The background runner is injected into the short-term store as its summarisation scheduler.
+
+
 - `POST /v1/recall` — synchronous: body carries the request scope context + query + presentation knobs; returns assembled recalled context (long-term facts block + short-term tier recent turns / rolling summary). Fail-soft: on long-term error, return short-term-only context and mark the response degraded.
 - `POST /v1/write` — accepts a turn/events; appends to the short-term tier synchronously (cheap, durable) and **schedules** long-term extraction as a background task; returns immediately. Honours `failureMode: soft|strict`.
 - `POST /v1/working/*` — short-term tier ops the runtime needs (append, recent, summarize trigger) if not folded into recall/write.
