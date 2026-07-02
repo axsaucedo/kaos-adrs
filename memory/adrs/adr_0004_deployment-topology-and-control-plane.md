@@ -8,7 +8,7 @@
 
 ## Context
 
-[ADR 0002](./adr_0002_memory-implementation-mem0-and-pydantic-ai-integration.md) selects Mem0 as the long-term engine and [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md) fixes the runtime contract — the tiered `Memory` abstraction, the short-term tier on a plain relational store, the synchronous-recall/asynchronous-write split, and server-side scope injection. Both records defer how memory is run and operated to this one. This ADR decides the deployment topology, the background execution model, the high-availability and degradation posture, and the control plane — the `MemoryStore` CRD, the slim Agent memory block, and the operator's responsibilities.
+[ADR 0002](./adr_0002_memory-implementation-mem0-and-pydantic-ai-integration.md) selects Mem0 as the long-term atomic-fact engine and [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md) fixes the runtime contract — the tiered `Memory` abstraction, the session-only short-term window, the session-scoped medium-term digest, the synchronous-recall/asynchronous-write split, cascade extraction, and server-side scope injection. Both records defer how memory is run and operated to this one. This ADR decides the deployment topology, the async-hybrid execution model, the Postgres locking and `UNLOGGED` storage posture, the background execution model, the high-availability and degradation posture, and the control plane — the `MemoryStore` CRD, the Agent memory block, and the operator's responsibilities.
 
 The current control surface is an inline `MemoryConfig` on `AgentSpec.Config.Memory` describing only short-term memory (`enabled`, `type: local|redis`, `contextLimit`, `maxSessions`, `maxSessionEvents`). There is no resource describing a long-term backend, and the runtime has no dedicated background-job system beyond the autonomous-loop `asyncio` tasks in the data plane ([KAOS-R1](../research/KAOS-R1-memory-features-and-limitations.md)). Because KAOS is in alpha this surface is redesigned rather than preserved, consistent with [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md). Source surfaces: `operator/api/v1alpha1/agent_types.go`, `operator/controllers/agent_controller.go`, `pydantic-ai-server/pais/memory.py`, `pydantic-ai-server/pais/a2a.py`.
 
@@ -44,20 +44,26 @@ storage:
 
 Both modes expose one `provider` value today and are structured so a future contributor can add a provider without reshaping the CRD, consistent with the engine-agnostic direction in [ADR 0002](./adr_0002_memory-implementation-mem0-and-pydantic-ai-integration.md). The vector provider is chosen for correct pre-filtered multi-tenant recall: both Chroma and pgvector apply the scope filter during the vector query, whereas a post-filtering store would discard a tenant's relevant memories that fall outside an unfiltered nearest-neighbour window — unacceptable for the shared, multi-owner index this service holds.
 
+### Postgres external-mode table posture
+
+In `external` mode the session-scoped short-term window is a Postgres `UNLOGGED` table by default. `UNLOGGED` skips WAL and fsync for that table, reducing write amplification and making the hot window effectively RAM-speed when it is resident in shared buffers, while remaining a normal shared Postgres table visible coherently to all memory-service replicas. The caveats are accepted because the short-term window is ephemeral: an `UNLOGGED` table is truncated on crash recovery and does not replicate to standbys, so it is primary-only. Long-term Mem0 data and other durable tables remain logged. Redis is explicitly out of scope for this window; Postgres is sufficient for conversational write frequency, and using one database avoids a second operational dependency.
+
+Two optimizations are explicitly deferred rather than built now. A tmpfs-backed Postgres tablespace could make the short-term table even more memory-local, but it adds database-operational complexity and weakens portability. Gateway-level session-affinity routing could reduce cross-replica cache churn, but PG-locked consolidation already makes correctness independent of sticky sessions, so affinity is only a future latency optimization.
+
 ### Background execution: in-process, fire-and-forget, no queue
 
-The asynchronous operations from [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md) — write/extract, consolidate, forget — run as **in-process background tasks inside the memory service**, off the recall hot path, bounded by a concurrency setting:
+The memory service is async-first. Request handlers, health checks, relational reads, appends, sweeps, and lock acquisition use async FastAPI plus async Postgres (`asyncpg` or equivalent). Mem0 remains behind a KAOS-owned bounded `run_in_executor` pool because [ADR 0002](./adr_0002_memory-implementation-mem0-and-pydantic-ai-integration.md) records that Mem0 v2.0.10's `AsyncMemory` wraps sync work in `asyncio.to_thread` and its OpenAI LLM/embedder integrations use sync clients. The asynchronous operations from [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md) — fold, extract, flush, consolidate, forget — run as **in-process background tasks inside the memory service**, off the recall hot path, bounded by a concurrency setting:
 
 ```yaml
 extraction:
   concurrency: 4              # max simultaneous background extractions per replica
 ```
 
-There is no durable job queue in this version. Mem0 provides none ([KAOS-R10](../research/KAOS-R10-engine-assessment-and-integration.md)), a single write is a one-LLM-call unit of work rather than a long job, and the raw turn is already durable in the short-term tier, so a lost in-flight extraction is re-derivable. A crash therefore loses at most the pending extractions of one replica, with no loss of conversational state. A durable at-least-once queue is recorded as a follow-up to adopt only when write durability becomes a hard requirement; it is deliberately not built now.
+There is no durable job queue in this version. Mem0 provides none ([KAOS-R10](../research/KAOS-R10-engine-assessment-and-integration.md)), the primary cost lever is batching raw evicted turns once per fold rather than extracting per turn, and the raw turn batch remains in the relational window until a PG-locked fold/flush completes. Background-queue mitigations are staged and added only as metrics justify: first the Model 2 batching from [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md), then queue-depth and executor-saturation OTel metrics, then per-scope coalescing or single-flight to merge repeated fold requests for the same session, then bounded-queue backpressure with a degraded flag. A durable at-least-once queue is recorded as a later option only when write durability on crash becomes a hard requirement; it is deliberately not built before measurements show it is needed.
 
 ### High availability and the Mem0 statefulness caveat
 
-In `external` mode the service is **stateless**: all durable state is the shared Postgres (pgvector plus the short-term table), so high availability is `replicas: 2+` behind a Kubernetes `Service` with no sticky sessions. Mem0's only node-local state is its SQLite change-history audit log ([KAOS-R5-1](../research/KAOS-R5-1-mem0.md)); it is not memory data, KAOS does not consume it, and it is disabled or ignored, so it does not impede horizontal scaling. In `local` mode the embedded store is a single-writer file and the service is intentionally single-replica; availability there is the dev-grade trade-off for zero external dependencies.
+In `external` mode the service is **stateless**: all durable state is the shared Postgres (pgvector plus the KAOS relational tables), so high availability is `replicas: 2+` behind a Kubernetes `Service` with no sticky sessions. Short-term and medium-term consolidation is serialized per `scope_key` with Postgres locking — `pg_advisory_xact_lock(hashtext(scope_key))` or `SELECT ... FOR UPDATE SKIP LOCKED` work claiming — so many replicas can write and fold the same session without lost folds, double folds, single-writer routing, or lossy conflict behaviour. Mem0's only node-local state is its SQLite change-history audit log ([KAOS-R5-1](../research/KAOS-R5-1-mem0.md)); it is not memory data, KAOS does not consume it, and it is disabled or ignored, so it does not impede horizontal scaling. In `local` mode the embedded store is a single-writer file and the service is intentionally single-replica; the SQLite implementation retains the simple in-process lock because there are no cross-replica folds to coordinate.
 
 ### Degradation contract: memory is augmentation, not a hard dependency
 
@@ -73,9 +79,9 @@ A single `failureMode: soft | strict` knob on the Agent memory block selects thi
 
 The operator **deploys the memory service** (its `Deployment`, `Service`, and — in `local` mode — its `PersistentVolumeClaim`) but does **not** operate the external database. In `external` mode Postgres is a bring-your-own dependency bound through a connection secret reference, consistent with [KAOS-R7](../research/KAOS-R7-target-picture.md) and the security defaults in [adr_high_level_components](./adr_high_level_components.md); KAOS owns no backup, sizing, or failover for it. To keep the on-ramp turnkey, the `kaos` CLI installer can provision an **opt-in** development Postgres as a first-class, explicit step alongside the existing gateway and load-balancer provisioning, never as the production default.
 
-### Control plane: `MemoryStore` is infrastructure, the Agent block is behaviour
+### Control plane: `MemoryStore` defaults and Agent behaviour
 
-The `MemoryStore` CRD describes **only infrastructure and models**, carrying no runtime-behaviour knobs:
+The `MemoryStore` CRD describes infrastructure, model bindings, server defaults, and server guardrails. Runtime behaviour can be overridden on the Agent memory block when it is agent-specific, but the service also needs store-level settings because it owns the short-term window, the medium-term digest, sweeps, executor pool, and server-side validation. This reconciles the earlier slim-store posture with the finalized decision that memory knobs must exist at both client-params and server-settings levels.
 
 ```yaml
 apiVersion: kaos.io/v1alpha1
@@ -86,45 +92,67 @@ metadata:
 spec:
   engine: mem0                # single-value enum today
   storage:
-    type: local
-    local: { provider: chroma, persistentVolume: { size: 10Gi } }
-  replicas: 1                 # local pins to 1; external allows 2+
+    type: external            # local | external
+    external: { provider: pgvector, connectionSecretRef: { name: memory-postgres, key: dsn } }
+  replicas: 2
   models:
-    summarization: { modelAPI: default-models, model: openai/gpt-4o-mini }       # extraction and rolling summary
+    summarization: { modelAPI: default-models, model: openai/gpt-4o-mini }       # medium-term digest and Mem0 extraction prompt model
     embedding:     { modelAPI: default-models, model: openai/text-embedding-3-small }
-  extraction: { concurrency: 4 }
+  serverSettings:
+    tokenBudget: 6000
+    highWater: 6000
+    lowWater: 4500
+    hardEventCap: 200
+    digestMaxTokens: 1200
+    idleTtl: 30m
+    sweepInterval: 2m
+    rollingSummary: false
+    concurrency: 4
 ```
 
-The two model roles mirror the Agent's existing `{modelAPI, model}` shape and reference an existing `ModelAPI` rather than carrying inline credentials; the `summarization` role drives both Mem0's long-term fact extraction and the short-term tier rolling summary. There is no quota block: capacity is bounded by the PersistentVolume size in `local` mode and by Postgres sizing in `external` mode — meaningful, infrastructure-enforced limits rather than an arbitrary item count. Per-tenant rate and fair-share enforcement is a governance concern deferred to [ADR 0005](./adr_0005_multi-tenancy-agent-grouping-and-governance.md).
-
-The Agent CRD keeps a **slim memory block** holding only runtime behaviour, selecting a store by name and setting per-agent knobs:
+The Agent CRD keeps the agent-specific memory policy and client parameters, selecting a store by name and overriding the same behavioural knobs when the agent needs a different policy:
 
 ```yaml
 spec:
   config:
     memory:
       storeRef: shared-memory
-      shortTermTokenBudget: 6000
-      rollingSummary: true
+      scope: user
+      clientParams:
+        tokenBudget: 6000
+        highWater: 6000
+        lowWater: 4500
+        hardEventCap: 200
+        digestMaxTokens: 1200
+        idleTtl: 30m
+        sweepInterval: 2m
+        rollingSummary: true
+        concurrency: 2
       recall: { presentation: block }   # block | tools | both
       failureMode: soft                  # soft | strict
 ```
 
-The short-term tier token budget, the summarization toggle, the recall presentation from [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md), and the failure mode live here and nowhere else, removing the duplication of behavioural settings across two resources. The token budget and summarization toggle are **executed by the memory service** — which owns the shared short-term tier and holds the `summarization` model — and supplied as per-agent policy on each request, while the agent runtime only calls recall and receives assembled context. The per-agent memory `scope` is owned by [ADR 0005](./adr_0005_multi-tenancy-agent-grouping-and-governance.md) and is not set here.
+The shared knob set is `token_budget`, `high_water`, `low_water`, `hard_event_cap`, `digest_max_tokens`, `idle_ttl`, `sweep_interval`, `rolling_summary`, and `concurrency`. The operator validates the constraints from [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md) at both levels: `low_water < high_water <= token_budget`, `hard_event_cap >= 1`, positive TTL and sweep intervals, positive digest budget when rolling summary is enabled, and `concurrency >= 1`. Store-level values are defaults and service limits; Agent-level values are per-agent policy supplied on requests. The memory service is the executor of the policy because it owns the shared window, digest, locks, sweeper, and Mem0 executor.
+
+The two model roles mirror the Agent's existing `{modelAPI, model}` shape and reference an existing `ModelAPI` rather than carrying inline credentials; the `summarization` role drives both Mem0's long-term fact extraction prompt path and the medium-term rolling digest when enabled. There is no quota block in this version: capacity is bounded by the PersistentVolume size in `local` mode and by Postgres sizing in `external` mode — meaningful, infrastructure-enforced limits rather than an arbitrary item count. Per-tenant rate and fair-share enforcement is a governance concern deferred to [ADR 0005](./adr_0005_multi-tenancy-agent-grouping-and-governance.md).
+
+### Idle-session sweeper and optional close endpoint
+
+The memory service owns session-end detection. It stores `last_write_at` per session, runs a periodic idle-TTL sweep at `sweep_interval`, claims candidate sessions with the same Postgres per-scope lock used for folds, performs a final medium-term fold when rolling summary is enabled, sends the remaining raw window to Mem0 for the guaranteed long-term extraction flush, and clears the ephemeral short-term window. The optional `/v1/session/close` endpoint invokes the same locked flush path immediately. This is a service concern, not an operator job, because it needs the service's live config, ModelAPI clients, Mem0 adapter, and executor limits.
 
 ### Operator reconciliation and schema ownership
 
-Reconciling a `MemoryStore` deploys the memory-service `Deployment` and `Service` (plus a `PersistentVolumeClaim` in `local` mode), wires the storage secret and the referenced `ModelAPI` endpoints as environment, validates that the model references resolve and are ready, and reports health and the service endpoint in status. Schema setup is automatic and needs no user migration step: the service runs idempotent `CREATE TABLE IF NOT EXISTS` for the KAOS-owned short-term table on boot, and Mem0 self-creates its own vector schema on first connect. The user supplies only a connection secret in `external` mode or a volume size in `local` mode. Versioned migration tooling is introduced later, when the KAOS-owned schema first evolves, and is then an operator responsibility.
+Reconciling a `MemoryStore` deploys the memory-service `Deployment` and `Service` (plus a `PersistentVolumeClaim` in `local` mode), wires the storage secret and the referenced `ModelAPI` endpoints as environment, validates that the model references resolve and are ready, and reports health and the service endpoint in status. Schema setup is automatic and needs no user migration step: the service runs idempotent `CREATE TABLE IF NOT EXISTS` for the KAOS-owned `short_term_memory_window` and `medium_term_memory_summaries` tables on boot, including the Postgres `UNLOGGED` posture for the ephemeral window in external mode, and Mem0 self-creates its own vector schema on first connect. The user supplies only a connection secret in `external` mode or a volume size in `local` mode. Versioned migration tooling is introduced later, when the KAOS-owned schema first evolves, and is then an operator responsibility.
 
 ## Consequences
 
 - Memory runs as one central, horizontally scalable service that all agents share, keeping agent images thin and isolating LLM-gated extraction from serving.
 - A single `storage.type` switch spans a zero-dependency single-container `local` mode and a high-availability `external` mode, with a clean upgrade path between them.
 - Multi-tenant recall is correct by construction because both shipped vector providers pre-filter on scope during the query.
-- Asynchronous memory work is simple and cheap, accepting bounded re-derivable loss on crash rather than carrying a queue the engine does not provide.
-- High availability in `external` mode is a replica count, because the service holds no durable node-local state once Mem0's audit log is set aside.
+- Asynchronous memory work is simple and cheap, with Model 2 batching as the first mitigation, OTel queue-depth metrics as the second, and heavier queue/backpressure mechanisms staged until measurements justify them.
+- High availability in `external` mode is a replica count plus Postgres-locked consolidation, because the service holds no durable node-local state once Mem0's audit log is set aside.
 - A memory outage degrades agents to short-term-memory-only and is surfaced through readiness, but never halts serving; memory is an augmentation, not a tier-1 dependency.
-- The control plane cleanly separates a `MemoryStore` infrastructure resource from a behaviour-only Agent block, ending the cross-resource duplication of runtime settings.
+- The control plane exposes the same memory-behaviour knobs as MemoryStore server defaults and Agent client parameters, with identical validation and clear precedence.
 - The operator binds rather than operates the external database, with an opt-in CLI-provisioned development Postgres for the turnkey path.
 - Because alpha allows breaking changes, the inline short-term-only `MemoryConfig` is replaced by the `MemoryStore` plus slim Agent block; deployments are migrated rather than transparently upgraded.
 
@@ -134,14 +162,17 @@ Reconciling a `MemoryStore` deploys the memory-service `Deployment` and `Service
 - **Sidecar engine per agent pod.** Rejected: it adds a container and a second lifecycle while still failing to share memory across an agent's replicas.
 - **Run the stock Mem0 REST server.** Rejected: it is long-term-only, single-admin-key authenticated, IP-rate-limited, and lacks the short-term tier, rolling summary, KAOS scoping, and KAOS telemetry ([KAOS-R10](../research/KAOS-R10-engine-assessment-and-integration.md)); KAOS reuses Mem0 as a library instead.
 - **FAISS as the local vector store.** Rejected: Mem0's FAISS path post-filters metadata after the nearest-neighbour search, so a tenant's relevant memories can be silently dropped from a shared index; Chroma pre-filters and is correct for multi-tenant recall. FAISS remains a possible documented single-tenant, ephemeral option.
-- **A durable job queue for background writes in this version.** Rejected now: Mem0 provides none, a write is a single-call unit re-derivable from the durable short-term tier, and a queue is added complexity for unproven value at this stage; recorded as a follow-up.
+- **A durable job queue for background writes in this version.** Rejected now: Mem0 provides none, Model 2 batching is the primary lever, raw turns remain available until locked fold/flush completion, and a queue is added complexity for unproven value at this stage; recorded as a follow-up.
+- **Redis for the short-term window.** Rejected: Postgres `UNLOGGED` tables give shared, coherent, low-latency ephemeral storage across replicas without a second datastore; Redis is unnecessary for conversational write frequency.
+- **Single-writer memory service for consolidation.** Rejected: Postgres advisory locks or `FOR UPDATE SKIP LOCKED` serialize per-session folds safely while allowing many replicas.
+- **Gateway session affinity as correctness mechanism.** Rejected: correctness comes from PG locks; affinity is deferred as a possible latency optimization only.
 - **A second Postgres or Redis for the short-term tier.** Rejected: consolidating both tiers onto one datastore is a goal, and the short-term tier follows the storage mode automatically ([ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md), [KAOS-R11](../research/KAOS-R11-short-term-memory-storage.md)).
 - **Application-level per-tenant quotas in this version.** Rejected: the engine provides none, an item count is an arbitrary limit, and infrastructure sizing already bounds capacity; fair-share enforcement is deferred to [ADR 0005](./adr_0005_multi-tenancy-agent-grouping-and-governance.md).
-- **Behavioural settings on the `MemoryStore`.** Rejected: token budget, summarization, recall presentation, and failure mode are per-agent behaviour and belong on the Agent block; the store stores and the agent decides how it uses memory.
+- **Behavioural settings only on the Agent.** Rejected by the finalized service design: the memory service owns sweeps, locks, digest retention, and executor capacity, so server defaults and limits belong on `MemoryStore`; Agent settings remain per-agent client policy.
 
 ## Follow-up
 
 - ADR 0005 fixes the full multi-tenancy, agent-grouping, and governance model — including per-tenant rate and fair-share enforcement, the isolation modes, authentication on the memory endpoints, and erasure and export — building on the server-side scope injection this control plane configures.
-- A durable, at-least-once background-write mechanism is adopted only if and when write durability on crash becomes a hard requirement.
+- A durable, at-least-once background-write mechanism is adopted only if and when queue-depth, executor-saturation, or write-durability metrics show that Model 2 batching, single-flight, and bounded in-process backpressure are insufficient.
 - Versioned schema migration tooling for the KAOS-owned short-term table is introduced when that schema first evolves.
 - The `kaos` CLI installer integration for the opt-in development Postgres is specified alongside the existing system-install provisioning during implementation.
