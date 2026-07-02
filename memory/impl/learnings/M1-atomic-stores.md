@@ -7,8 +7,8 @@ The two atomic storage primitives are implemented and green against running Mem0
 ## Confirmed in code
 
 - **Pre-filtering is real on both backends.** Scoped recall never returns another owner's fact even when it is the exact nearest neighbour. The `DeterministicEmbedder` (offline, bag-of-words → L2-normalized 64-dim) makes this assertable without network or API keys.
-- **One `ModelConfig` covers the whole stack.** Mem0's extraction LLM, Mem0's embedder, and the working-tier summarizer all bind to a single resolved OpenAI-compatible endpoint. There is no need for separate embedder/summarizer endpoint config — only separate *model names* under one base URL.
-- **Eviction-by-summarization is cheap.** The working tier is a plain relational table; folding overflow into a rolling summary while keeping recent turns verbatim and retaining raw rows is a handful of SQL statements and works identically on SQLite and Postgres via the placeholder/serial abstraction.
+- **One `ModelConfig` covers the whole stack.** Mem0's extraction LLM, Mem0's embedder, and the short-term tier summarizer all bind to a single resolved OpenAI-compatible endpoint. There is no need for separate embedder/summarizer endpoint config — only separate *model names* under one base URL.
+- **Eviction-by-summarization is cheap.** The short-term tier is a plain relational table; folding overflow into a rolling summary while keeping recent turns verbatim and retaining raw rows is a handful of SQL statements and works identically on SQLite and Postgres via the placeholder/serial abstraction.
 
 ## Deltas to fold into M2 / M4
 

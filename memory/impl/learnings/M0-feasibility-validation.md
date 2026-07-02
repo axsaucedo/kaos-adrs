@@ -2,7 +2,7 @@
 
 ## Verdict
 
-**GO.** All five load-bearing hypotheses behind the memory architecture hold against running code. Six harnesses in the gitignored `./tmp/memory/` exercise each hypothesis with assertions and pass. The Mem0-as-a-library design, scope pre-filtering, ModelAPI routing, server-owned working tier, Pydantic AI bridge, and both storage shapes are all confirmed. The deltas below are API-shape corrections to fold into M1–M7, not design reversals.
+**GO.** All five load-bearing hypotheses behind the memory architecture hold against running code. Six harnesses in the gitignored `./tmp/memory/` exercise each hypothesis with assertions and pass. The Mem0-as-a-library design, scope pre-filtering, ModelAPI routing, server-owned short-term tier, Pydantic AI bridge, and both storage shapes are all confirmed. The deltas below are API-shape corrections to fold into M1–M7, not design reversals.
 
 ## Environment and exact versions
 
@@ -16,7 +16,7 @@ Validated on macOS, Python 3.13.6, Docker and KIND available. Throwaway venv at 
 
 1. **Mem0 runs as a library against both Chroma and pgvector with scope filters applied inside the vector query.** Harness 02 (Chroma) and 03 (pgvector) write identical-embedding facts for different owners and prove a scoped search never returns another owner's fact, even when it is an exact nearest neighbour — i.e. **pre-filtering**, not lossy post-filtering. Both stores pre-filter correctly.
 2. **Extraction and embedding route through an OpenAI-compatible base URL (the KAOS ModelAPI/LiteLLM binding).** Harness 04 points Mem0's LLM and embedder at a mock OpenAI server via `openai_base_url`; `add(infer=True)` extracts and stores a fact and `search` recalls it, with all model traffic observably hitting the proxy (1 chat + 3 embedding calls).
-3. **Token-budget working tier with a rolling summary is cheap on a plain relational table.** Harness 05 implements the SQLite working table, counts tokens with a real tokenizer, and folds overflow into a rolling summary (via the proxy) while keeping recent turns verbatim and retaining raw rows for re-derivation. Eviction is by summarization, not truncation.
+3. **Token-budget short-term tier with a rolling summary is cheap on a plain relational table.** Harness 05 implements the SQLite short-term table, counts tokens with a real tokenizer, and folds overflow into a rolling summary (via the proxy) while keeping recent turns verbatim and retaining raw rows for re-derivation. Eviction is by summarization, not truncation.
 4. **Recalled facts surface to a Pydantic AI run, and full-fidelity history replays.** Harness 06 injects recall as an instructions block consumed by the run, and round-trips a `ModelRequest`/`ModelResponse` history including a `ToolCallPart`/`ToolReturnPart` through the official type adapter with matching tool-call ids, then replays it into a new run.
 5. **Both storage shapes stand up durably.** Harness 03 proves the `external` premise (two independent Mem0 clients on one Postgres see each other's writes — a restarted stateless replica re-attaches losslessly). Harness 07 proves the `local` premise (embedded Chroma + SQLite on one directory survive a process teardown and re-open — the single-container PVC restart).
 
@@ -47,7 +47,7 @@ Validated on macOS, Python 3.13.6, Docker and KIND available. Throwaway venv at 
 - `02_chroma_scope.py` — Chroma scope pre-filtering + owner-less rejection.
 - `03_pgvector_scope.py` — pgvector scope pre-filtering + shared-state across clients (external HA premise).
 - `04_model_routing.py` + `mock_openai.py` — extraction/embedding routed through a ModelAPI-style base URL.
-- `05_working_tier.py` — token-budget working table with rolling summary (server-owned working tier).
+- `05_working_tier.py` — token-budget short-term table with rolling summary (server-owned short-term tier).
 - `06_pydantic_bridge.py` — recall-as-block + full-fidelity tool-call history replay.
 - `07_local_persistence.py` — local single-container Chroma+SQLite PVC restart durability.
 

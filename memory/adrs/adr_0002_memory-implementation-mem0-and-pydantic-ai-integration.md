@@ -8,9 +8,9 @@
 
 ## Context
 
-[ADR 0001](./adr_0001_memory-model-and-lifecycle-operations.md) fixes the conceptual model — working memory owned by KAOS, semantic and episodic as the committed long-term core, temporal and procedural deferred, scope anchored to verifiable identity — but deliberately leaves every engine-dependent behaviour as a placeholder. This record closes those placeholders by choosing how memory is actually implemented.
+[ADR 0001](./adr_0001_memory-model-and-lifecycle-operations.md) fixes the conceptual model — short-term memory owned by KAOS, semantic and episodic as the committed long-term core, temporal and procedural deferred, scope anchored to verifiable identity — but deliberately leaves every engine-dependent behaviour as a placeholder. This record closes those placeholders by choosing how memory is actually implemented.
 
-KAOS today ships a working-memory-only `Memory` abstraction with Local, Redis, and Null backends, all variations of one short-term tier ([KAOS-R1](../research/KAOS-R1-memory-features-and-limitations.md)). Pydantic AI itself provides message history only, so KAOS owns the long-term layer regardless of engine; the open question is what backs it. The selection pipeline recommended Mem0 as the primary engine with Redis AMS as the infrastructure-minimal alternative ([KAOS-R6](../research/KAOS-R6-tool-selection.md)), and the follow-on assessment confirmed Mem0's capability and maturity, its only material lock-in being graph memory and managed high availability behind its SaaS, neither needed for the committed core ([KAOS-R10](../research/KAOS-R10-engine-assessment-and-integration.md)).
+KAOS today ships a short-term-memory-only `Memory` abstraction with Local, Redis, and Null backends, all variations of one short-term tier ([KAOS-R1](../research/KAOS-R1-memory-features-and-limitations.md)). Pydantic AI itself provides message history only, so KAOS owns the long-term layer regardless of engine; the open question is what backs it. The selection pipeline recommended Mem0 as the primary engine with Redis AMS as the infrastructure-minimal alternative ([KAOS-R6](../research/KAOS-R6-tool-selection.md)), and the follow-on assessment confirmed Mem0's capability and maturity, its only material lock-in being graph memory and managed high availability behind its SaaS, neither needed for the committed core ([KAOS-R10](../research/KAOS-R10-engine-assessment-and-integration.md)).
 
 A verified survey found that no engine ships a maintained Pydantic AI adapter — only a seven-star demonstration repository exists — so the integration is hand-written for any engine and is where most of the implementation effort and most of the KAOS-specific value lands. The peer Kubernetes agent platform kagent independently built an equivalent memory layer (self-hosted pgvector, background extraction every few turns, prefetch on the first turn, embeddings through a model proxy, time-to-live pruning), which validates this shape; KAOS adopts Mem0 to obtain the same capability without building and maintaining the engine.
 
@@ -20,21 +20,21 @@ A verified survey found that no engine ships a maintained Pydantic AI adapter �
 
 KAOS adopts **Mem0** as the long-term memory engine, and adopts exactly one. The long-term tier is not pluggable across multiple shipped backends: there is one engine, implemented and supported. The `Memory` abstraction remains an abstraction, so a future contributor can add another backend, but KAOS does not build, ship, or maintain a second long-term implementation now, and does not water the interface down to a lowest-common-denominator across hypothetical engines. The interface is shaped around Mem0's actual contract — scope identifiers on every operation, infer-on-write extraction, and relevance search — rather than an abstract memory algebra. Redis AMS and Graphiti are recorded as alternatives in research, not as parallel code paths.
 
-### Tier ownership: KAOS keeps working, Mem0 owns long-term
+### Tier ownership: KAOS keeps short-term, Mem0 owns long-term
 
-The one firm invariant from [ADR 0001](./adr_0001_memory-model-and-lifecycle-operations.md) holds: KAOS and Pydantic AI own the live per-run message-history bridge rather than delegating it to Mem0, which has no live conversation-buffer concept and is never asked to serve working memory. Mem0 backs only the semantic and episodic long-term tier. Long-term adoption is therefore **additive at the feature level** — an existing agent gains no long-term tier until one is configured. This is distinct from the working-tier *internals*: [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md), under the alpha no-backward-compatibility stance, redesigns the working tier (token-budget bound, rolling summary, relational persistence) and replaces the Local/Redis/Null `MEMORY_*` surface. So KAOS keeps *owning* working memory, but its implementation and configuration are not preserved unchanged.
+The one firm invariant from [ADR 0001](./adr_0001_memory-model-and-lifecycle-operations.md) holds: KAOS and Pydantic AI own the live per-run message-history bridge rather than delegating it to Mem0, which has no live conversation-buffer concept and is never asked to serve short-term memory. Mem0 backs only the semantic and episodic long-term tier. Long-term adoption is therefore **additive at the feature level** — an existing agent gains no long-term tier until one is configured. This is distinct from the short-term tier *internals*: [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md), under the alpha no-backward-compatibility stance, redesigns the short-term tier (token-budget bound, rolling summary, relational persistence) and replaces the Local/Redis/Null `MEMORY_*` surface. So KAOS keeps *owning* short-term memory, but its implementation and configuration are not preserved unchanged.
 
 ### Integration: a hand-written `Mem0Memory` backend behind the existing ABC
 
 The integration is a `Mem0Memory` subclass of the existing `Memory` ABC in the Pydantic AI runtime, running Mem0 in library mode against an external vector store. It calls `mem0.add(...)` on write and `mem0.search(...)` on read, mapping KAOS scope onto Mem0's `user_id`/`agent_id`/`run_id` identifiers, with the scope values drawn from the verifiable identities ADR 0001 anchors to — the user principal and the agent's AIB `client_id` (`kaos://agent/{namespace}/{name}`), never an ephemeral UUID.
 
 ```python
-class Mem0Memory(Memory):  # extends the existing working-memory ABC; long-term only
+class Mem0Memory(Memory):  # extends the existing short-term-memory ABC; long-term only
     def __init__(self, config: Mem0Config):
         self.m = AsyncMemory(config=config.to_mem0())  # vector store + ModelAPI-backed models
 
     async def add_event(self, session_id: str, event: MemoryEvent, *, scope: Scope) -> None:
-        await super().add_event(session_id, event)            # KAOS working buffer, unchanged
+        await super().add_event(session_id, event)            # KAOS short-term buffer, unchanged
         await self._enqueue_extraction(event, scope)          # long-term write runs in background
 
     async def recall(self, query: str, *, scope: Scope, top_k: int = 5):
@@ -67,7 +67,7 @@ Mem0's gaps are filled at the KAOS integration layer rather than by the engine: 
 
 ## Consequences
 
-- Long-term memory becomes available as an additive, opt-in capability; an agent without a configured store is unaffected at the feature level, even though the working-tier internals and `MEMORY_*` configuration are themselves redesigned under the alpha breaking-change stance ([ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md)).
+- Long-term memory becomes available as an additive, opt-in capability; an agent without a configured store is unaffected at the feature level, even though the short-term tier internals and `MEMORY_*` configuration are themselves redesigned under the alpha breaking-change stance ([ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md)).
 - The semantic and episodic placeholders in [ADR 0001](./adr_0001_memory-model-and-lifecycle-operations.md) can be closed: retrieval is Mem0 relevance search, extraction is Mem0 infer-on-write run in the background, and conflict resolution uses Mem0's update semantics.
 - KAOS owns a hand-written Pydantic AI integration as a first-class component, with the upside of a reusable public adapter and the cost of tracking Mem0's API churn ([KAOS-R5-1](../research/KAOS-R5-1-mem0.md)).
 - Tenant isolation, OpenTelemetry, and Kubernetes packaging are KAOS responsibilities, deliberately, because Mem0 does not provide them at the level KAOS requires.

@@ -10,7 +10,7 @@
 
 [ADR 0001](./adr_0001_memory-model-and-lifecycle-operations.md) defines the scope-addressing model — a hierarchical segmented path anchored to the user principal and the agent's AIB `client_id`, with prefix-sharing and a configurable delegation-propagation rule. [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md) injects that scope server-side at the `Memory` boundary and fails closed. [ADR 0004](./adr_0004_deployment-topology-and-control-plane.md) makes the `MemoryStore` the coarse deployment and tenancy boundary. This record settles what those leave open: how agents and users are grouped for sharing or isolation, how A2A-delegated sub-agents are placed into scope, how isolation is enforced, how the memory endpoints are authenticated, and which governance features ship now versus later.
 
-This component is broader than generic multi-tenancy because KAOS agents are first-class resources that delegate to one another, so "who can see which memory" is both a tenancy question and an agent-topology question. The delegation surfaces are `pydantic-ai-server/pais/serverutils.py` (`RemoteAgent`, `AgentDeps` carrying `principal`, `scopes`, `session_id`) and `pydantic-ai-server/pais/tools.py` (`DelegationToolset`, which today forwards only a slice of working-memory events to the delegate).
+This component is broader than generic multi-tenancy because KAOS agents are first-class resources that delegate to one another, so "who can see which memory" is both a tenancy question and an agent-topology question. The delegation surfaces are `pydantic-ai-server/pais/serverutils.py` (`RemoteAgent`, `AgentDeps` carrying `principal`, `scopes`, `session_id`) and `pydantic-ai-server/pais/tools.py` (`DelegationToolset`, which today forwards only a slice of short-term-memory events to the delegate).
 
 ## Decision
 
@@ -28,7 +28,7 @@ memory:
 - **`user`** — shared across all agents serving the same user principal.
 - **`shared`** — pooled across every agent on the same `MemoryStore`.
 
-A logical group is **the set of agents on the same `MemoryStore`**: the store is the group. There is no separate group identifier or grouping CRD in this version, because store membership plus the three scope levels already express agent-private, per-user, and fleet-shared memory without an extra segment. Working memory remains session-scoped in every case; `scope` governs only the long-term tier. Deeper named sub-groups within one store are deferred.
+A logical group is **the set of agents on the same `MemoryStore`**: the store is the group. There is no separate group identifier or grouping CRD in this version, because store membership plus the three scope levels already express agent-private, per-user, and fleet-shared memory without an extra segment. Short-term memory remains session-scoped in every case; `scope` governs only the long-term tier. Deeper named sub-groups within one store are deferred.
 
 ### A2A delegation: inherit the prefix, isolated below
 
@@ -40,7 +40,7 @@ The default isolation model is a **shared store with scope filtering**: one `Mem
 
 ### Enforcement: the service is the sole, fail-closed enforcement point
 
-Scope filtering is non-optional at the data layer. Because Mem0's isolation is application-level filtering with no row-level security ([ADR 0002](./adr_0002_memory-implementation-mem0-and-pydantic-ai-integration.md)), the memory service is the single enforcement point: every recall, write, and erase carries the server-injected scope filter, no unscoped query path is exposed, and an operation that cannot resolve a trusted scope fails closed rather than querying an unfiltered store ([ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md)). Application-level enforcement is the whole mechanism in this version; Postgres row-level security on the KAOS-owned working table is recorded as a defense-in-depth hardening follow-up, noting that Mem0's own vector tables are managed by the engine and are not cleanly governed by row-level security.
+Scope filtering is non-optional at the data layer. Because Mem0's isolation is application-level filtering with no row-level security ([ADR 0002](./adr_0002_memory-implementation-mem0-and-pydantic-ai-integration.md)), the memory service is the single enforcement point: every recall, write, and erase carries the server-injected scope filter, no unscoped query path is exposed, and an operation that cannot resolve a trusted scope fails closed rather than querying an unfiltered store ([ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md)). Application-level enforcement is the whole mechanism in this version; Postgres row-level security on the KAOS-owned short-term table is recorded as a defense-in-depth hardening follow-up, noting that Mem0's own vector tables are managed by the engine and are not cleanly governed by row-level security.
 
 ### Authentication: the AIB identity is the single source of truth
 
@@ -56,7 +56,7 @@ The first-iteration governance set is deliberately small:
 
 ### Erasure: a synchronous, scope-targeted fan-out
 
-Right-to-erasure is a declarative, scope-targeted hard delete that fans out **synchronously** across both tiers: a delete on the working table by scope prefix, a Mem0 `delete_all` filtered by the same scope, and a clear of any rolling summary for that scope. Because [ADR 0004](./adr_0004_deployment-topology-and-control-plane.md) disables Mem0's local SQLite change-history log, there is no shadow copy left behind. Erasure is synchronous and best-effort because it is infrequent and correctness matters more than latency. Deletion-verification ledgers and proof-of-deletion, and logical export and import, are deferred.
+Right-to-erasure is a declarative, scope-targeted hard delete that fans out **synchronously** across both tiers: a delete on the short-term table by scope prefix, a Mem0 `delete_all` filtered by the same scope, and a clear of any rolling summary for that scope. Because [ADR 0004](./adr_0004_deployment-topology-and-control-plane.md) disables Mem0's local SQLite change-history log, there is no shadow copy left behind. Erasure is synchronous and best-effort because it is infrequent and correctness matters more than latency. Deletion-verification ledgers and proof-of-deletion, and logical export and import, are deferred.
 
 ## Consequences
 
@@ -81,5 +81,5 @@ Right-to-erasure is a declarative, scope-targeted hard delete that fans out **sy
 ## Follow-up
 
 - Dynamic groups via a `MemoryGroup` membership layer with query-time scope-set resolution, added additively over the owner anchors guaranteed by [ADR 0001](./adr_0001_memory-model-and-lifecycle-operations.md), if and when on-the-fly regrouping is required; this is the one evolution that would extend the [ADR 0004](./adr_0004_deployment-topology-and-control-plane.md) control plane.
-- Postgres row-level security on the KAOS-owned working table as defense-in-depth beneath the service-level enforcement.
+- Postgres row-level security on the KAOS-owned short-term table as defense-in-depth beneath the service-level enforcement.
 - Per-tenant quota and fair-share enforcement, logical export and import by scope, application-level field encryption, and deletion-verification, as the governance set matures beyond alpha.
