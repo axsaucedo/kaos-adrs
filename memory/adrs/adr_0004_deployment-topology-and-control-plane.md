@@ -18,7 +18,7 @@ A determining finding from [KAOS-R10](../research/KAOS-R10-engine-assessment-and
 
 ### A single central memory service, built around Mem0 as a library
 
-The long-term engine runs as **one central memory service** that all agents call over the network, not as a library embedded in each agent process and not as a per-agent sidecar. The service is a thin KAOS-owned component that imports Mem0 as a library and wraps it with the [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md) contract — the short-term tier, rolling summary, recall presentation, server-side scope injection, and OpenTelemetry. The stock Mem0 server is not used because it provides none of these ([KAOS-R10](../research/KAOS-R10-engine-assessment-and-integration.md)).
+The long-term engine runs as **one central memory service** that all agents call over the network, not as a library embedded in each agent process and not as a per-agent sidecar. The service is a thin KAOS-owned component that imports Mem0 as a library and wraps it with the [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md) contract — the short-term tier, rolling summary, recall block assembly, server-side scope injection, and OpenTelemetry. The stock Mem0 server is not used because it provides none of these ([KAOS-R10](../research/KAOS-R10-engine-assessment-and-integration.md)).
 
 The embedded-in-agent alternative is rejected as a supported path: it pushes LLM-gated extraction onto the serving process, multiplies datastore connections, ships the engine and its vector dependencies into every agent image, and — with a per-pod local store — diverges memory across an agent's replicas. A single shared service is cheap, keeps agents thin, isolates extraction, and preserves cross-agent sharing, which the cross-agent and organizational memory capability in [KAOS-R7](../research/KAOS-R7-target-picture.md) requires. The "no separate pod" and "no network hop" gains of embedding are marginal against LLM-dominated turn latency.
 
@@ -108,29 +108,34 @@ spec:
     concurrency: 4
 ```
 
-The Agent CRD keeps the agent-specific memory policy and client parameters, selecting a store by name and overriding the same behavioural knobs when the agent needs a different policy:
+The Agent CRD keeps the agent-specific memory policy and client parameters, selecting a store by name and overriding the same behavioural knobs when the agent needs a different policy. The store reference is the backend switch: when `memoryStore` is set the operator injects the service endpoint and the runtime uses the network `RemoteMemory` backend; when it is absent the runtime falls back to the in-process short-term `LocalMemory` backend (recent-turn replay only, pod-local, no long-term tier). `RemoteMemory` is the renamed runtime HTTP client for this service — it speaks the KAOS tiered contract and is not a Mem0 client; Mem0 is embedded inside the service as the long-term engine, never called directly from the agent.
 
 ```yaml
 spec:
   config:
     memory:
-      storeRef: shared-memory
+      enabled: true                    # false => memory disabled (NullMemory)
+      memoryStore: shared-memory       # optional; set => RemoteMemory, absent => LocalMemory
       scope: user
       clientParams:
         tokenBudget: 6000
-        highWater: 6000
-        lowWater: 4500
+        compactionTrigger: 6000
+        compactionTarget: 4500
         hardEventCap: 200
         digestMaxTokens: 1200
         idleTtl: 30m
         sweepInterval: 2m
         rollingSummary: true
         concurrency: 2
-      recall: { presentation: block }   # block | tools | both
-      failureMode: soft                  # soft | strict
+      tools: all                       # all | read | write | (unset = none)
+      failureMode: soft                # soft | strict; unset => inherit store default
 ```
 
+Enabling memory applies the automatic baseline unconditionally: the runtime recalls and injects a context block before each run and flushes the run's turns for extraction after it. The `tools` knob layers **additive** explicit agent-driven tools on top of that baseline — `read` exposes `search_memory` (on-demand retrieval), `write` exposes `save_memory` (on-demand save), `all` exposes both, and unset exposes none. There is no separate automatic-versus-tool mode: the automatic paths are the meaning of enabling memory, and the tools are purely additional. This supersedes the earlier `recall.presentation: block | tools | both` knob. See also: [the runtime memory API and tooling learnings](../impl/learnings/runtime-memory-api-and-tooling.md).
+
 The shared knob set is `token_budget`, `compaction_trigger`, `compaction_target`, `hard_event_cap`, `digest_max_tokens`, `idle_ttl`, `sweep_interval`, `rolling_summary`, and `concurrency`. The operator validates the constraints from [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md) at both levels: `compaction_target < compaction_trigger <= token_budget`, `hard_event_cap >= 1`, positive TTL and sweep intervals, positive digest budget when rolling summary is enabled, and `concurrency >= 1`. Store-level values are defaults and service limits; Agent-level values are per-agent policy supplied on requests. The memory service is the executor of the policy because it owns the shared window, digest, locks, sweeper, and Mem0 executor.
+
+The operator additionally enforces two fail-closed binding guards that follow from the backend switch. A `user`- or `shared`-scoped agent **requires** a `memoryStore`, because `LocalMemory` is pod-local and cannot serve cross-agent scopes — across replicas each pod would hold a divergent private copy. Setting `tools` also **requires** a `memoryStore`, because `save_memory` and `search_memory` target the long-term tier that `LocalMemory` lacks, so without a store they would be silent no-ops. Both misconfigurations are rejected rather than silently degraded. A `private`-scoped owner is likewise resolved fail-closed from the agent's fully-qualified `kaos://agent/{namespace}/{name}` identity (minted as `AGENT_AUTH_IDENTITY`), never a name-only or empty owner, so identity-less agents can never collapse onto one shared private partition.
 
 The two model roles mirror the Agent's existing `{modelAPI, model}` shape and reference an existing `ModelAPI` rather than carrying inline credentials; the `summarization` role drives both Mem0's long-term fact extraction prompt path and the medium-term rolling digest when enabled. There is no quota block in this version: capacity is bounded by the PersistentVolume size in `local` mode and by Postgres sizing in `external` mode — meaningful, infrastructure-enforced limits rather than an arbitrary item count. Per-tenant rate and fair-share enforcement is a governance concern deferred to [ADR 0005](./adr_0005_multi-tenancy-agent-grouping-and-governance.md).
 
@@ -151,6 +156,7 @@ Reconciling a `MemoryStore` deploys the memory-service `Deployment` and `Service
 - High availability in `external` mode is a replica count plus database-serialized consolidation, because the service holds no durable node-local memory state.
 - A memory outage degrades agents to short-term-memory-only and is surfaced through readiness, but never halts serving; memory is an augmentation, not a tier-1 dependency.
 - The control plane exposes the same memory-behaviour knobs as MemoryStore server defaults and Agent client parameters, with identical validation and clear precedence.
+- The Agent memory block is a single switch surface: enabling memory turns on the automatic recall-inject and write-extract baseline, the presence of a `memoryStore` reference selects the `RemoteMemory` service backend versus the pod-local short-term `LocalMemory` fallback, and a `tools: all|read|write` knob layers additive `save_memory`/`search_memory` tools; `user`/`shared` scope and any `tools` setting are rejected without a bound store, and `private` ownership resolves fail-closed from the qualified agent identity.
 - The operator binds rather than operates the external database, with an opt-in CLI-provisioned development Postgres for the turnkey path.
 - Because alpha allows breaking changes, the inline short-term-only `MemoryConfig` is replaced by the `MemoryStore` plus slim Agent block; deployments are migrated rather than transparently upgraded.
 

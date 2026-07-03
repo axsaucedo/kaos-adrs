@@ -20,7 +20,7 @@ Memory sharing is expressed by a single `scope` value on the Agent memory block,
 
 ```yaml
 memory:
-  storeRef: shared-memory
+  memoryStore: shared-memory
   scope: user          # private | user | shared
 ```
 
