@@ -144,7 +144,7 @@ The nuance is that Mem0's own async API is not enough. `AsyncMemory` wraps sync 
 
 A scoped upstream contribution to Mem0 would be straightforward and valuable: add native-async OpenAI LLM and embedding providers using `AsyncOpenAI`, and keep an `asyncio.to_thread` fallback in `LLMBase` and `EmbeddingBase` for providers that remain sync. That would improve Mem0 for async frameworks without requiring all provider integrations to be rewritten at once.
 
-KAOS should not put this on its critical path. Full async across roughly twenty providers is a large upstream project, and KAOS can get predictable behaviour now with the bounded executor. The upstream opportunity is worth logging because it reduces future thread pressure and could simplify the KAOS adapter later, but the KAOS design must work with Mem0 as it exists today.
+KAOS should not put this on its critical path. Full async across roughly twenty providers is a large upstream project, and KAOS can get predictable behaviour now with the bounded executor. The upstream opportunity is worth logging because it reduces future thread pressure and could simplify the KAOS adapter later, but the KAOS design must work with Mem0 as it exists today. The scoped issue is filed as [mem0ai/mem0#6070](https://github.com/mem0ai/mem0/issues/6070); the full mechanics — Mem0's thread-offload internals, the two thread layers and their removal conditions, the thread-occupancy value analysis (LLM+embedder native captures ~99% of the win), and the native-async Postgres cost — are recorded comprehensively in [Mem0 async boundary and internals](./mem0-async-boundary-and-internals.md).
 
 ## Final target shape
 
