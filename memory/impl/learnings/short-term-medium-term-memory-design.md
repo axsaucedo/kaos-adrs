@@ -66,7 +66,7 @@ Postgres is sufficient for conversational write frequency, especially when write
 
 The write endpoint accepts multiple turns per request. A single-turn request is just the degenerate case. This replaces the runtime pattern of looping one HTTP write per turn.
 
-Batching collapses N network calls, N commits, and N threshold checks into one operation. It also aligns with the actual semantic unit: after a model response, the runtime often has a small sequence of user, assistant, tool-call, and tool-return parts that belong to one interaction. Persisting them together makes ordering clearer and fold scheduling cheaper.
+Batching collapses N network calls, N commits, and N threshold checks into one operation. It also aligns with the actual semantic unit: after a model response, the runtime often has a small sequence of user, assistant, tool-call, and tool-return parts that belong to one interaction. Persisting them together makes ordering clearer and fold scheduling cheaper. As built this batching runs the whole way down: the short-term store's `add` is array-only (`add(scope, [(role, content), ...])`), so a request's turns land in a single `executemany` insert, one commit, and one overflow scan, and the evicted batch drives a single long-term extraction. The single-turn convenience signature was dropped in favour of the array form because the one-element list is a trivial caller overhead and removing the second code path keeps the eviction seam unambiguous.
 
 ## Decision 8: alpha token counting uses raw content
 
@@ -88,7 +88,7 @@ This cascade is the main cost-control lever. It avoids Mem0 running one extracti
 
 ## Decision 11: long-term extraction is per-fold plus guaranteed session-end flush
 
-Long-term extraction timing is Option C: batched per-fold plus a guaranteed session-end flush. The fold path handles long sessions that exceed `high_water`; the idle-TTL flush handles sessions that never grow enough to fold.
+Long-term extraction timing is Option C: batched per-fold plus a guaranteed session-end flush. The fold path handles long sessions that exceed `compaction_trigger`; the idle-TTL flush handles sessions that never grow enough to fold.
 
 This avoids both extremes. Per-turn extraction is too expensive, and fold-only extraction would miss short sessions. The idle-TTL session-end flush gives eventual extraction for the remaining window without requiring every client or runtime path to emit a perfect close signal.
 
@@ -110,17 +110,17 @@ In external mode, the short-term window uses a Postgres `UNLOGGED` table. This s
 
 The caveats are explicit. `UNLOGGED` tables are truncated after crash recovery and do not replicate to standbys, so the window is primary-only and crash-lossy. That is acceptable because short-term memory is not the durable record. tmpfs tablespaces and gateway-level session-affinity routing are deferred future options: tmpfs could further reduce disk dependence, and affinity could improve locality, but neither is required for correctness because Postgres locks coordinate consolidation.
 
-## Decision 15: lazy-read watermarks replace trim-to-cap thrash
+## Decision 15: lazy-read compaction marks replace trim-to-cap thrash
 
-Writes append rows. Reads compute the active window by scanning newest rows until the token budget is reached, then presenting them chronologically. Folding is triggered at `high_water` and evicts down to `low_water`, not to zero and not merely to just under the cap.
+Writes append rows. Reads compute the active window by scanning newest rows until the token budget is reached, then presenting them chronologically. Folding is triggered at `compaction_trigger` and evicts down to `compaction_target`, not to zero and not merely to just under the cap. The shipped field names are `compaction_trigger`/`compaction_target` (the earlier `high_water`/`low_water` "watermark" naming was renamed as-built because it described the eviction behaviour, not a hydraulic level).
 
-This fixes the previous thrash pattern. If the store trims to just-under-cap, the next turn can immediately exceed the cap again, causing a fold nearly every turn. A low-water target amortizes folding by creating headroom. Lazy reads also remove per-write overflow scans, so writes stay cheap even when a session has many historical rows awaiting sweep or retention cleanup.
+This fixes the previous thrash pattern. If the store trims to just-under-cap, the next turn can immediately exceed the cap again, causing a fold nearly every turn. A lower compaction target amortizes folding by creating headroom. Lazy reads also remove per-write overflow scans, so writes stay cheap even when a session has many historical rows awaiting sweep or retention cleanup.
 
-## Decision 16: watermarks and execution knobs exist at both store and agent levels
+## Decision 16: compaction marks and execution knobs exist at both store and agent levels
 
-The shared knob set is `token_budget`, `high_water`, `low_water`, `hard_event_cap`, `digest_max_tokens`, `idle_ttl`, `sweep_interval`, `rolling_summary`, and `concurrency`. These appear on the memory/MCP service CRD side as server settings and on the Agent side as client parameters or per-agent policy.
+The shared knob set is `token_budget`, `compaction_trigger`, `compaction_target`, `hard_event_cap`, `digest_max_tokens`, `idle_ttl`, `sweep_interval`, `rolling_summary`, and `concurrency`. These appear on the memory/MCP service CRD side as server settings and on the Agent side as client parameters or per-agent policy.
 
-Both levels are necessary. The service owns locks, sweeps, digest retention, executor pools, and safe defaults; the agent owns its desired conversational budget and whether it wants rolling summary. Validation is the same everywhere: `low_water < high_water <= token_budget`, `hard_event_cap >= 1`, positive TTL and sweep interval, positive digest budget when rolling summary is enabled, and `concurrency >= 1`. Surfacing the knobs in both places resolves the earlier conflict where the store was treated as infrastructure-only.
+Both levels are necessary. The service owns locks, sweeps, digest retention, executor pools, and safe defaults; the agent owns its desired conversational budget and whether it wants rolling summary. Validation is the same everywhere: `compaction_target < compaction_trigger <= token_budget`, `hard_event_cap >= 1`, positive TTL and sweep interval, positive digest budget when rolling summary is enabled, and `concurrency >= 1`. Surfacing the knobs in both places resolves the earlier conflict where the store was treated as infrastructure-only.
 
 ## Decision 17: idle-TTL sweeper detects session end
 
@@ -148,4 +148,4 @@ KAOS should not put this on its critical path. Full async across roughly twenty 
 
 ## Final target shape
 
-The target memory data plane is therefore: multi-turn writes append raw events to a session-only `short_term_memory_window`; recall lazily computes the active window by token budget; high-water background folds evict down to low-water and write a versioned `medium_term_memory_summaries` row; the same raw evicted batch feeds Mem0 long-term fact extraction; idle-TTL flush is recorded as a deferred productionisation completion path for final extraction and cleanup; Postgres locks serialize fold/flush ownership across replicas; the Postgres window may be `UNLOGGED`; Mem0 remains a long-term atomic-fact library behind a bounded executor; native async Postgres is deferred until the service needs it; and all knobs are validated consistently across MemoryStore server settings and Agent client policy.
+The target memory data plane is therefore: multi-turn writes append raw events to a session-only `short_term_memory_window` in a single batched insert; recall lazily computes the active window by token budget; `compaction_trigger` background folds evict down to `compaction_target` and write a versioned `medium_term_memory_summaries` row; the same raw evicted batch feeds Mem0 long-term fact extraction; idle-TTL flush is recorded as a deferred productionisation completion path for final extraction and cleanup; Postgres locks serialize fold/flush ownership across replicas; the Postgres window may be `UNLOGGED`; Mem0 remains a long-term atomic-fact library behind a bounded executor; native async Postgres is deferred until the service needs it; the write/forget failure mode is layered (an explicit per-request value wins, otherwise the store-configured `default_failure_mode`, otherwise fail-soft); and all knobs are validated consistently across MemoryStore server settings and Agent client policy.

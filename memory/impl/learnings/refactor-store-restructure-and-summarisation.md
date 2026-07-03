@@ -2,7 +2,7 @@
 
 ## Outcome
 
-The memory-service package is now four modules (`stores.py`, `config.py`, `app.py`, `__init__.py`) instead of eleven, and short-term summarisation is opt-in and off the response hot path. The wire contract and the long-term engine are unchanged, so the change is invisible to the runtime client and to any deployed operator. This document remains the implementation-specific restructure note; the comprehensive finalized architecture rationale for session-only short-term memory, medium-term compaction, Postgres locking, lazy-read watermarks, cascade extraction, and async-hybrid execution now lives in [Short-term and medium-term memory design](./short-term-medium-term-memory-design.md).
+The memory-service package is now four modules (`stores.py`, `config.py`, `app.py`, `__init__.py`) instead of eleven, and short-term summarisation is opt-in and off the response hot path. The wire contract and the long-term engine are unchanged, so the change is invisible to the runtime client and to any deployed operator. This document remains the implementation-specific restructure note; the comprehensive finalized architecture rationale for session-only short-term memory, medium-term compaction, Postgres locking, lazy-read compaction marks, cascade extraction, and async-hybrid execution now lives in [Short-term and medium-term memory design](./short-term-medium-term-memory-design.md).
 
 ## Confirmed in code
 

@@ -32,7 +32,7 @@ A logical group is **the set of agents on the same `MemoryStore`**: the store is
 
 ### Scope and retention knobs across store and agent
 
-Memory-policy knobs are surfaced both as `MemoryStore` server defaults and as Agent-level client parameters, as finalized in [ADR 0004](./adr_0004_deployment-topology-and-control-plane.md). This ADR's governance contribution is scoping: those knobs tune the session-scoped conversational tiers and background execution, while the Agent `scope` value controls long-term sharing. The control plane must not imply that setting `scope: user` creates a user-scoped short-term window or user-level medium-term digest. See also: [Decision 16 in the short-term and medium-term memory design learnings](../impl/learnings/short-term-medium-term-memory-design.md#decision-16-watermarks-and-execution-knobs-exist-at-both-store-and-agent-levels).
+Memory-policy knobs are surfaced both as `MemoryStore` server defaults and as Agent-level client parameters, as finalized in [ADR 0004](./adr_0004_deployment-topology-and-control-plane.md). This ADR's governance contribution is scoping: those knobs tune the session-scoped conversational tiers and background execution, while the Agent `scope` value controls long-term sharing. The control plane must not imply that setting `scope: user` creates a user-scoped short-term window or user-level medium-term digest. See also: [Decision 16 in the short-term and medium-term memory design learnings](../impl/learnings/short-term-medium-term-memory-design.md#decision-16-compaction-marks-and-execution-knobs-exist-at-both-store-and-agent-levels).
 
 ### A2A delegation: inherit the prefix, isolated below
 
