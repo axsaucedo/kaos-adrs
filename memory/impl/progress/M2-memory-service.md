@@ -16,8 +16,18 @@ The atomic stores from the previous phase are now wrapped in a deployable HTTP s
 
 ## Validation
 
-- `pytest tests/ -v` — 50 passed (local + pgvector).
+- `pytest tests/` — 67 passed, 4 skipped (local + pgvector opt-in behind the `pgvector` marker).
 - `make lint` — `black --check` clean, `ty` clean.
 - Container built and run in local mode: `/healthz` and `/readyz` return 200, `POST /v1/write` (infer=false) returns 202 and the turn surfaces in `/v1/recall` short-term context and the assembled block.
+
+## As-built reframe (design-decision alignment)
+
+After the initial build the service was reconciled with the finalized short-term / medium-term memory design. These changes reshaped the write path, the recall response, the concurrency model, and the settings surface without changing the HTTP contract's shape:
+
+- **Model-2 cascade write.** `POST /v1/write` no longer extracts long-term facts per turn. It appends turns to the short-term window synchronously, and only when an append evicts a batch does it schedule **one** long-term extraction of *that evicted batch* off the response path. The rolling digest fold happens independently inside the store on the same eviction. So the LLM extraction cost moves from per-turn onto the fold that consumes the evicted window — no per-turn Mem0 call. The response reports `scheduled=true` (HTTP 202) only when an eviction actually triggered extraction, and `scheduled=false` (HTTP 200) when the turns were merely buffered within budget.
+- **Batch write.** `WriteRequest` accepts a `turns` list (a single `role`/`content` is normalised to a one-element batch). All turns are appended in order and the combined evicted rows are extracted once, so the runtime can flush several turns in a single call.
+- **Async Level 1.** The handlers are now `async def` and dispatch the sync store/Mem0 calls through a KAOS-owned bounded `ThreadPoolExecutor` (`request_concurrency`), drained on shutdown. This makes the request-path Mem0 isolation boundary explicit and bounded rather than relying on FastAPI's implicit threadpool; the stores stay synchronous behind the executor (native asyncpg is deferred). The off-path `BackgroundRunner` remains a separate bounded threadpool.
+- **Medium-term digest surfaced distinctly in recall.** The rolling digest is the medium-term tier: recall now returns `short_term` (the verbatim active window only) and a separate `medium_term` (the rolling digest summary). The injected block still renders the digest under its own heading.
+- **Water-mark and concurrency knobs in settings.** `MemorySettings` mirrors the short-term water marks (`high_water`, `low_water`), the `digest_retention` cap, and `request_concurrency`, passing them through to the short-term tier and the request executor. The water-mark cross-field constraint (`0 < low_water < high_water <= token_budget`) is inherited from the tier config, so invalid combinations fail at startup.
 
 Findings and the deltas to fold into M3/M4 are recorded in [`../learnings/M2-memory-service.md`](../learnings/M2-memory-service.md).
