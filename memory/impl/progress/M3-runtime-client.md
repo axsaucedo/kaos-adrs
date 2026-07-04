@@ -20,3 +20,15 @@ The central memory service from the previous phase is now wired into the agent r
 - Local runtime↔service smoke: the runtime `ServiceMemory` client driven against a locally running M2 service (local storage mode) confirms writes land, recall replays prior turns into the short-term context and block, a dead service degrades recall to empty and write to not-accepted without raising, and forget clears the scope.
 
 Findings and the deltas to fold into M4 are recorded in [`../learnings/M3-runtime-client.md`](../learnings/M3-runtime-client.md).
+
+## Review-driven redesign (supersedes the initial specifics above)
+
+PR review reshaped several of the choices recorded above; the following supersede the corresponding task descriptions, and the full rationale lives in [`../learnings/runtime-memory-api-and-tooling.md`](../learnings/runtime-memory-api-and-tooling.md):
+
+- **`ServiceMemory` is renamed `RemoteMemory`** — the runtime-side client for the remote KAOS memory service, sitting beside `LocalMemory`/`RedisMemory`/`NullMemory`. It is not a Mem0 client; Mem0 stays embedded in the service.
+- **Recall presentation is replaced by an automatic baseline plus additive tools** — enabling memory always recalls-and-injects before a run and flushes-and-extracts after it; `memory.tools: all|read|write` layers `save_memory`/`search_memory` on top. The `RecallPresentation` enum is removed.
+- **Private scope fails closed** — `scope_from_deps` raises rather than returning an ambiguously-owned partition; the qualified `kaos://agent/{namespace}/{name}` identity is the owner.
+- **The memory surface is carved into a published `kaos-memory` library** — the wire contract, `MemoryServiceClient`, the service, and the Pydantic AI integration (`[pydantic-ai]` extra: message adapters, scope derivation, toolset) now live in one library layered behind dependency extras. `RemoteMemory` becomes a thin adapter over `MemoryServiceClient`, and `pais.memory`/`pais.memory_tools` re-export the library symbols. The runtime depends on `kaos-memory[pydantic-ai]`, resolved from source in dev/CI/image and published to PyPI in the release pipeline. See [ADR 0004](../../adrs/adr_0004_deployment-topology-and-control-plane.md).
+- **The recall block carries long-term facts only** — conversational continuity flows solely through reconstructed message history, removing the earlier duplication of the summary and recent window across the block and the replayed history.
+
+The runtime suite is green at 335 passed / 10 skipped with black and ty clean after the redesign; the library's service suite is 67 passed / 4 skipped.

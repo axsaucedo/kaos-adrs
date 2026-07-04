@@ -22,6 +22,12 @@ The long-term engine runs as **one central memory service** that all agents call
 
 The embedded-in-agent alternative is rejected as a supported path: it pushes LLM-gated extraction onto the serving process, multiplies datastore connections, ships the engine and its vector dependencies into every agent image, and — with a per-pod local store — diverges memory across an agent's replicas. A single shared service is cheap, keeps agents thin, isolates extraction, and preserves cross-agent sharing, which the cross-agent and organizational memory capability in [KAOS-R7](../research/KAOS-R7-target-picture.md) requires. The "no separate pod" and "no network hop" gains of embedding are marginal against LLM-dominated turn latency.
 
+### Packaging: the contract, client, and service ship as one `kaos-memory` library
+
+The memory service, its HTTP client, and the wire contract they share are packaged as a single published `kaos-memory` library rather than split across the service tree and a hand-rolled runtime client. The library layers its surface behind dependency extras: the core install carries the wire contract (`Scope`/`ScopeLevel` and the recall/write/forget schemas) and the framework-agnostic `MemoryServiceClient` on Pydantic, httpx and the OpenTelemetry API only; the `[service]` extra adds Mem0, the vector store and the FastAPI service; and the `[pydantic-ai]` extra adds the message adapters, server-side scope derivation, and the `save_memory`/`search_memory` toolset. This keeps the server and client from drifting — both import the one contract — and lets a Pydantic AI consumer import one coherent feature set without dragging the engine into the agent image.
+
+Because the agent runtime is itself a published standalone package, the library it imports must also be published: `kaos-memory` is a published PyPI project (with a release job that publishes it ahead of the runtime), and the runtime depends on `kaos-memory[pydantic-ai]` while resolving it from the sibling checkout for local dev, CI and the container image. In the runtime, `RemoteMemory` is a thin adapter over `MemoryServiceClient`; it remains the KAOS tiered-contract client and is still not a Mem0 client.
+
 ### Storage: a local and an external mode, one provider each today
 
 The memory service stores both tiers through a single storage selection, mirroring the existing `ModelAPI` mode-plus-config pattern:
