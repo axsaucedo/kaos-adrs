@@ -1,0 +1,22 @@
+# M4 — memory store CRD and control plane — progress
+
+Status: complete.
+
+The control plane now provisions and manages the central memory service through a first-class `MemoryStore` custom resource, and agents bind to it declaratively through a redesigned `config.memory` block. A new operator reconciler turns a `MemoryStore` into a running memory-service Deployment plus Service (and a PersistentVolumeClaim in local mode), gated on the referenced ModelAPIs being ready. The agent controller resolves a bound store, threads its endpoint and the agent's qualified identity into the pod, and treats an unavailable store as degraded-not-blocking so memory never gates serving. The chart, RBAC, image defaults, and end-to-end coverage are all updated to match. Every task was committed individually with a comprehensive functional message, keeping the operator unit suite green at each step.
+
+## Tasks
+
+1. **MemoryStore CRD types** — `memorystore_types.go` defines `MemoryStoreSpec` (engine, storage, replicas, models, extraction, defaultFailureMode) and `MemoryStoreStatus` (phase, ready, endpoint, message, deployment). Storage is local (chroma on a PVC) or external (pgvector via a `connectionSecretRef` DSN plus `embeddingDims`). CEL rules require the matching storage sub-block per type and pin `replicas` to 1 in local mode. Both summarization and embedding model references are required. Print columns surface engine, storage, ready, and phase.
+2. **MemoryStore reconciler** — `memorystore_controller.go` fetches the store, initialises status, resolves the referenced ModelAPIs (holding `Pending` until both are ready and deriving the model base URL from the summarization endpoint plus `/v1`), provisions the PVC in local mode, then reconciles the memory-service Deployment and Service. `buildStorageEnv` emits the `KAOS_MEMORY_*` contract for both storage modes. The service listens on 8080 with `/healthz` liveness and `/readyz` readiness; readiness reflects store reachability, so a local store reaches `Ready` before any model call.
+3. **External storage wiring** — external mode injects `KAOS_MEMORY_EXTERNAL_DSN` from the referenced secret via `secretKeyRef` and `KAOS_MEMORY_EXTERNAL_DIMS` from `embeddingDims`, and provisions no PVC. Covered by envtest specs for external binding and for the model-not-ready hold.
+4. **Agent memory block redesign** — the agent `MemoryConfig` is rewritten to `{enabled, type(local|remote), memoryStore, scope, clientParams{tokenBudget, rollingSummary}, tools(all|read|write), failureMode}` with CEL rules (remote⇒memoryStore, local⇒no memoryStore, user/shared scope⇒memoryStore, tools⇒memoryStore) and `AgentStatus.Conditions` is added. The controller resolves the bound store in `Reconcile`, threads the endpoint through deployment construction, emits the `MEMORY_*` env plus a qualified `AGENT_IDENTITY` (`kaos://agent/{namespace}/{name}`), and records a `MemoryDegraded` condition with the store linked in `status.linkedResources`. A missing or not-ready store degrades rather than blocks.
+5. **Chart, RBAC, and image** — the chart ships the MemoryStore CRD and the updated agent CRD, grants the operator RBAC over memorystores and PVCs, adds `defaultImages.memoryService`, and emits `DEFAULT_MEMORY_SERVICE_IMAGE` from the operator configmap so the reconciler resolves the service image at runtime.
+6. **End-to-end coverage** — a new e2e suite provisions a local-mode MemoryStore against a mock proxy ModelAPI, waits for the memory-service Deployment and `Ready` status, and asserts the emitted endpoint and storage env. It then binds an agent to the ready store and asserts the injected remote wiring (`MEMORY_TYPE=remote`, endpoint, scope, qualified identity), the linked store, and a non-degraded condition; a third case binds a missing store and asserts the agent still serves with `MemoryDegraded=True`. The e2e job builds and loads the memory-service image and passes its default to the operator install.
+
+## Validation
+
+- `make test-unit` (operator) — green, including the MemoryStore reconciler specs (local happy path, external DSN/dims/no-PVC, model-not-ready hold) and the agent memory specs (remote binding, local backend, degraded/missing store, CEL rejections).
+- `helm lint` — clean; `DEFAULT_MEMORY_SERVICE_IMAGE` renders.
+- `go vet` and `gofmt` clean.
+
+Findings and the deltas to carry into later phases are recorded in [`../learnings/M4-memory-store-crd.md`](../learnings/M4-memory-store-crd.md).
