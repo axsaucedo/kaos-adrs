@@ -4,7 +4,9 @@ Deltas and decisions that emerged while building the MemoryStore CRD and wiring 
 
 ## Degraded-not-blocking memory binding
 
-Memory must never gate agent serving. The agent controller resolves a bound MemoryStore in `Reconcile`, but an unresolved or not-ready store does not fail reconciliation: the agent stays Ready, `MEMORY_STORE_ENDPOINT` is simply omitted, and the runtime falls back to its pod-local short-term window. The condition surfaces as a `MemoryDegraded=True` entry in `status.conditions` (via `meta.SetStatusCondition`) with the store still recorded in `status.linkedResources.memorystore`. This keeps a memory outage from cascading into an agent outage and makes the degraded state observable without a separate probe.
+A memory outage must never remove an **already-running** agent from serving. The agent controller resolves a bound MemoryStore in `Reconcile`, but for an agent whose Deployment already exists an unresolved or not-ready store does not fail reconciliation or tear anything down: the agent stays Ready, `MEMORY_STORE_ENDPOINT` is simply omitted, and the runtime falls back to its pod-local short-term window. The condition surfaces as a `MemoryDegraded=True` entry in `status.conditions` (via `meta.SetStatusCondition`) with the store still recorded in `status.linkedResources.memorystore`. This keeps a memory outage from cascading into an agent outage and makes the degraded state observable without a separate probe.
+
+The agent's **initial creation** is the one gated case. When `waitForDependencies` is set (the default) and the bound store is missing or not yet Ready, the controller checks whether the agent Deployment already exists (`agentDeploymentExists`); if it does not, it withholds creation, sets the Agent to `Waiting`, and requeues — mirroring the ModelAPI/MCPServer dependency gate so an agent never starts up degraded. The MemoryStore watch requeues the agent once the store turns Ready, after which the Deployment is created; from then on a disappearing store degrades rather than gates.
 
 ## Effective type is derived, but explicit type is kept
 
