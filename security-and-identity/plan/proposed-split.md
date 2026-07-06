@@ -197,6 +197,16 @@ P0 validates and gates everything. P1–P3 and P5–P8 build and wire the MVP bo
 
 **Depends on**: P9 (SDK), P11 (access-check), and the foundation branch being complete.
 
+### P15 — Strict gateway-only traffic, decoupled from authorization
+
+**Goal**: make network-level bypass prevention (deny direct workload-to-workload ClusterIP, force traffic through the Envoy Gateway) available **independently of the ext_authz authorization stack**, exposed as a single positively-named switch.
+
+**Scope** (KAOS operator + chart + CLI, standalone PR against `main`): P4 built NetworkPolicy generation and gateway routing but hard-coupled them to `security.IsOperational()` (i.e. `agentAuth.extAuthzUrl` being set), so strict gateway-only traffic is unreachable without deploying ext_authz. This phase decouples them: `NetworkPolicyEnabled()`/`GatewayRoutingEnabled()` become drivable by a new `security.strictGatewayApi.enabled` flag (env `SECURITY_STRICT_GATEWAY_API_ENABLED`) regardless of ext_authz, and the inverse escape hatch `security.networkPolicy.enabled` is renamed to this positive intent-revealing form. It also measures the e2e runtime delta of running the suite under strict gateway traffic (which requires recreating the KIND cluster with Calico, since the default kindnet CNI does not enforce NetworkPolicy) and decides inline-vs-shard, and updates the UI/strict-routing interaction. Detailed plan: [`P15-strict-gatewayapi-decoupling.md`](./P15-strict-gatewayapi-decoupling.md).
+
+**Realises**: extends [ADR-KAOS-009](../adr-kaos/ADR-KAOS-009-gateway-api-resource-boundary-enforcement.md) / [ADR-KAOS-002](../adr-kaos/ADR-KAOS-002-enforcement-topology.md) bypass-prevention so it no longer requires full authorization to be operational.
+
+**Depends on**: P4 (the NetworkPolicy + gateway-routing substrate). Independent of the AIB integration; can run any time after P4 has landed on `main`.
+
 ---
 
 ## AIB-side work: a stack of branches founded on ADR-AIB-000
