@@ -1,6 +1,6 @@
 # Proposed work split and sequencing
 
-**Status**: Living plan (v5 — P0–P12 implemented; P13–P15 add the OPA-in-ext_proc authorization redesign as a stacked series)
+**Status**: Living plan (v6 — P0–P14 implemented; the fresh [ADR set](../adrs/adr_high_level_components.md) is now Accepted; P15 adds strict Gateway API decoupling on top of the OPA-in-ext_proc authorization redesign)
 **Date**: 2026-07-07
 **Scope**: High-level phasing of the security and identity implementation. Phases P0–P12 realised the original target picture ([ADR-KAOS-000](../adr-kaos/ADR-KAOS-000-target-picture.md)) and reference the historical `adr-kaos/` and `adr-aib/` records. Phases **P13–P15** realise the current authorization design in the fresh [ADR set](../adrs/adr_high_level_components.md), delivered as a stacked series. The previously-planned P13 (docs) and P14 (upstream) were not implemented and are moved to [`followups.md`](./followups.md); the previously-planned P15 (strict gateway-only traffic) is **reinstated** as the current P15, sitting at the top of the stack. Their numbers are reused.
 
@@ -185,7 +185,7 @@ P0 validates and gates everything. P1–P3 and P5–P8 build and wire the MVP bo
 
 **Scope** (KAOS operator + runtime + chart, against AIB `main`+#222 plus AIB PR #397):
 - **Security-config foundation**: decouple the "security enabled" predicate from `ExtAuthzURL` so credential mounting and NetworkPolicy stay on independently of the (now optional) ext_authz seam; add config for authorization **model** (1 / 2 / both), **enforcement posture**, **verification mode**, and **populator mode**.
-- **Fold the sync-service into the operator** as an isolated whole-world `AIBProjectionReconciler` — the sole AIB caller, ConfigMap writer, and credential minter — with the workload reconciler never calling AIB; delete the standalone deployable/chart/image/CI job and its Go module; unify per-agent credential-Secret ownership via `ownerReference` GC (removing bespoke `pruneSecrets()`).
+- **Fold the sync-service into the operator** as an isolated whole-world `AuthzProjectionReconciler` — the sole AIB caller, ConfigMap writer, and credential minter — with the workload reconciler never calling AIB; delete the standalone deployable/chart/image/CI job and its Go module; unify per-agent credential-Secret ownership via `ownerReference` GC (removing bespoke `pruneSecrets()`).
 - **Shared projection core**: make `Project()→DesiredState` model-agnostic; strip AIB-specific serialisation into the Model-2 admin adapter (the only bespoke integration); verify at implementation that the broker stamps the actor-token `sub` as the logical identity (not a UUID).
 - **Model 1 emitter + verification**: ship a static generic rego asset and write `data.kaos.grants` into a ConfigMap mounted into the ext_proc pod via `policy.path`; inject `data.kaos.jwks` only when an issuer is configured so the rego branches `decode_verify` (verified) vs `decode` (demo).
 - **Enforcement posture**: make ext_proc OPA the default; generalise ext_authz `SecurityPolicy` generation off the AIB-#398 assumption into an optional, default-off seam pointing at a configurable backend.

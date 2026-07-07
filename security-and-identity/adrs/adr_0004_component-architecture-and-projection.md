@@ -1,6 +1,6 @@
 # ADR 0004 — Component architecture and projection
 
-- **Status.** Proposed
+- **Status.** Accepted
 - **Date.** 2026-07-07
 - **Component.** 4 of 4 ([adr_high_level_components](./adr_high_level_components.md))
 - **Depends on.** [ADR 0001](./adr_0001_enforcement-topology-and-policy-engine.md), [ADR 0002](./adr_0002_identity-and-authentication.md), [ADR 0003](./adr_0003_authorization-models-and-policy-data.md)
@@ -48,6 +48,10 @@ Removing the AIB-#398 assumption requires decoupling the operator's "security en
 ## Consequences
 
 Positive: one binary with typed inputs replaces a second manager and its whole deployment surface; custom code shrinks to the AIB admin adapter while Model 1 is pure serialisation; two-controller isolation means a broker outage never stalls workload reconciliation; whole-world sweep plus owner-reference GC is simpler than finalizer reference-counting and self-heals drift. Negative: the operator takes on an external dependency on the AIB admin API (contained but real); the static `policy.path` posture restarts ext_proc on Model-1 data changes until bundle hot-reload lands; decoupling the security predicate touches config paths that currently double as the ext_authz switch and must be changed carefully. Follow-on: the bundle-hot-reload spike, and the AIB-less standalone path (KAOS-run OPA plus AIB-less issuer) tracked in [followups](../plan/followups.md).
+
+## Implementation status
+
+Realized in the operator's `AuthzProjectionReconciler`. The projection is a single controller that gates the broker and policy-data paths on boolean flags (broker projection, policy-data projection, write-grant-data) derived from the configured provider, policy-data source, and rego-override, rather than a strategy or adapter interface — for two backends an interface is over-engineering, so one controller with a branch per model is the maintained shape. The shared `projection.Project` core builds the model-agnostic `DesiredState`; the Model-2 path serializes it to AIB admin bodies and prunes via the AIB client, while the Model-1 path serializes it to `data.json` (grants, plus `data.kaos.jwks` when verification is enabled) and applies the policy ConfigMap with server-side apply. Prune is mode-gated and forced off in the external and manual modes; per-key field ownership means the operator never clobbers admin-authored data. The static `policy.path` delivery posture is in place; bundle hot-reload remains a follow-up.
 
 ## Alternatives considered
 

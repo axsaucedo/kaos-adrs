@@ -1,6 +1,6 @@
 # ADR 0003 — Authorization models and policy data
 
-- **Status.** Proposed
+- **Status.** Accepted
 - **Date.** 2026-07-07
 - **Component.** 3 of 4 ([adr_high_level_components](./adr_high_level_components.md))
 - **Depends on.** [ADR 0001](./adr_0001_enforcement-topology-and-policy-engine.md), [ADR 0002](./adr_0002_identity-and-authentication.md), [model-parity learnings](../impl/learnings/opa-extproc-authz-model-parity-and-oauth-path.md)

@@ -1,6 +1,6 @@
 # ADR 0002 — Identity and authentication
 
-- **Status.** Proposed
+- **Status.** Accepted
 - **Date.** 2026-07-07
 - **Component.** 2 of 4 ([adr_high_level_components](./adr_high_level_components.md))
 - **Depends on.** [ADR 0001](./adr_0001_enforcement-topology-and-policy-engine.md), [research/007](../research/007-user-token-propagation-idp-sidecar-and-future-deep-dives.md), [target-picture/007](../target-picture/007-decision-identity-model-and-source-of-truth.md), [model-parity learnings](../impl/learnings/opa-extproc-authz-model-parity-and-oauth-path.md)

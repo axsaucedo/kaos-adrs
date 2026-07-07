@@ -1,6 +1,6 @@
 # ADR 0001 — Enforcement topology and policy engine
 
-- **Status.** Proposed
+- **Status.** Accepted
 - **Date.** 2026-07-07
 - **Component.** 1 of 4 ([adr_high_level_components](./adr_high_level_components.md))
 - **Depends on.** [research/005](../research/005-identity-architecture-and-mcp-gateway.md), [research/006](../research/006-crd-sync-identity-gateway-sidecar-and-autonomous.md), [target-picture/007](../target-picture/007-decision-identity-model-and-source-of-truth.md), [model-parity learnings](../impl/learnings/opa-extproc-authz-model-parity-and-oauth-path.md)
