@@ -14,21 +14,22 @@ This component is broader than generic multi-tenancy because KAOS agents are fir
 
 ## Decision
 
-### Grouping: a three-value scope, with the store as the group
+### Grouping: a four-value scope, with the store as the group
 
-Memory sharing is expressed by a single `scope` value on the Agent memory block, backed by the segmented scope path from [ADR 0001](./adr_0001_memory-model-and-lifecycle-operations.md):
+Memory sharing is expressed by a single `scope` value on the Agent memory block, backed by the flat owner-key model from [ADR 0001](./adr_0001_memory-model-and-lifecycle-operations.md):
 
 ```yaml
 memory:
   memoryStore: shared-memory
-  scope: user          # private | user | shared
+  scope: user          # private | user | shared | session
 ```
 
-- **`private`** — the agent's own memory, isolated to its `client_id`.
-- **`user`** — shared across all agents serving the same user principal.
-- **`shared`** — pooled across every agent on the same `MemoryStore`.
+- **`private`** — the agent's own memory, isolated to its `agent_id` (the agent's fully-qualified identity).
+- **`user`** — shared across all agents serving the same user principal (`user_id`).
+- **`shared`** — pooled across every agent on the same `MemoryStore` (`agent_id` = the reserved `kaos:shared` constant).
+- **`session`** — scoped to a single run/conversation (`run_id`).
 
-A logical group is **the set of agents on the same `MemoryStore`**: the store is the group. There is no separate group identifier or grouping CRD in this version, because store membership plus the three scope levels already express agent-private, per-user, and fleet-shared memory without an extra segment. The Agent `scope` governs only the long-term tier. The verbatim short-term window and medium-term rolling digest remain session-scoped in every case because widening conversational tiers would interleave concurrent sessions; cross-session continuity is provided by long-term Mem0 facts. Deeper named sub-groups within one store and any user-level narrative memory are deferred until they have an explicit non-polluting design. See also: [Decision 1 in the short-term and medium-term memory design learnings](../impl/learnings/short-term-medium-term-memory-design.md#decision-1-short-term-scope-is-session-only).
+A logical group is **the set of agents on the same `MemoryStore`**: the store is the group. There is no separate group identifier or grouping CRD in this version, because store membership plus the four scope levels already express agent-private, per-user, fleet-shared, and per-session memory without an extra segment. The Agent `scope` governs only the long-term tier. The verbatim short-term window and medium-term rolling digest remain session-scoped in every case because widening conversational tiers would interleave concurrent sessions; cross-session continuity is provided by long-term Mem0 facts. Deeper named sub-groups within one store and any user-level narrative memory are deferred until they have an explicit non-polluting design. See also: [Decision 1 in the short-term and medium-term memory design learnings](../impl/learnings/short-term-medium-term-memory-design.md#decision-1-short-term-scope-is-session-only).
 
 ### Scope and retention knobs across store and agent
 
@@ -77,7 +78,7 @@ Right-to-erasure is a declarative, scope-targeted hard delete that fans out **sy
 
 - **Higher-scope short-term or medium-term memory.** Rejected: a user-level or shared verbatim window would interleave concurrent sessions, and a user-level narrative digest would merge unrelated conversations without a clear provenance and conflict model. The accepted cross-session mechanism is long-term facts, with any future user-level narrative designed as a separate tier rather than by widening the session digest.
 - **Dynamic groups through a membership-indirection layer.** Rejected for this iteration, recorded as the deferred evolution. Store-as-group is static: changing an agent's group means moving it to a different `MemoryStore`, and its existing memories stay in the old store rather than realigning, so dynamic regrouping requires a data migration. The root cause is write-time scope tagging, which a path-segment group would share — only an indirection layer fixes it, where memories are tagged solely with stable owner identity, a `MemoryGroup` resource defines mutable membership, and recall resolves a group to a set of owner scopes at query time so regrouping takes effect immediately. This is deferred because it adds a membership store and CRD, widens recall from a prefix match to a scope-set filter, and extends the control plane in [ADR 0004](./adr_0004_deployment-topology-and-control-plane.md). It is safe to defer because [ADR 0001](./adr_0001_memory-model-and-lifecycle-operations.md) already stamps every item with owner anchors (principal and `client_id`) independent of the scope path, so a future group layer resolves membership over those anchors without re-tagging or migrating existing data — the static-grouping decision is additive, not a dead end.
-- **A dedicated grouping CRD or label selector now.** Rejected: store membership plus the three scope levels already express the needed groupings, and a named-group resource is only warranted once dynamic membership is built.
+- **A dedicated grouping CRD or label selector now.** Rejected: store membership plus the four scope levels already express the needed groupings, and a named-group resource is only warranted once dynamic membership is built.
 - **A named group segment in the scope path.** Rejected: it adds a path dimension without delivering retroactive realignment, since past memories keep their old group tag; it offers the cost of more scope structure without the benefit of true dynamic groups.
 - **Per-store shared-secret or admin-key authentication.** Rejected: a shared secret gives no per-agent identity and weak tenant separation; reusing the verifiable AIB identity unifies authentication with scope.
 - **Engine-native isolation as the trust boundary.** Rejected: Mem0 offers only application-level filtering with no row-level security, so the service must be the enforcement point regardless.
