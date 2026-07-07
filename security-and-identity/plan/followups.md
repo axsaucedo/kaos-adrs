@@ -1,6 +1,6 @@
 # Followups — deferred out of the critical path
 
-These are explicitly out of scope for the current authorization work (phases **P13–P14** in [proposed-split](./proposed-split.md), realising the fresh [ADR set](../adrs/adr_high_level_components.md)). They are recorded so they are not lost. The list also absorbs the previously-planned-but-unimplemented phases (old P13/P14/P15) whose numbers P13/P14 have been reused.
+These are explicitly out of scope for the current authorization work (phases **P13–P15** in [proposed-split](./proposed-split.md), realising the fresh [ADR set](../adrs/adr_high_level_components.md)). They are recorded so they are not lost. The list also absorbs the previously-planned-but-unimplemented old P13 (docs) and old P14 (upstream) phases whose numbers P13/P14 have been reused; the old P15 (strict gateway) is reinstated as the current phase P15.
 
 ## F1 — AIB-less agent-identity issuer
 
@@ -29,9 +29,11 @@ The AIB Python SDK is no longer a separate upstream contribution (AIB PR #399 is
 
 [ADR 0002](../adrs/adr_0002_identity-and-authentication.md) ships actor-token verification as rego `io.jwt.decode_verify` against an injected JWKS (V1). A later hardening (V2) validates `x-agent-authorization` at the gateway via an Envoy Gateway JWT authn provider so the rego can decode-trust; this needs dual-provider (subject + actor) gateway verification. Deferred.
 
-## F6 — Strict gateway-only traffic, decoupled from authorization (was P15)
+## F6 — Strict gateway-only traffic, decoupled from authorization (reinstated as phase P15)
 
-Make network-level bypass prevention (deny direct workload-to-workload ClusterIP, force traffic through the Envoy Gateway) available **independently** of the authorization stack, exposed as a single positively-named switch. The substrate exists but is hard-coupled to `security.IsOperational()`: `NetworkPolicyEnabled()`/`GatewayRoutingEnabled()` should become drivable by a `security.strictGatewayApi.enabled` flag (env `SECURITY_STRICT_GATEWAY_API_ENABLED`) regardless of the ext_authz seam, and the inverse escape hatch renamed to that positive form. Note the P13 security-config decoupling ([ADR 0004](../adrs/adr_0004_component-architecture-and-projection.md)) already separates the "security enabled" predicate from `ExtAuthzURL`, so this followup builds directly on it. Strict traffic requires recreating the KIND cluster with a NetworkPolicy-enforcing CNI (Calico), since the default kindnet does not enforce NetworkPolicy. Detailed prior notes: [`P15-strict-gatewayapi-decoupling.md`](./P15-strict-gatewayapi-decoupling.md).
+**Reinstated as active phase P15** — no longer a followup. It sits at the top of the P13 → P14 → P15 stacked series and builds directly on the P13 security-config decoupling that separates the "security enabled" predicate from `ExtAuthzURL`. See [`proposed-split.md`](./proposed-split.md) (P15) and the detailed plan [`P15-strict-gatewayapi-decoupling.md`](./P15-strict-gatewayapi-decoupling.md).
+
+Summary retained for context: make network-level bypass prevention (deny direct workload-to-workload ClusterIP, force traffic through the Envoy Gateway) available **independently** of the authorization stack, exposed as a single positively-named `security.strictGatewayApi.enabled` switch (env `SECURITY_STRICT_GATEWAY_API_ENABLED`), replacing the inverse escape hatch. Strict traffic requires recreating the KIND cluster with a NetworkPolicy-enforcing CNI (Calico), since the default kindnet does not enforce NetworkPolicy.
 
 ## F7 — Cross-component documentation pass (was P13)
 

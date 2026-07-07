@@ -1,8 +1,8 @@
 # Proposed work split and sequencing
 
-**Status**: Living plan (v4 — P0–P12 implemented; P13/P14 add the OPA-in-ext_proc authorization redesign)
+**Status**: Living plan (v5 — P0–P12 implemented; P13–P15 add the OPA-in-ext_proc authorization redesign as a stacked series)
 **Date**: 2026-07-07
-**Scope**: High-level phasing of the security and identity implementation. Phases P0–P12 realised the original target picture ([ADR-KAOS-000](../adr-kaos/ADR-KAOS-000-target-picture.md)) and reference the historical `adr-kaos/` and `adr-aib/` records. Phases **P13–P14** realise the current authorization design in the fresh [ADR set](../adrs/adr_high_level_components.md). The previously-planned P13/P14/P15 were not implemented and are moved to [`followups.md`](./followups.md); their numbers are reused.
+**Scope**: High-level phasing of the security and identity implementation. Phases P0–P12 realised the original target picture ([ADR-KAOS-000](../adr-kaos/ADR-KAOS-000-target-picture.md)) and reference the historical `adr-kaos/` and `adr-aib/` records. Phases **P13–P15** realise the current authorization design in the fresh [ADR set](../adrs/adr_high_level_components.md), delivered as a stacked series. The previously-planned P13 (docs) and P14 (upstream) were not implemented and are moved to [`followups.md`](./followups.md); the previously-planned P15 (strict gateway-only traffic) is **reinstated** as the current P15, sitting at the top of the stack. Their numbers are reused.
 
 ---
 
@@ -208,9 +208,19 @@ P0 validates and gates everything. P1–P3 and P5–P8 build and wire the MVP bo
 
 **Depends on**: P13.
 
+### P15 — Strict gateway-only traffic, decoupled from authorization
+
+**Goal**: make network-level bypass prevention (deny direct workload-to-workload ClusterIP, force all agent→MCP/ModelAPI/peer traffic through the Envoy Gateway) available **independently** of the authorization stack, exposed as a single positively-named switch.
+
+**Scope** (KAOS operator + chart + CLI + docs): decouple `NetworkPolicyEnabled()`/`GatewayRoutingEnabled()` from the ext_authz-driven `IsOperational()` gate (building directly on the P13 `SecurityEnabled` decoupling); expose one positive `security.strictGatewayApi.enabled` flag (env `SECURITY_STRICT_GATEWAY_API_ENABLED`) that turns on both NetworkPolicy isolation and gateway routing, replacing the inverse `security.networkPolicy.enabled` escape hatch; keep `egress` as an independent sub-toggle; wire the CLI flag; validate under a NetworkPolicy-enforcing CNI (Calico) since kindnet does not enforce policy; update UI tests that assume direct workload access.
+
+**Realises**: [ADR 0004](../adrs/adr_0004_component-architecture-and-projection.md) (network isolation seam). Detailed plan: [`P15-strict-gatewayapi-decoupling.md`](./P15-strict-gatewayapi-decoupling.md).
+
+**Depends on**: P13 (security-config decoupling). Top of the P13 → P14 → P15 stack.
+
 ### Superseded planned phases (moved to followups)
 
-The originally-planned P13 (cross-component documentation pass), P14 (upstream contribution of the AIB-side work via a fork), and P15 (strict gateway-only traffic, decoupled from authorization) were never implemented and are no longer part of the critical path. P14-upstream is **cancelled** outright (there is no upstreaming: the SDK folds into the KAOS Python SDK). The other two are recorded in [`followups.md`](./followups.md). The phase numbers P13/P14 are reused above for the current authorization work.
+The originally-planned P13 (cross-component documentation pass) and P14 (upstream contribution of the AIB-side work via a fork) were never implemented and are no longer part of the critical path. P14-upstream is **cancelled** outright (there is no upstreaming: the SDK folds into the KAOS Python SDK). The old P13-docs pass is recorded in [`followups.md`](./followups.md). The old P15 (strict gateway-only traffic) is **reinstated** as the current P15 above. The phase numbers P13/P14 are reused above for the current authorization work.
 ---
 
 ## AIB-side work: a stack of branches founded on ADR-AIB-000
@@ -250,6 +260,7 @@ graph LR
   P11 --> P13
   P12 --> P13[P13 OPA-extproc authz core + fold sync]
   P13 --> P14[P14 Authz modes + enablement + validation]
+  P14 --> P15[P15 Strict gateway-only traffic]
 ```
 
 | Phase | Repo(s) | Primary ADRs | Hard prerequisites |
@@ -270,6 +281,7 @@ graph LR
 | P12 Enforcement + ops hardening | KAOS | KAOS-006/005/007 | P4, P6, P7 |
 | P13 OPA-extproc authz core + fold sync | KAOS (+ AIB `main`+#222, #397) | ADR 0001, 0002, 0004 (new set) | P0–P12 |
 | P14 Authz modes + enablement + validation | KAOS operator + chart + CLI + docs | ADR 0003 (new set) | P13 |
+| P15 Strict gateway-only traffic | KAOS operator + chart + CLI + docs | ADR 0004 (new set) | P13 |
 
 ---
 
@@ -285,7 +297,7 @@ graph LR
 
 ## Explicitly later / out of the critical path
 
-The full deferred backlog — including the AIB-less agent-identity issuer, the Python SDK consolidation, autonomous-mode enforcement (the G1 gap), ConfigMap bundle hot-reload, the V2 gateway actor-JWT provider, and the previously-planned-but-unimplemented strict-gateway and cross-component-documentation phases — is tracked in [`followups.md`](./followups.md). A few standing items predating that file:
+The full deferred backlog — including the AIB-less agent-identity issuer, the Python SDK consolidation, autonomous-mode enforcement (the G1 gap), ConfigMap bundle hot-reload, the V2 gateway actor-JWT provider, and the previously-planned-but-unimplemented cross-component-documentation phase — is tracked in [`followups.md`](./followups.md). A few standing items predating that file:
 
 - **Native first-class resource-grant model in AIB** — replaces the temporary synthetic-service/PermissionSet encoding; evaluated in P11, only if the encoding proves limiting ([ADR-KAOS-004](../adr-kaos/ADR-KAOS-004-aib-responsibility-boundary.md)).
 - **Granular install override flags** (external Keycloak/AIB, custom issuers/endpoints) — added when a deployment needs them, beyond the single `--auth-enabled` switch ([ADR-KAOS-008](../adr-kaos/ADR-KAOS-008-aib-integration-and-synchronization-architecture.md)).

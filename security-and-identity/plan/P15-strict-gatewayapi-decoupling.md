@@ -1,6 +1,6 @@
 # Strict gateway-only traffic, decoupled from authorization — implementation plan
 
-**Branch (KAOS)**: `feat/strict-gatewayapi-networkpolicy`, cut from `main`; PR targets `main` (standalone, not stacked on the memory work).
+**Branch (KAOS)**: `feat/strict-gatewayapi-networkpolicy`, the **top of the P13 → P14 → P15 stacked series** (stacked on the P14 branch; retarget to `main` once the lower PRs merge). Builds directly on the P13 security-config decoupling that separates the "security enabled" predicate from `ExtAuthzURL`.
 **Tracking issue**: TBD.
 
 ## Execution rules (TOP PRIORITY — every task)
