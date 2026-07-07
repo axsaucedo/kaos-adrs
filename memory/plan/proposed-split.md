@@ -114,15 +114,15 @@ M0 validates and gates everything. M1–M2 build the atomic stores and the servi
 
 **Depends on**: M3, M4. **Demoable**: two agents with different scopes cannot read each other's private memory; a delegate inherits the configured prefix; a scoped erasure removes exactly that scope's items from both tiers.
 
-### M6 — CLI install integration and samples
+### M6 — CLI install integration, sample, and worked example
 
-**Goal**: a turnkey on-ramp consistent with the rest of KAOS.
+**Goal**: a turnkey, human-readable on-ramp consistent with the rest of KAOS, and a single runnable example that doubles as documentation.
 
-**Scope**: add `kaos system install --memory-enabled` following the existing integration-flag pattern, installing/upgrading the chart with the memory components; add the **opt-in development Postgres** provisioning as an explicit first-class step (never the production default), alongside the existing gateway/load-balancer provisioning; ship a `MemoryStore` sample and an Agent-with-memory sample under the samples surface; extend the CLI dry-run YAML validation tests.
+**Scope**: add `kaos system install --pgvector-memory-enabled` (an explicit, dev-only opt-in that provisions a pgvector Postgres and a connection Secret for `external`-mode stores) following the existing integration-flag pattern; **remove the superseded legacy Redis distributed-memory path entirely** (CLI flag, install helpers, chart values, the runtime `RedisMemory` backend, and all docs/examples/e2e references) — alpha, no backward compatibility kept; ship **one** override-friendly sample (a `local`-mode `MemoryStore` + a self-contained embeddings `ModelAPI` + a memory-enabled Agent) under the samples surface; and **fold in the end-to-end worked example** by replacing the old Redis example with a clear, simple memory example (`docs/examples/memory.md`) that demonstrates recall across sessions, with a model-independent mocked path in CI and a marker-gated `external`/pgvector variant verified manually. No `--memory-enabled` flag is added — memory is always available once a `MemoryStore` is applied.
 
-**Realises**: the CLI-provisioned development Postgres and install integration of [adr_0004](../adrs/adr_0004_deployment-topology-and-control-plane.md).
+**Realises**: the CLI-provisioned development pgvector Postgres and install integration of [adr_0004](../adrs/adr_0004_deployment-topology-and-control-plane.md), plus the hands-on semantic-recall example.
 
-**Depends on**: M4. **Demoable**: `kaos system install --memory-enabled` (optionally with dev Postgres) yields a cluster where the sample `MemoryStore` and memory-enabled agent work end to end.
+**Depends on**: M4. **Demoable**: `kaos system install --pgvector-memory-enabled` yields a cluster where the sample and the worked example run end to end, and the stored memory data can be fetched to prove recall across sessions.
 
 ### M7 — Productionisation, hardening, and documentation
 

@@ -1,7 +1,9 @@
 # pgvector semantic-recall example — implementation plan (future milestone)
 
+> **STATUS: FOLDED INTO M6.** The end-to-end worked example is now delivered as part of [M6](./M6-cli-install.md) rather than as a separate later milestone: M6 replaces the legacy Redis example with a single `docs/examples/memory.md` worked example (model-independent mocked path in CI + a marker-gated `external`/pgvector variant verified manually), and adds the `--pgvector-memory-enabled` installer flag. This document is retained for the pgvector/real-embedder design detail it captures; the executable example and its e2e wiring are implemented in M6.
+
 **Branch (KAOS)**: `feat/memory-pgvector-example`, stacked off `feat/memory-productionisation` (M7); PR targets that tip.
-**Status**: Future / opt-in. Not on the critical path — schedule after M7 lands.
+**Status**: Superseded by M6 for the runnable example. Detail below informs the M6 `external`/pgvector variant.
 
 > **Why a separate phase.** The default e2e suite proves the memory control and data planes with a mock `ModelAPI`, so it can only assert model-independent behaviour: verbatim short-term round-trip, per-scope isolation, and agent memory-binding recovery ([M4](./M4-memory-store-crd.md)). Real semantic long-term recall — writing turns, extracting facts through an embedder, and retrieving them by similarity — needs a real embedding model and a real vector store, which the mock cannot provide. This phase adds a fully-fledged, documented example that exercises `storage.type: external` (pgvector) with a real embedder end to end, plus a marker-gated e2e that runs it only when credentials are supplied. It is the hands-on counterpart to the library-level pgvector coverage, which stays gated behind `KAOS_TEST_PGVECTOR_DSN` and is not in CI.
 
