@@ -1,0 +1,21 @@
+# M6 — CLI install integration, sample, and worked example — progress
+
+Status: complete.
+
+The memory feature is now turnkey through the CLI, ships a single override-friendly sample, and comes with one worked example that doubles as documentation and as an executable end-to-end test. The legacy Redis distributed-memory path is erased outright — there is no deprecation shim, only the `MemoryStore` story. A new installer switch provisions a development pgvector Postgres for `external`-mode stores, and the whole flow was verified by hand on a live KIND cluster with real data fetched from the store to prove cross-session recall and principal isolation.
+
+## Tasks
+
+1. **Legacy Redis distributed-memory path removed.** The `--redis-enabled` install/uninstall flags and their `_install_redis`/`_uninstall_redis` helpers, the `agentDefaults.memory` Redis chart values and configmap lines, the runtime `RedisMemory` backend and its wiring, the Redis-specific tests, and the `docs/examples/redis-memory.*` files plus every Redis-memory doc reference were deleted. We are in alpha with no backward-compatibility guarantee, so the old path is not deprecated — it is gone, leaving a single unambiguous memory story.
+2. **`--pgvector-memory-enabled` dev Postgres provisioning.** The flag is added to both `kaos system install` and `uninstall` and forwarded through `install_command`/`uninstall_command`. A `_install_pgvector`/`_uninstall_pgvector` helper (modelled on the removed Redis helper) stands up a single-node `pgvector/pgvector:pg16` Postgres and writes a connection Secret `kaos-memory-pgvector` (key `dsn`) in the install namespace that an `external`-mode `MemoryStore` references. Dev-only, opt-in, never a production default. Covered by `_pgvector_dsn`/`_pgvector_manifest` contract tests and a manifest-application test.
+3. **Single memory sample.** `operator/config/samples/7-memory-agent.yaml` ships a Proxy LiteLLM `ModelAPI`, a `local`-mode `MemoryStore`, and a memory-bound `Agent`, registered in `kustomization.yaml` and surfaced through `kaos samples list|deploy|delete`. Inline comments document the small override needed to point the store at the dev pgvector Postgres for the worked example, avoiding a near-duplicate second sample.
+4. **Worked example replacing the Redis example.** `docs/examples/memory.md` (jupytext, mirrored to `examples/memory.ipynb`) deploys the sample, writes a short conversation through the memory service, opens a fresh session and recalls it verbatim, then proves a different principal sees nothing. The default/CI path is model-independent (`infer:false` over the service `/v1/write` + `/v1/recall` contract), so it needs no real embedder; a clearly-marked pgvector/external section covers real semantic recall. It is wired into `test_examples_e2e.py` and its own `example-memory` CI shard, with a vitepress sidebar entry.
+5. **Manual end-to-end verification + PR.** On a live KIND cluster the operator was installed with `--pgvector-memory-enabled`, the sample was switched to `external`/pgvector, and the worked example was run hands-on. Stored data was fetched directly from Postgres to confirm the short-term window persisted, recall returned the exact turns across a separate session, and a different principal was isolated. Two genuine bugs surfaced and were fixed during this run (see learnings).
+
+## Validation
+
+- `cd kaos-cli && pytest tests/ -q` — 96 passed (sample count, list, dry-run at `spec.config.memory`, pgvector flag help, DSN/manifest contract, manifest application).
+- Worked example executed end to end against the live cluster in `local` mode via `jupytext --execute`: the `accepted`, verbatim cross-session recall, and isolation asserts all held.
+- Manual `external`/pgvector run: `MemoryStore` reached `Ready`, write accepted, recall returned exact turns across sessions, empty for a different principal, with rows physically present in the pgvector `short_term_memory_window` table keyed by `user_id:<principal>`.
+
+Findings and the deltas to carry into later phases are recorded in [`../learnings/M6-cli-install.md`](../learnings/M6-cli-install.md).
