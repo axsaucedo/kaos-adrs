@@ -1,5 +1,8 @@
 # Multi-tenancy, scope enforcement, and governance — implementation plan
 
+> **STATUS: COLLAPSED — not executed as a standalone milestone.** An assessment against the shipped code found that M5's safety-critical surface was already delivered by M3/M4 and that its enforcement point is provided by the gateway/identity track, so executing this plan as written would re-implement existing behaviour. See the M5 section of [`proposed-split.md`](./proposed-split.md) for the evidence and the deferred non-synthetic follow-ups. Summary of what already exists: the `scope`/`tools`/`failureMode` Agent surface and `MEMORY_*`/`AGENT_IDENTITY` env (M4); fail-closed scope resolution (`Scope.owner_kwargs()` raises on an incomplete scope; `scope_from_deps` rejects `private` without an owner); complete three-tier erasure (`ShortTermStore.clear()` + `LongTermStore.delete_scope()`); and gateway-routed memory traffic through the identity-integrated gateway. Deferred, non-synthetic follow-ups: (a) reconcile ADR-0005/ADR-0001 wording to the flat four-value scope model (docs pass); (b) A2A delegation service-tier context propagation and admin cross-user erasure, which depend on per-request user-principal propagation from the identity track. The original plan is preserved below for historical reference.
+
+
 **Branch (KAOS)**: `feat/memory-multitenancy`, stacked off the later of `feat/memory-runtime-client` (M3) and `feat/memory-store-crd` (M4); PR targets that tip.
 **Tracking issue**: TBD (do not reference in commits/branches/PR text).
 

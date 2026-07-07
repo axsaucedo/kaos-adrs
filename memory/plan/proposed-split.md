@@ -39,7 +39,7 @@ This grounds why the phases are shaped the way they are.
 
 ## The proposed phases
 
-M0 validates and gates everything. M1–M2 build the atomic stores and the service bottom-up; M3 wires the runtime data plane and M4 the operator control plane (siblings off M2); M5 closes multi-tenancy and governance across both planes; M6 integrates the installer and samples; M7 productionises and documents. **Phase numbers are stable identifiers; the sections below are listed in execution order.** M0 learnings may reshape later phases.
+M0 validates and gates everything. M1–M2 build the atomic stores and the service bottom-up; M3 wires the runtime data plane and M4 the operator control plane (siblings off M2). **M5 (multi-tenancy/governance) is collapsed** — its safety-critical surface shipped in M3/M4 and its enforcement point is delivered via the gateway/identity track, so it is not executed as a standalone milestone (see its section below). M6 integrates the installer and samples; M7 productionises and documents. **Phase numbers are stable identifiers; the sections below are listed in execution order.** M0 learnings may reshape later phases.
 
 ### M0 — Feasibility validation and hypothesis testing
 
@@ -96,9 +96,17 @@ M0 validates and gates everything. M1–M2 build the atomic stores and the servi
 
 **Depends on**: M2. **Demoable**: applying a `MemoryStore` deploys a healthy memory service; an Agent with `storeRef` set is reconciled, becomes Ready (or not-Ready with a clear condition when the store is unavailable), and its runtime reaches the service.
 
-### M5 — Multi-tenancy, scope enforcement, and governance
+### M5 — Multi-tenancy, scope enforcement, and governance — **COLLAPSED (absorbed into M3/M4 + the gateway/identity track)**
 
-**Goal**: enforce isolation and the lifecycle governance the target requires.
+**Status**: not executed as a standalone milestone. An assessment against the shipped code found M5's safety-critical surface already delivered, so building it as planned would be re-implementing work that exists. The remaining items are either cosmetic or belong to the gateway/identity track, not a memory milestone.
+
+- **Scope surface — shipped in M4.** The Agent memory block carries `scope` (enum `private | user | shared | session`), `tools`, and `failureMode`; the operator injects `MEMORY_SCOPE`, `MEMORY_TOOLS`, `MEMORY_FAILURE_MODE`, and `AGENT_IDENTITY`. The live model is flat owner-keys, not the segmented prefix path the ADR described.
+- **Fail-closed resolution — shipped.** `Scope.owner_kwargs()`/`search_filters()` raise when the level's required owner key is missing, so an unusable scope can never silently widen to an unscoped query; `scope_from_deps` derives scope server-side and rejects `private` without a concrete owner.
+- **Right-to-erasure — shipped and complete across tiers.** `forget` fans out `ShortTermStore.clear()` (deletes both the short-term window and the medium-term summaries) plus `LongTermStore.delete_scope()` (Mem0). Only a cosmetic per-tier deletion count is missing.
+- **Enforcement point / authentication — delivered via the gateway.** With gateway routing enabled the operator rewrites the runtime's memory endpoint to `http://<gatewayHost>/<ns>/memorystore/<name>`, so runtime→service traffic flows through the identity-integrated gateway and NetworkPolicy block; the memory service has no separate app-level auth by design.
+- **Deferred, non-synthetic follow-ups (not M5):** (a) reconcile [adr_0005](../adrs/adr_0005_multi-tenancy-agent-grouping-and-governance.md)/[adr_0001](../adrs/adr_0001_memory-model-and-lifecycle-operations.md) wording to the flat four-value model (docs pass); (b) A2A delegation service-tier context propagation and admin cross-user erasure, which depend on per-request user-principal propagation from the identity track.
+
+**Goal (original)**: enforce isolation and the lifecycle governance the target requires.
 
 **Scope**: implement the three-value `scope` enum (`private | user | shared`) on the Agent memory block and map it onto Mem0's owner filter keys in the service; make scope filtering **non-optional and fail-closed** at the service (a request that cannot resolve a trusted scope fails rather than querying an unscoped store); bind A2A delegation propagation so a delegate inherits the delegator's scope prefix (shared-above, isolated-below) injected server-side through `DelegationToolset`, overridable to full-share or full-isolation; implement synchronous scope-targeted right-to-erasure that fans out across both tiers (short-term table by scope prefix, Mem0 `delete` filtered by scope, rolling-summary clear); confirm audit rides existing OpenTelemetry. Store-per-tenant isolation is emergent (deploy multiple `MemoryStore`s) and needs no new field.
 
@@ -124,7 +132,7 @@ M0 validates and gates everything. M1–M2 build the atomic stores and the servi
 
 **Realises**: the high-availability, degradation, and deferred-durable-queue follow-ups of [adr_0004](../adrs/adr_0004_deployment-topology-and-control-plane.md); the observability and governance hardening across [adr_0003](../adrs/adr_0003_memory-interface-and-runtime-data-plane.md)/[adr_0005](../adrs/adr_0005_multi-tenancy-agent-grouping-and-governance.md).
 
-**Depends on**: M5, M6. **Demoable**: an `external`-mode store survives a replica restart with no memory loss; the e2e suite is green in CI; the docs describe the full surface.
+**Depends on**: M6. **Demoable**: an `external`-mode store survives a replica restart with no memory loss; the e2e suite is green in CI; the docs describe the full surface.
 
 ---
 
@@ -136,11 +144,10 @@ graph LR
   M1 --> M2[M2 Memory service]
   M2 --> M3[M3 Runtime client]
   M2 --> M4[M4 MemoryStore CRD + operator]
-  M3 --> M5[M5 Multi-tenancy + governance]
-  M4 --> M5
+  M3 -.->|collapsed| M5[M5 Multi-tenancy + governance]
+  M4 -.->|collapsed| M5
   M4 --> M6[M6 CLI install + samples]
-  M5 --> M7[M7 Productionisation + docs]
-  M6 --> M7
+  M6 --> M7[M7 Productionisation + docs]
 ```
 
 | Phase | Repo area | Primary ADRs | Hard prerequisites |
@@ -150,9 +157,9 @@ graph LR
 | M2 Memory service | new memory service (Python) | 0004, 0003 | M1 |
 | M3 Runtime client | `pydantic-ai-server/pais` | 0003, 0002 | M2 |
 | M4 MemoryStore CRD + operator | `operator/`, chart | 0004 | M2 |
-| M5 Multi-tenancy + governance | service + `pais` + operator | 0005 | M3, M4 |
+| M5 Multi-tenancy + governance | — (collapsed into M3/M4 + gateway/identity) | 0005 | — |
 | M6 CLI install + samples | `kaos-cli`, chart, samples | 0004 | M4 |
-| M7 Productionisation + docs | all + docs | 0003, 0004, 0005 | M5, M6 |
+| M7 Productionisation + docs | all + docs | 0003, 0004, 0005 | M6 |
 
 ---
 
