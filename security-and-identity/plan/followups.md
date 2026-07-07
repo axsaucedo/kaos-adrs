@@ -1,6 +1,6 @@
-# Followups — deferred out of the initial cut
+# Followups — deferred out of the critical path
 
-These are explicitly out of scope for the initial KAOS↔AIB authorization implementation (see [proposed-split](./proposed-split.md) and the [ADR set](../adrs/adr_high_level_components.md)). They are recorded so they are not lost.
+These are explicitly out of scope for the current authorization work (phases **P13–P14** in [proposed-split](./proposed-split.md), realising the fresh [ADR set](../adrs/adr_high_level_components.md)). They are recorded so they are not lost. The list also absorbs the previously-planned-but-unimplemented phases (old P13/P14/P15) whose numbers P13/P14 have been reused.
 
 ## F1 — AIB-less agent-identity issuer
 
@@ -19,7 +19,7 @@ The AIB Python SDK is no longer a separate upstream contribution (AIB PR #399 is
 
 ## F3 — Autonomous-mode enforcement (G1 gap)
 
-[ADR 0001](../adrs/adr_0001_enforcement-topology-and-policy-engine.md) records that OPA only runs when a subject bearer is present (#222), so purely autonomous agent actions with no user token bypass authorization. Closing this needs either an AIB change (run OPA on actor-only requests) or treating the actor token as the bearer in autonomous flows. Deferred; user-present flows always enforce in the initial cut.
+[ADR 0001](../adrs/adr_0001_enforcement-topology-and-policy-engine.md) records that OPA only runs when a subject bearer is present (#222), so purely autonomous agent actions with no user token bypass authorization. Closing this needs either an AIB change (run OPA on actor-only requests) or treating the actor token as the bearer in autonomous flows. Deferred; user-present flows always enforce in P13–P14.
 
 ## F4 — ConfigMap-as-local-bundle hot-reload
 
@@ -28,3 +28,15 @@ The AIB Python SDK is no longer a separate upstream contribution (AIB PR #399 is
 ## F5 — V2 gateway JWT provider for the actor token
 
 [ADR 0002](../adrs/adr_0002_identity-and-authentication.md) ships actor-token verification as rego `io.jwt.decode_verify` against an injected JWKS (V1). A later hardening (V2) validates `x-agent-authorization` at the gateway via an Envoy Gateway JWT authn provider so the rego can decode-trust; this needs dual-provider (subject + actor) gateway verification. Deferred.
+
+## F6 — Strict gateway-only traffic, decoupled from authorization (was P15)
+
+Make network-level bypass prevention (deny direct workload-to-workload ClusterIP, force traffic through the Envoy Gateway) available **independently** of the authorization stack, exposed as a single positively-named switch. The substrate exists but is hard-coupled to `security.IsOperational()`: `NetworkPolicyEnabled()`/`GatewayRoutingEnabled()` should become drivable by a `security.strictGatewayApi.enabled` flag (env `SECURITY_STRICT_GATEWAY_API_ENABLED`) regardless of the ext_authz seam, and the inverse escape hatch renamed to that positive form. Note the P13 security-config decoupling ([ADR 0004](../adrs/adr_0004_component-architecture-and-projection.md)) already separates the "security enabled" predicate from `ExtAuthzURL`, so this followup builds directly on it. Strict traffic requires recreating the KIND cluster with a NetworkPolicy-enforcing CNI (Calico), since the default kindnet does not enforce NetworkPolicy. Detailed prior notes: [`P15-strict-gatewayapi-decoupling.md`](./P15-strict-gatewayapi-decoupling.md).
+
+## F7 — Cross-component documentation pass (was P13)
+
+A dedicated pass bringing all user- and operator-facing docs up to the same structure as the implementation (security/identity model, install flow, CRD surface, SDK, folded projection controller, authorization modes). P14 already ships per-mode docs and examples for the authorization work; this followup is the broader consistency sweep across every component, done once the surface settles.
+
+## Cancelled — Upstream contribution of the AIB-side work (was P14)
+
+The original plan contributed the AIB-side work (deployability foundation, access-check API, Python SDK) upstream from a fork. This is **cancelled**. AIB `main` already embeds OPA in ext_proc (#222), the standalone access-check service (#398) and separate SDK (#399) are abandoned, and the runtime token client folds into the KAOS Python SDK ([F2](#f2--python-sdk-consolidation)). The only remaining AIB dependency is `main`+#222 plus PR #397 (deployability), which is maintained on the fork without an upstream-contribution track.
