@@ -57,3 +57,68 @@ The by-design path that *would* forward to the workload is the agent-identity ca
 - **Authentication** (identity in/out) is fully demonstrable now: `401` with a specific reason for missing/malformed/untrusted tokens, and identity admitted for a valid Keycloak token.
 - **A clean `200`** requires, depending on the path: the `public_url`/`iss` fix for the agent-identity (no-delegation) path; consent + vault (F9) for the user-delegated internal path; and `EXTPROC_AUTHORIZATION_*` + a mounted rego (F8/P17) for any fine-grained agent→resource decision.
 - **Rego cannot be used to bypass the exchange** — that coupling is structural in `#222` and needs an upstream change, not a policy edit.
+
+## Live test matrix (every combination we actually sent)
+
+All requests were sent from an in-cluster curl pod (`kubectl run --rm -i --image=curlimages/curl`) to the gateway LB IP `172.18.0.200` on the `PathPrefix /kaos-walkthrough/agent/coordinator` route (the LB IP is not reachable from the macOS host; a `NetworkPolicy` blocks direct-to-pod, so direct curl hangs). Each resource `SecurityPolicy` has two `jwt_authn` providers: `agent` (broker JWKS, header `x-agent-authorization`) and `user` (Keycloak JWKS, header `Authorization`).
+
+| # | What was sent | Live result | Where it stopped |
+|---|---------------|-------------|------------------|
+| 1 | No token at all | `401 jwt_authn_access_denied{Jwt_is_missing}` | gateway `jwt_authn` |
+| 2 | Malformed bearer (`Authorization: Bearer abc`) | `401 ...{Jwt_is_not_in_the_form...}` | gateway `jwt_authn` |
+| 3 | Well-formed JWT, wrong/unknown issuer | `401 ...{Jwt_issuer_is_not_configured}` | gateway `jwt_authn` |
+| 4 | Valid Keycloak **user** token in `Authorization` | passes `jwt_authn` → `500` `direct_response` | ExtProc token exchange fails (no service/consent/vault for internal URI) |
+| 5 | Minted broker **agent** token in `x-agent-authorization`, no user bearer | `401 ...{Jwt_issuer_is_not_configured}` | gateway `jwt_authn` — decoded token `iss: http://localhost:8000` ≠ the `agent` provider issuer (the `public_url`/`iss` bug) |
+
+We never observed a `200` through the route in any combination. Outcomes 1–3 = identity rejected; 4 = identity accepted but exchange cannot complete; 5 = the by-design passthrough path blocked only by the issuer misconfiguration (which the CLI fix addresses, but even fixed it proves authentication only — it lands on the no-bearer `passThrough()` branch and never consults OPA).
+
+## Vault/session seeding is not injectable — you cannot "store a token" out of band
+
+The only code path that writes a token into the vault is the interactive OAuth2 authorization-code flow: `InitiateFlow` (`GET /api/third-party/{serviceId}/oauth2/authorize`, handler.go:609) → user authenticates at the third-party IdP → `HandleCallback` (`GET /api/third-party/{serviceId}/oauth2/callback`, handler.go:224, router.go:610) → `OAuth2SessionService.HandleCallback` (service.go:511) → `createSession` (service.go:418) → `storeSession` (encrypt + `repository.Create`). The third-party HTTP surface exposes **only** `GET /third-party/sessions` (list), `GET /third-party/{serviceId}/session` (details), and `DELETE /third-party/{serviceId}/session` (terminate) — there is **no `POST`/`PUT` to inject or seed a token** (handler.go:608–612). So a session/token can be *created* only by a real user completing a real OAuth flow against a real (or mock) IdP for a *registered service*; it cannot be pre-loaded administratively.
+
+## Storing a token "for the MCP server" would ruin the execution flow
+
+To make the exchange succeed for an internal MCP server you would have to (a) register the MCP server as an *external third-party OAuth2 service* whose `protected_resource` matches its URL, (b) stand up an IdP and have a user complete the auth-code flow so a session exists, and (c) seed a consent grant. Even after all that, on success the ExtProc **replaces the outgoing `Authorization` header with the vaulted third-party token** (`replaceAuthorizationHeader`, server.go:955; called from the body path at :388 and the header-only path at :584) before forwarding. The MCP server would then receive a fabricated third-party token *instead of* the agent/user identity it expects. This inverts the design (treats an internal KAOS component as an external resource server), is operationally meaningless, and yields **zero** authorization value — the authz decision (permission sets / grants) is entirely separate from the token that gets swapped in. Conclusion: storing a token for an internal MCP server is **not viable and actively harmful** to the flow. The RFC 8693 exchange is structurally the wrong mechanism for internal (agent→MCP, agent→agent, agent→ModelAPI) traffic.
+
+## The chart does not expose the ExtProc OPA authorizer at all
+
+Beyond "disabled by default", the broker Helm chart provides **no way to turn it on**. `charts/agentic-identity-broker/templates/extproc.yaml` sets a fixed env list that stops at `EXTPROC_LOG_LEVEL` (lines 51–75: `EXTPROC_GRPC_*`, `EXTPROC_OAUTH2_*`, `EXTPROC_LOG_LEVEL` only) with **no** `EXTPROC_AUTHORIZATION_ENABLED`, no `EXTPROC_AUTHORIZATION_POLICY_PATH`, and no `volumes`/`volumeMounts` for a rego bundle. (`templates/configmap-grants.yaml` is a red herring — it is Postgres `GRANT` SQL for the DB-migration Job, gated on `storage.type == postgres`, unrelated to OPA.) Enabling OPA on the running deployment therefore requires **manual deployment surgery**: patch the env in and mount a ConfigMap-backed rego as a volume. This is a chart-support gap on top of the KAOS-projection gap (F8/P17), not just an unset value.
+
+## We did NOT try `authorization.enabled=true` live — and why it would not change the verdict
+
+We have **not** enabled OPA on the live ExtProc in this investigation (it would need the manual patch above). Reasoning it through against the code, enabling it cannot produce a working internal `allow → 200`:
+
+- **Body path (POST / MCP JSON-RPC)**: the exchange runs in the headers phase *before* OPA (`processRequestHeadersOPA`, server.go:466–476), so an internal request `500`s on the failed exchange before OPA is ever consulted.
+- **Header-only path (GET / SSE)**: OPA runs first, so a rego **deny → clean `403`** *is* demonstrable — but on `allow` the code unconditionally calls `Exchange(...)` (server.go:576/584), which then `500`s for the same unmapped-internal-resource reason.
+
+So a live OPA experiment could prove **deny (403)** but never a working **allow (200)** for internal resources. That is why we did not spend the deployment surgery: it cannot lift the ceiling. (If a future session wants the empirical deny demonstration, patch `EXTPROC_AUTHORIZATION_ENABLED=true` + `EXTPROC_AUTHORIZATION_POLICY_PATH=/policy/authz.rego`, mount a rego ConfigMap, and send a GET that the rego denies.)
+
+## AIB `#231` does not close this gap
+
+AIB PR `#231` (`zalando-infosec/agentic-identity-broker`, "Permission Sets & Tool Authorization + CIBA") is a **draft design document only** (`specs/design-permission-sets-tool-authorization.md`, ~1519 lines, no code), referencing `#200`. It doubles down on the third-party model ("the broker does not mint tokens; the access token comes from the third-party provider") and adds tiered runtime approval + CIBA. It does **not** add a skip-exchange action, a fail-open exchanger, or any internal-resource path — i.e. it does not solve internal KAOS authorization. Its useful principle is *"separate authorization from token acquisition"*, which is the AIB-side direction for our F9, but it is unmerged and third-party-scoped.
+
+## Verdict (2026-07-08, end of investigation)
+
+The ceiling reachable from AIB today for KAOS is **agent identity verification (authentication)**. Internal **authorization** (which agent may reach which internal resource) cannot be delivered by AIB's ExtProc as shipped, because: OPA is off, chart-unexposed, and — even if enabled — is short-circuited by the mandatory RFC 8693 exchange, which `500`s on internal resources and cannot be made to "return the same token" or be seeded with one. Internal authorization should therefore be pursued through a **different mechanism**: a KAOS-run OPA behind the ext_authz seam (ADR 0001's reserved, default-off seam), with AIB kept as the identity provider (complementary, not either/or).
+
+## Appendix — PRs, commits, and code references
+
+**AIB source under test**: worktree `../aib-222-verify`, remote `alejandro-saucedo_zse/agentic-identity-broker` (fork of `zalando-infosec/agentic-identity-broker`), containing merged `#222` (OPA-in-ExtProc). Draft `#231` reviewed separately via `gh pr view 231 --repo zalando-infosec/agentic-identity-broker` (resolvable only with the `alejandro-saucedo_zse` gh account, not `axsaucedo`).
+
+**Key AIB code references**:
+- `internal/extproc/server/server.go` — `processRequestHeaders` (non-OPA, exchange + 500), `processRequestHeadersOPA:466–476` (body: exchange before OPA), `processHeadersOnlyOPA:576–584` (OPA first, unconditional exchange on allow), `replaceAuthorizationHeader:955` (header swap, callers :388/:584), `passThrough` (no-bearer skip).
+- `internal/extproc/authorization/decision.go:5–6` — `Decision{Action, Reasons}`, `Action ∈ {allow, deny, approval_required, ciba_required}` (no skip-exchange).
+- `internal/extproc/config/loader.go:76,323` — `authorization.enabled` default false; env `EXTPROC_AUTHORIZATION_*`.
+- `internal/domain/tokenexchange/service.go:168` — `Exchange()` steps 8 (service by `protected_resource`), 9 (consent `VerifyAgentAccess`), 10 (vaulted `GetValidAccessToken`); no echo mode.
+- `internal/domain/oauth2session/service.go:418,511` + `internal/adapters/http/oauth2_sessions/handler.go:224,608–612` — session creation only via OAuth callback; no seed API.
+- `internal/ports/config.go:185` — `PublicURL` default `http://localhost:8000`; `internal/domain/oauth2/service.go:28` — stamped as token `iss`.
+
+**Broker chart references**: `charts/agentic-identity-broker/templates/extproc.yaml:51–75` (env, no authorization/volume); `templates/configmap.yaml:27–28` (`broker.server.enduser.publicUrl` → `public_url`); `templates/configmap-grants.yaml` (Postgres GRANT SQL, unrelated).
+
+**KAOS changes made during this investigation** (branch `feat/gatewayapi-strict-and-cli-simplification`, PR `#267`, remote `axsaucedo/agentic-kubernetes-operator`):
+- `6d76fc14` `docs(security): demonstrate live gateway allow/deny in aib-keycloak walkthrough` — added walkthrough "Step 6" with the in-cluster curl allow/deny demonstration.
+- `68da2ea2` `fix(cli): set broker enduser public URL so agent token iss matches gateway` — the `public_url`/`iss` fix (`_build_aib_broker_public_url_args()` in `kaos-cli/kaos_cli/install.py`, seeded for all AIB postures; test in `tests/test_cli_integration.py`; 110 CLI tests pass).
+
+**kaos-ai-docs commits** (remote `axsaucedo/kaos-telemetry-blogpost`): `867abcc` (this learning doc + F0 extension in `../plan/followups.md`), `72601a1` (token-exchange purpose/no-echo), plus this update.
+
+**What was NOT changed in AIB**: no AIB code was modified — a skip-exchange decision action and/or a fail-open exchanger for unmapped internal resources remain the required upstream changes (F0 theme). The `public_url` default fix was applied KAOS-side (chart value), not upstream.
