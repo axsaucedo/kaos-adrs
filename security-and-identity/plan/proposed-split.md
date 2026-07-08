@@ -228,6 +228,16 @@ P0 validates and gates everything. P1–P3 and P5–P8 build and wire the MVP bo
 
 **Depends on**: P15. Top of the P13 → P14 → P15 → P16 stack.
 
+### P17 — Live enforcement validation and broker OPA-authz enablement
+
+**Goal**: turn the two validations P16 could not run live into a tracked follow-up, together with the one feature gap they depend on — enabling the broker `ext_proc` OPA authorization decision so the verified posture actually authorizes.
+
+**Scope** (KAOS CLI + AIB install path + docs + runbooks): extend the `keycloak-aib-enabled` install path to set `EXTPROC_AUTHORIZATION_*` and mount a `granted_permission_sets` rego on the broker `ext_proc` deployment (sharing the operator-rendered rego shape); prove a user-present allow next to a denied edge on the real gateway-routed path; and prove strict gateway-only enforcement on a Calico KIND cluster (kindnet does not enforce NetworkPolicy). The two live proofs are Calico/broker-gated manual runbooks, not kindnet-CI runnable.
+
+**Realises**: completes the live-validation portion of [ADR 0002](../adrs/adr_0002_identity-and-authentication.md) / [ADR 0003](../adrs/adr_0003_authorization-models-and-policy-data.md) and the network-isolation enforcement seam of [ADR 0004](../adrs/adr_0004_component-architecture-and-projection.md). Detailed plan: [`P17-live-enforcement-validation.md`](./P17-live-enforcement-validation.md).
+
+**Depends on**: P16 (preset surface) and P15 (strict-gateway switch). Top of the stack.
+
 ### Superseded planned phases (moved to followups)
 
 The originally-planned P13 (cross-component documentation pass) and P14 (upstream contribution of the AIB-side work via a fork) were never implemented and are no longer part of the critical path. P14-upstream is **cancelled** outright (there is no upstreaming: the SDK folds into the KAOS Python SDK). The old P13-docs pass is recorded in [`followups.md`](./followups.md). The old P15 (strict gateway-only traffic) is **reinstated** as the current P15 above. The phase numbers P13/P14 are reused above for the current authorization work.
@@ -272,6 +282,7 @@ graph LR
   P13 --> P14[P14 Authz modes + enablement + validation]
   P14 --> P15[P15 Strict gateway-only traffic]
   P15 --> P16[P16 CLI simplification + final validation]
+  P16 --> P17[P17 Live enforcement validation + broker OPA-authz]
 ```
 
 | Phase | Repo(s) | Primary ADRs | Hard prerequisites |
@@ -294,6 +305,7 @@ graph LR
 | P14 Authz modes + enablement + validation | KAOS operator + chart + CLI + docs | ADR 0003 (new set) | P13 |
 | P15 Strict gateway-only traffic | KAOS operator + chart + CLI + docs | ADR 0004 (new set) | P13 |
 | P16 CLI simplification + final validation | KAOS CLI + chart + docs | ADR 0002/0003/0004 (consolidation) | P15 |
+| P17 Live enforcement validation + broker OPA-authz | KAOS CLI + AIB install + docs + runbooks | ADR 0002/0003/0004 (live proof) | P16, P15 |
 
 ---
 

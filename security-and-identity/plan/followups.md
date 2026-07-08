@@ -39,6 +39,10 @@ Summary retained for context: make network-level bypass prevention (deny direct 
 
 A dedicated pass bringing all user- and operator-facing docs up to the same structure as the implementation (security/identity model, install flow, CRD surface, SDK, folded projection controller, authorization modes). P14 already ships per-mode docs and examples for the authorization work; this followup is the broader consistency sweep across every component, done once the surface settles.
 
+## F8 — Live enforcement validation + broker OPA-authz enablement (promoted to phase P17)
+
+**Promoted to phase P17** — the live-validation slice P16 could not run in-CI, plus the one feature gap it depends on. P16 collapsed the install surface into two presets and validated them at the unit/render/CI level, but two proofs remained environment-gated: (a) the `keycloak-aib-enabled` posture does not yet enable the broker `ext_proc` OPA authorization decision (`EXTPROC_AUTHORIZATION_*` + a mounted `granted_permission_sets` rego), so a valid actor token enforces JWT presence but not the grant graph; and (b) strict gateway-only enforcement is unproven because kindnet does not enforce NetworkPolicy (needs a Calico KIND cluster). See [`proposed-split.md`](./proposed-split.md) (P17) and the detailed plan [`P17-live-enforcement-validation.md`](./P17-live-enforcement-validation.md). The autonomous no-bearer gap ([F3](#f3--autonomous-mode-enforcement-g1-gap)) is explicitly out of P17's scope.
+
 ## Cancelled — Upstream contribution of the AIB-side work (was P14)
 
 The original plan contributed the AIB-side work (deployability foundation, access-check API, Python SDK) upstream from a fork. This is **cancelled**. AIB `main` already embeds OPA in ext_proc (#222), the standalone access-check service (#398) and separate SDK (#399) are abandoned, and the runtime token client folds into the KAOS Python SDK ([F2](#f2--python-sdk-consolidation)). The only remaining AIB dependency is `main`+#222 plus PR #397 (deployability), which is maintained on the fork without an upstream-contribution track.
