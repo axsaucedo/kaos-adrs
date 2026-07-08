@@ -218,6 +218,16 @@ P0 validates and gates everything. P1–P3 and P5–P8 build and wire the MVP bo
 
 **Depends on**: P13 (security-config decoupling). Top of the P13 → P14 → P15 stack.
 
+### P16 — CLI simplification and final end-to-end validation
+
+**Goal**: reduce the install surface to a small, opinionated set of choices and consolidate the security story into user-facing documentation, backed by a final end-to-end validation of the two supported postures.
+
+**Scope** (KAOS CLI + chart + docs): collapse the ~26 fine-grained agent/user-auth, authorization, network-policy and TLS install flags into a single `--full-auth-enabled` preset selector with two curated postures — `keycloak-aib-enabled` (full Keycloak + identity broker + token exchange + verified OPA authorization; the default) and `kaos-internal-demo` (self-contained demo, KAOS-projected policy ConfigMap, header-trusted agent JWT, no external IdP/broker); keep `--gateway-api-strict` (from P15) and the infra flags visible and retain the granular flags as hidden advanced options so the E2E harness and power users are unaffected; author a security overview and align the authorization docs with the preset surface; validate both postures end-to-end.
+
+**Realises**: consolidates the operator/CLI surface introduced across P13–P15 into a supported product surface. Detailed plan: [`P16-cli-simplification-and-final-validation.md`](./P16-cli-simplification-and-final-validation.md).
+
+**Depends on**: P15. Top of the P13 → P14 → P15 → P16 stack.
+
 ### Superseded planned phases (moved to followups)
 
 The originally-planned P13 (cross-component documentation pass) and P14 (upstream contribution of the AIB-side work via a fork) were never implemented and are no longer part of the critical path. P14-upstream is **cancelled** outright (there is no upstreaming: the SDK folds into the KAOS Python SDK). The old P13-docs pass is recorded in [`followups.md`](./followups.md). The old P15 (strict gateway-only traffic) is **reinstated** as the current P15 above. The phase numbers P13/P14 are reused above for the current authorization work.
@@ -261,6 +271,7 @@ graph LR
   P12 --> P13[P13 OPA-extproc authz core + fold sync]
   P13 --> P14[P14 Authz modes + enablement + validation]
   P14 --> P15[P15 Strict gateway-only traffic]
+  P15 --> P16[P16 CLI simplification + final validation]
 ```
 
 | Phase | Repo(s) | Primary ADRs | Hard prerequisites |
@@ -282,6 +293,7 @@ graph LR
 | P13 OPA-extproc authz core + fold sync | KAOS (+ AIB `main`+#222, #397) | ADR 0001, 0002, 0004 (new set) | P0–P12 |
 | P14 Authz modes + enablement + validation | KAOS operator + chart + CLI + docs | ADR 0003 (new set) | P13 |
 | P15 Strict gateway-only traffic | KAOS operator + chart + CLI + docs | ADR 0004 (new set) | P13 |
+| P16 CLI simplification + final validation | KAOS CLI + chart + docs | ADR 0002/0003/0004 (consolidation) | P15 |
 
 ---
 
