@@ -34,6 +34,20 @@ Making the exchange skippable would require an **AIB code change**, one of: (a) 
 
 On an internal agent route the ExtProc always attempts to exchange the user bearer for the target resource URI. With no service whose `protected_resource` matches the internal URL, no consent grant, and no vaulted token, the exchange fails and the ExtProc returns a `500` ImmediateResponse (`processRequestHeaders` exchange-error path, FR-008/FR-010). This is expected current-state behaviour, not a KAOS wiring bug: the happy path needs the consent + third-party vault ([F9](../plan/followups.md)). It also means there is **no clean `200` for a user-delegated request on an internal resource** until either F9 lands or the exchanger fails open for unmapped internal resources.
 
+## What the exchange is for, and why it cannot "return the same token"
+
+The exchange is purpose-built for **delegated external access**: it swaps the user subject token for a *different, previously-vaulted third-party access token* that the agent then presents to that external API. `TokenExchangeService.Exchange` (`internal/domain/tokenexchange/service.go:168`) requires three things to succeed:
+
+- **Registered service** — the resource URI must resolve to a service with a `protected_resource` (`FindByProtectedResource`, step 8); otherwise `invalid_target`.
+- **User consent grant** — a `UserGrant` for (principal, agent) must exist and be active (`consentService.VerifyAgentAccess`, step 9); otherwise `access_denied`.
+- **Vaulted OAuth2 session** — a stored third-party session holding a real access/refresh token (`oauth2SessionService.GetValidAccessToken`, step 10); otherwise `invalid_grant` with a re-auth URL.
+
+The response *is* that vaulted third-party token. There is **no echo/identity/pass-the-subject-token mode** — the service always looks up a target service and returns a third-party token, so for an internal KAOS resource (no service, no session) it can only fail. Consequently:
+
+- **Default/auto grants do not get you to `200`.** Pre-seeding a `UserGrant` (a "trusted/pre-authorized client" pattern) removes the interactive consent screen, but the exchange still requires a vaulted session (step 10) — an actual third-party token obtained via a real OAuth authorization-code flow. Default consent cannot manufacture that token.
+- **For internal resources the exchange is the wrong tool.** Making internal agent→MCP/agent→agent calls succeed is not a grant-seeding problem; it is the "do not exchange" AIB change (skip-exchange decision action, or a fail-open exchanger for unmapped internal resources) already noted above.
+- **Default consent is a legitimate F9 sub-option** for external targets (drop the human click via admin pre-grant), but it cannot replace the third-party token vault.
+
 ## The agent-identity path needs the broker `public_url` set (issuer mismatch)
 
 The by-design path that *would* forward to the workload is the agent-identity call: a valid broker-issued agent token in `x-agent-authorization` with **no** user `Authorization` bearer → `jwt_authn` passes on the `agent` provider, and ExtProc `passThrough()` (empty bearer) forwards it. Live, this returned `401 Jwt_issuer_is_not_configured`. Decoding a minted agent token showed `iss: http://localhost:8000` — the broker defaults `server.enduser.public_url` to `http://localhost:8000` (`internal/ports/config.go:185`) and stamps it as the token `iss` (`internal/domain/oauth2/service.go:28`), while the gateway `agent` provider expects the broker's in-cluster issuer. Fixed KAOS-side by setting `broker.server.enduser.publicUrl` to the in-cluster broker enduser URL at install time (see [F0](../plan/followups.md)). Note this path proves **authentication only** — it hits the G1 no-bearer branch, so even with OPA enabled the grant graph is not consulted.
