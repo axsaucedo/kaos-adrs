@@ -2,7 +2,11 @@
 
 These are explicitly out of scope for the current authorization work (phases **P13–P15** in [proposed-split](./proposed-split.md), realising the fresh [ADR set](../adrs/adr_high_level_components.md)). They are recorded so they are not lost. The list also absorbs the previously-planned-but-unimplemented old P13 (docs) and old P14 (upstream) phases whose numbers P13/P14 have been reused; the old P15 (strict gateway) is reinstated as the current phase P15.
 
-## F1 — AIB-less agent-identity issuer
+## F0 — AIB chart: ExtProc client-credentials endpoint + arbitrary env passthrough
+
+The token-exchange ExtProc sidecar derives its OAuth token endpoint as `issuer + "/oauth/token"` when `oauth2.client_credentials_endpoint` is unset. That mock-shaped path returns `404` against real OIDC providers such as Keycloak (whose path is `/protocol/openid-connect/token`). The `EXTPROC_OAUTH2_CLIENT_CREDENTIALS_ENDPOINT` env var overrides it, but the AIB Helm chart does not template it, so the only way to set it today is patching the sidecar Deployment out of band (`kubectl set env`). Two small upstream contributions to the AIB repo remove the hack: (a) template `extProc.oauth2.clientCredentialsEndpoint` as `EXTPROC_OAUTH2_CLIENT_CREDENTIALS_ENDPOINT`, and (b) expose a generic `extProc.extraEnv` (and ideally `broker.extraEnv`) passthrough so any future ExtProc/broker env var can be set via values without a chart change. Until this lands, KAOS applies the endpoint as a post-install patch.
+
+
 
 Today, agent authentication (credential minting, token issuance, JWKS) is **AIB-only**: the issuer is the broker, the token endpoint is `<issuer>/oauth2/token`, the JWKS is `<issuer>/oauth2/jwks.json`, and credentials come from AIB admin `/agents/{id}/client-credentials`. Without AIB there is no authenticated agent token, so a fully AIB-free deployment cannot authenticate agents even though [ADR 0003](../adrs/adr_0003_authorization-models-and-policy-data.md) Model 1 is otherwise broker-independent. The runtime token client (`pydantic-ai-server/aib/identity.py`) is provider-agnostic (any token endpoint plus client id/secret), but KAOS automates only the AIB path.
 
