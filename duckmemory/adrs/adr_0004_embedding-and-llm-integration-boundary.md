@@ -1,6 +1,6 @@
 # ADR-0004 — Embedding and LLM integration boundary
 
-**Status:** Accepted
+**Status:** Accepted (Layer-1 configuration mechanism amended by P3 validation — see [learnings/P3-learnings.md](../learnings/P3-learnings.md))
 
 ## Context
 
@@ -39,7 +39,7 @@ The engine can call a configured OpenAI-compatible embedding endpoint; extractio
 **A layered contract: Option A is always available, Option B is the shipped convenience, Option C is deferred, Option D is rejected.**
 
 - **Layer 0 (always).** Host-provided embeddings and host-side extraction are first-class and permanent: every write and recall path accepts vectors directly, and `memory_fold` remains deterministic (evict, version the digest with a verbatim-window fallback summary, return the folded batch) so a host-side extractor can consume the batch and write facts back. The engine never *requires* a network.
-- **Layer 1 (shipped, opt-in by configuration).** An in-engine embedding client: `memory_embed(text)` scalar function calling a configured OpenAI-compatible embeddings endpoint, plus `memory_recall_text(...)`/`memory_context_text(...)` conveniences that embed the query then delegate to the Layer 0 macros. Configuration via extension settings (`memory_embedding_endpoint`, `memory_embedding_model`) with the API key resolved through **DuckDB's secrets manager** — never stored in extension tables. Batching for multi-row embedding, short default timeout (5s), and a hard degradation rule: embedding failure fails the *convenience* call with a clear error, never corrupts state, and Layer 0 remains usable.
+- **Layer 1 (shipped, opt-in by configuration).** An in-engine embedding client: `memory_embed(text)` scalar function calling a configured OpenAI-compatible embeddings endpoint, plus `memory_recall_text(...)`/`memory_context_text(...)` conveniences that embed the query then delegate to the Layer 0 macros. Configuration via extension settings (`memory_embedding_endpoint`, `memory_embedding_model`) with the API key resolved through **DuckDB's secrets manager** — never stored in extension tables *(amended by P3: configuration shipped as `mem.meta` keys — `embed_endpoint`, `embed_model`, `embed_timeout_ms` — consistent with the fold knobs; the secrets manager has no C-API surface in v1.5.4, so the key is resolved at call time from the environment variable named by `embed_api_key_env` — the key still never enters SQL, tables, or the database file)*. Batching for multi-row embedding, short default timeout (5s), and a hard degradation rule: embedding failure fails the *convenience* call with a clear error, never corrupts state, and Layer 0 remains usable.
 - **Layer 2 (deferred, seam reserved).** In-engine extraction/summarization is not shipped in v1. The fold contract (returned folded batch, digest versioning, open `kind` on facts) is the reserved seam: a future `memory_extract` can slot in without schema or surface breakage once the retained-connection execution model is proven under long-running calls. This is a deferral on evidence, not a rejection — recorded so the decision is revisited after real usage data.
 
 ## Consequences
