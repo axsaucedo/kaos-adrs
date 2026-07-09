@@ -1,6 +1,6 @@
 # ADR-0003 — Storage, indexing, and retrieval
 
-**Status:** Accepted
+**Status:** Accepted (reindex wording amended by P2 — see [learnings/P2-learnings.md](../learnings/P2-learnings.md))
 
 ## Context
 
@@ -28,7 +28,7 @@ Three data tables plus a meta table in the `memory` schema, each carrying the [A
 
 ### Keyword search and the reindex policy
 
-BM25 uses the `fts` extension over `memory.facts(content)`. Because the FTS index never auto-updates, the engine tracks staleness explicitly: `memory.meta` records `fts_indexed_at`, writes are visible via `max(created_at)`, and `memory_reindex()` (lifecycle function per [ADR-0002](./adr_0002_sql-interface-and-embedded-execution-model.md)) rebuilds the index. `memory_recall` treats BM25 as **best-effort**: when the index is absent or stale, keyword scoring degrades to a documented LIKE-based containment score (weaker but never wrong-schema), and `memory_stats` surfaces staleness so hosts know to reindex. Rebuild-on-every-write is explicitly rejected as pathological for a continuous write path.
+BM25 uses the `fts` extension over `memory.facts(content)`. Because the FTS index never auto-updates, the engine tracks staleness explicitly: `memory.meta` records `fts_indexed_at`, writes are visible via `max(created_at)`, and reindexing is a documented two-statement host pattern — `PRAGMA create_fts_index(..., overwrite = 1)` plus stamping `fts_indexed_at` *(amended: originally a `memory_reindex()` lifecycle function, superseded with the rest of the native-lifecycle surface by the P1 C-API finding recorded in [ADR-0002](./adr_0002_sql-interface-and-embedded-execution-model.md))*. `memory_recall` treats BM25 as **best-effort**: when the index is absent or stale, keyword scoring degrades to a documented LIKE-based containment score (weaker but never wrong-schema), and `memory_stats` surfaces staleness so hosts know to reindex. Rebuild-on-every-write is explicitly rejected as pathological for a continuous write path.
 
 ### Fusion implementation
 
