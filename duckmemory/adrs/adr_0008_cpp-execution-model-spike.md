@@ -1,6 +1,6 @@
 # ADR-0008 — C++ execution-model spike: in-engine orchestration via CALL, and staying on Rust/C-API
 
-**Status:** Accepted (decision: retain Rust/C-API; C++ recorded as a validated escape hatch with revisit criteria).
+**Status:** Accepted (decision: retain Rust/C-API; C++ recorded as a validated escape hatch with revisit criteria). Amended same day with ecosystem evidence — see §Ecosystem evidence.
 
 ## Context
 
@@ -48,6 +48,36 @@ nothing committed or pushed): `duckdb/extension-template` pinned exactly to Duck
 transaction owner** — it cannot participate in the caller's transaction under either tested route.
 The honest API contract would be "CALL owns its transaction; do not wrap it with related
 uncommitted caller DML expecting shared visibility or rollback."
+
+## Ecosystem evidence (amendment)
+
+A follow-up survey of open-source extension codebases (evidence with file:line citations in
+`agentmemory/tmp/nested-sql-research/FINDINGS.md`; repos pinned by revision) confirmed and extended
+the spike:
+
+- **The separate-connection route is the community-standard pattern.** flockmtl (load, parser-time,
+  and model-lookup SQL), DuckPGQ (execute-callback SELECT/DELETE/INSERT for property graphs), and
+  duckdb-substrait (bind- and execute-time, with the literal comment "Create a new connection to
+  avoid deadlock with the locked context") all use `Connection(*context.db)`; ggsql-duckdb documents
+  the identical deadlock→sibling-connection conclusion. All of them accept the separate-transaction
+  semantics (and the separate temp-catalog/session-state loss) the spike observed. No inspected
+  extension achieves arbitrary same-transaction nested SQL.
+- **The deadlock mechanism is confirmed at source:** `ClientContext` serializes on a plain
+  non-recursive `context_lock` mutex acquired at `Query`'s entry; a re-entrant call from an
+  executing callback self-deadlocks (v1.5.4 `client_context.hpp:318`, `client_context.cpp:1042`;
+  maintainer-consistent with duckdb#2540). `RunFunctionInTransaction` is a C++-closure bracket, not
+  a nested-SQL executor, and its public entry also re-acquires the lock (duckdb#8124).
+- **New finding — same-transaction writes without SQL exist:** core's `InternalAppender` →
+  `DataTable::LocalAppend` appends into the *caller's* transaction-local storage (used by core
+  itself: TPCH dbgen, CSV reject tables). A C++ `CALL memory_add` could therefore get
+  caller-transaction INSERT semantics for the append-only path — but only via version-pinned C++
+  internals (not the stable C ABI), append-only (no UPDATE/DELETE/defaults evaluation), and with
+  care around parallel table-function execution. Recorded as the concrete prototype path if
+  revisit-criterion 1 ever fires; it upgrades the escape hatch from "own transaction only" to
+  "caller-transaction appends are possible".
+- Foreign-storage extensions (sqlite/postgres/mysql scanners) participate in transactions via a
+  custom `Catalog` + `TransactionManager` following DuckDB's meta-transaction — a different, much
+  heavier extension point, disproportionate for native `mem.*` tables.
 
 ## Options and trade-offs
 
