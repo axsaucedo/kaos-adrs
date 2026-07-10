@@ -14,8 +14,10 @@ natural follow-up: if the extension were C++ (full internal API, flockmtl-style)
 extract, embed, store — inside the engine? Per the owner's directive, an empirical spike was run
 before recording a decision.
 
-**Spike setup** (evidence in `agentmemory/tmp/cpp-spike/`, `FINDINGS.md` + `test-results.log`;
-nothing committed or pushed): `duckdb/extension-template` pinned exactly to DuckDB v1.5.4
+**Spike setup** (durable record in
+[DUCK-R3](../research/DUCK-R3-nested-sql-execution-in-extensions.md) §2; raw artifacts in
+gitignored `agentmemory/tmp/cpp-spike/`, `FINDINGS.md` + `test-results.log`; nothing committed
+or pushed): `duckdb/extension-template` pinned exactly to DuckDB v1.5.4
 (`08e34c447b`), macOS arm64, a minimal table function registered three ways —
 `memory_add_spike` (new `Connection(*context.db)`, SQL at bind), `memory_add_spike_execute`
 (same route, SQL at execution), `memory_add_spike_context` (recursive `context.Query(...)`).
@@ -51,9 +53,11 @@ uncommitted caller DML expecting shared visibility or rollback."
 
 ## Ecosystem evidence (amendment)
 
-A follow-up survey of open-source extension codebases (evidence with file:line citations in
-`agentmemory/tmp/nested-sql-research/FINDINGS.md`; repos pinned by revision) confirmed and extended
-the spike:
+A follow-up survey of open-source extension codebases confirmed and extended the spike. The
+durable record — pinned repo revisions, per-repo mechanisms with file:line citations, and the
+maintainer evidence — is
+[DUCK-R3](../research/DUCK-R3-nested-sql-execution-in-extensions.md); raw working artifacts in
+`agentmemory/tmp/nested-sql-research/` (gitignored). Key points:
 
 - **The separate-connection route is the community-standard pattern.** flockmtl (load, parser-time,
   and model-lookup SQL), DuckPGQ (execute-callback SELECT/DELETE/INSERT for property graphs), and
