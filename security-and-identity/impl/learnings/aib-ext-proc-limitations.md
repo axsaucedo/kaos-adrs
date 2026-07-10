@@ -3,6 +3,33 @@
 **Date**: 2026-07-08
 **Context**: Live walkthrough of the `aib-keycloak` posture on a running KIND cluster (`kaos-walkthrough` namespace, AIB broker + ExtProc in `aib-system`, Keycloak realm `kaos`) while trying to demonstrate a request being allowed vs rejected end to end. These are the boundaries we hit, verified against the running deployment and the merged `#222` code in worktree `../aib-222-verify` (`internal/extproc/server/server.go`, `internal/extproc/authorization/`, `internal/ports/config.go`).
 
+## Background and work to date — context for a fresh session
+
+This section orients a session picking this up from scratch. The rest of the document is the detailed evidence.
+
+**The question we were answering.** Can the KAOS `aib-keycloak` security posture actually *enforce authorization* for internal traffic (agent→MCP, agent→agent, agent→ModelAPI) using AIB's ExtProc, or only authenticate identity? The investigation was diagnostic/Q&A driven by manually walking `docs/security/walkthrough-aib.md` on a live KIND cluster and repeatedly hitting "nothing works" moments. **Answer reached: authentication only today; internal authorization needs a different mechanism (KAOS-run OPA behind the ext_authz seam). See the Verdict section.**
+
+**The stack under investigation.** A running KIND cluster (do NOT destroy it) with: the AIB broker + ExtProc in `aib-system`, Keycloak realm `kaos`, and a walkthrough workload in `kaos-walkthrough`. Enforcement is at the Envoy Gateway `jwt_authn` layer plus the AIB ExtProc token-exchange filter. The `aib-keycloak` posture runs the broker in `mode=hybrid` with Keycloak as the upstream IdP. AIB source under test is worktree `../aib-222-verify` (merged `#222`, OPA-in-ExtProc).
+
+**KAOS security postures (CLI presets).** The CLI was simplified to a small set of auth presets; `aib-keycloak` is the full posture (gateway JWT + AIB ExtProc + Keycloak). This work lives on branch `feat/gatewayapi-strict-and-cli-simplification`, PR `#267` (`axsaucedo/agentic-kubernetes-operator`).
+
+**What is fully working / demonstrated.** Gateway identity authentication: a request is admitted or rejected purely on token presence/validity (401 with specific reasons; valid Keycloak user token admitted). The live allow/deny demonstration is captured as "Step 6" in the walkthrough. Agent identity verification (actor token `sub` = logical identity) is covered in the sibling learning `actor-token-sub-logical-identity-verification.md`.
+
+**What is NOT working / the ceiling.** Fine-grained authorization for internal resources. Root causes, all evidenced below: AIB OPA is off by default *and* not exposed by the broker chart; the RFC 8693 token exchange is mandatory and coupled to the request path (Rego cannot skip it); the exchange `500`s on internal resources (no service/consent/vault) and has no echo/same-token mode; a vaulted token cannot be seeded out of band; and storing a token "for the MCP server" would replace the identity header and ruin the flow.
+
+**Where the follow-ups live** (`../plan/followups.md`): **F0** = AIB chart gaps (client-credentials endpoint + arbitrary env passthrough; extended here with the `public_url`/`iss` note and the OPA-env/policy-volume gap). **F3** = autonomous-mode / G1 gap (no subject bearer → OPA bypassed). **F8/P17** = live enforcement validation + broker OPA-authz enablement. **F9** = consent-based delegated access (AIB's defining capability; the only path to a user-delegated 200, external targets). **F2** = fold the vendored AIB token client into the KAOS Python SDK. The upstream-contribution track (was P14) is cancelled.
+
+**Where the architecture decision lives** (`../adrs/adr_0001_enforcement-topology-and-policy-engine.md`): ADR 0001 originally chose AIB ext_proc-OPA as the single enforcement point and reserved ext_authz as an "optional, default-off generic seam". **This investigation invalidates the assumption that ext_proc-OPA can serve internal (Model 1) authorization** — the exchange coupling 500s internal calls before OPA. The reserved KAOS-run OPA seam should therefore become PRIMARY for internal authz (AIB = identity, KAOS-OPA = authorization; complementary). ADR 0001 is a candidate for amendment but has NOT yet been edited — this is the main open design task for the next session.
+
+**Sibling learnings worth reading first** (same directory): `opa-extproc-authz-model-parity-and-oauth-path.md` (the #222 OPA capability + Model 1/Model 2 grant sources), `actor-token-sub-logical-identity-verification.md`, and the `manual-e2e-*.md` validation notes.
+
+**Immediate next steps for a fresh session.**
+1. Decide and (if agreed) amend ADR 0001: internal authorization via a KAOS-run OPA ext_authz seam; scope AIB ext_proc-OPA to external delegated access. Reflect in `followups.md` and this learning.
+2. Optionally run the empirical *deny* demonstration (patch `EXTPROC_AUTHORIZATION_ENABLED=true` + a mounted rego on the live ExtProc, GET path) — but note it cannot prove an internal *allow* (see the OPA section).
+3. Push the kaos-ai-docs commits if that repo is meant to be pushed (they are currently local only). Refresh `REPORT.md` and re-post to PR #267 (`gh pr comment 267 --body-file REPORT.md`, `axsaucedo` account).
+
+**Environment quirks to save time.** In-cluster curl pod (`kubectl run --rm -i --image=curlimages/curl`) reaches the gateway LB IP `172.18.0.200`; the macOS host cannot (NetworkPolicy blocks direct-to-pod, so direct curl hangs). Base64url-decode a JWT payload with `cut -d. -f2 | base64 -d`. `gh` account switch is needed per repo: `axsaucedo` for the KAOS repo/PR; `alejandro-saucedo_zse` to resolve AIB `zalando-infosec/agentic-identity-broker` PRs. Cannot use `pkill`/`killall` (only `kill <PID>`); cannot `kubectl exec` into the distroless operator. Commit with `git -c commit.gpgsign=false` and the local identity — never override the git author email.
+
 ## What actually enforces today, and what does not
 
 The gateway `jwt_authn` layer (the `SecurityPolicy` with a `user` Keycloak provider and an `agent` broker provider) is the live, demonstrable enforcement point. Requests are accepted or rejected there **on identity presence and validity only**:
