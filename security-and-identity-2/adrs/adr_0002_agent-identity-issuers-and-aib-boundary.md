@@ -39,3 +39,82 @@ These are not competing globally — they are competing *per posture*, and the r
 - **Keycloak DCR needs bootstrap configuration**: an initial access token or trusted-service-account setup for client registration, provisioned by the KAOS chart in Keycloak-backed presets. This is standard Keycloak administration but is new chart surface.
 - **JWKS freshness becomes a projection concern for all issuers** (accepted in ADR 0001): key rotation at the issuer must reach `data.kaos.jwks` within the delivery bound (~90s ConfigMap propagation). Issuers rotate keys with overlap windows far exceeding this; documented, not mitigated.
 - **What is deleted from phase 1**: mandatory AIB in any preset, permission-set binding on the default path, and the notion of the IdP as a policy store.
+
+## Appendix — chart surface per configuration variation
+
+The existing `security.agentAuth` / `security.userAuth` blocks evolve rather than being replaced. Structural deltas from the phase-1 chart: a new `security.pdp` block (the chart deploys the PDP itself, so `extAuthzUrl` gains a default of the chart's own PDP Service and becomes an override for swapping backends per ADR 0001's contract); a new `agentAuth.identity.provider` selector implementing this ADR's issuer abstraction, with issuer-specific settings nested under it so exactly one issuer block is active; `extProcUrl` moves from top-level enforcement config into the ADR 0004 `tokenExchange` gate; and **`authorization.provider` is deleted** — its `aib` value is gone as an enforcement mode and `none` collapses into `pdp.enabled: false`, leaving a knob with one setting (`kaos`), which should not be a knob. `policyDataSource` (automated/manual) and `policyRegoOverride` survive as genuine modes of the one remaining compilation pipeline. `pdp.failOpen` deliberately does not exist as a key: fail-closed is hardcoded, since a misconfigured fail-open silently voids all authorization — strictly worse than any quarantined demo flag.
+
+Common to every variation (ADR 0001 core — PDP always on, fail-closed):
+
+```yaml
+security:
+  pdp:
+    enabled: true               # the authorization switch: deploys stock OPA (2 replicas + PDB)
+                                # and the ext_authz SecurityPolicy; extAuthzUrl defaults to
+                                # kaos-pdp.<release-ns>.svc:9191, set only to swap backends
+  agentAuth:
+    authorization:
+      policyDataSource: automated   # manual / policyRegoOverride carry over unchanged
+    projection:
+      policyConfigMap: {name: kaos-authz, namespace: kaos-system}   # mounted by the PDP
+```
+
+`kaos-internal` — ServiceAccount issuer, zero external systems (OPA image pull aside, the cluster itself is the only dependency — the API server is the token issuer):
+
+```yaml
+security:
+  agentAuth:
+    identity:
+      provider: serviceaccount  # projected SA tokens, audience kaos-gateway; no IdP projection exists
+  userAuth: {}                  # no user plane; AccessGrants → Enforced=False
+```
+
+Keycloak users + DCR agent clients — one external system serving both planes:
+
+```yaml
+security:
+  agentAuth:
+    identity:
+      provider: oidc            # generic RFC 7591/7592 OIDCProjector
+      oidc:
+        issuer: http://keycloak.kaos-system.svc:8080/realms/kaos
+        registration:
+          initialAccessTokenSecretRef: {name: kaos-dcr-bootstrap, key: token}
+    credentialSecretPrefix: kaos-agent
+  userAuth:
+    issuer: http://keycloak.kaos-system.svc:8080/realms/kaos
+    audience: kaos
+```
+
+Keycloak users + AIB agent issuer (exchange off — the proven phase-1 authn subset; external systems: Keycloak + AIB):
+
+```yaml
+security:
+  agentAuth:
+    identity:
+      provider: aib
+      aib:
+        issuer: http://aib-enduser.aib-system.svc:8000    # single value feeds broker public_url AND all verifiers (F0 by construction)
+        adminUrl: http://aib-broker.aib-system.svc:8000/api
+    credentialSecretPrefix: kaos-aib
+  userAuth:
+    issuer: http://keycloak.kaos-system.svc:8080/realms/kaos
+    audience: kaos
+```
+
+The above + ADR 0004 token exchange — the only configuration where ext_proc and permission sets return (adds the third-party IdPs the feature exists to reach):
+
+```yaml
+security:
+  agentAuth:
+    identity:
+      provider: aib
+      aib: {issuer: ..., adminUrl: ...}
+    tokenExchange:              # the ADR 0004 feature gate
+      enabled: true
+      extProcUrl: aib-ext-proc.aib-system.svc:50051   # applied ONLY to third-party egress routes
+      bindPermissionSets: true                        # exchange-scoped, never in the PDP path
+  userAuth: {issuer: ..., audience: kaos}
+```
+
+Quarantined demo flags remain explicit and are never implied by a preset (e.g. `agentAuth.authorization.agentJwtVerification: skip`).
