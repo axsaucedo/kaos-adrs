@@ -69,6 +69,17 @@ Phase numbers continue the phase-1 sequence (P0–P17 shipped there); this stack
 
 **Demoable**: all three preset configurations green on one validation matrix; grep for old-architecture terms returns nothing.
 
+## Execution conventions (apply to every phase plan in this stack)
+
+Each phase's detailed plan and its implementation run follow these rules:
+
+- **Plan before code.** Before starting a phase, put together a comprehensive task plan plus a design note on how the change fits the existing codebase (which files/controllers/charts are touched, what is deleted, how the new pieces slot into current seams). The phase's TODOs are enumerated by number.
+- **Tasks are executed one by one, in order, none skipped.** A task is done only when its tests are validated and passing; each completed task is committed individually.
+- **Commit style: "comprehensive commit"** — succinct, functional descriptions carrying the context of the work. Commit messages, branch names, and PR descriptions never reference task or phase numbers/identifiers — they describe only *what is being added or changed*.
+- **All tests pass** before a task is committed and before the phase's PR is opened.
+- **Temporary files live in `./tmp`** (gitignored), never `/tmp` — including any test scripts needing validation. Output suppression uses `./tmp/null` (e.g. `cat > ./tmp/null`) instead of `/dev/null`. This avoids host approval prompts for access outside the repo.
+- **REPORT.md at the end of each phase**: when all tasks are finalised, create/overwrite a gitignored `REPORT.md` with a thorough overview of every task requested — the phase's own plus any carried-over prior ones — and each one's completion status. It is **never committed**; its contents are posted as a comment on the phase's GitHub PR as the documentation of record.
+
 ## Dependency structure
 
 Strictly linear: P18 → P19 → P20 → P21 → P22. Each is independently mergeable and leaves main in a working, demoable state. If pressure demands parallelism, P19 and P20 touch mostly disjoint code (issuer/runtime vs rego/CRD) and could stack, but the default is sequential.
