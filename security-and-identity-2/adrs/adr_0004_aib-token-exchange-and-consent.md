@@ -1,0 +1,71 @@
+# ADR 0004 — AIB token exchange and the consent flow (F9)
+
+**Status**: Proposed
+**Date**: 2026-07-11
+**Depends on**: [ADR 0001](./adr_0001_enforcement-topology-pdp-and-policy-delivery.md) (filter composition rules), [ADR 0002](./adr_0002_agent-identity-issuers-and-aib-boundary.md) (the AIB adapter and re-entry criteria)
+**Research**: [001](../research/001-why-aib-cannot-authorize-internal-traffic.md), [002](../research/002-aib-agent-authn-surface.md), [005](../research/005-control-plane-pdp-and-relationship-model.md)
+
+## Context
+
+Everything in ADRs 0001–0003 works with agents acting **as themselves** against internal resources. What none of it provides: an agent calling an *external* OAuth-protected API (GitHub, Google Drive, Slack) **as the requesting user** — delegated third-party access. Note this is distinct from ADR 0003's subject propagation: the user's Keycloak token reaches every internal hop, but it is worthless at api.github.com — GitHub does not trust Keycloak. Per-user third-party access requires the user's *GitHub* credential, which requires consent, a token vault, and RFC 8693 exchange.
+
+This capability was deferred throughout phase 1 and phase 2 as "F9". This ADR exists to turn that deferral into an explicit decision: design the integration end to end, price its complexity honestly, and decide adopt / defer-with-triggers / reject.
+
+**Anchor use case**: an agent operating on GitHub (open PRs, read private repos) with the requesting user's own GitHub identity and permissions — per-user access control and audit on GitHub's side, instead of a shared bot credential.
+
+## The design
+
+### The flow (fail → approve → retry)
+
+The consent UX decision was already made in the first iteration and is inherited here: **consent is an expected failure with a URL, followed by a retry** — no asynchronous approval machinery.
+
+1. Agent calls the GitHub MCP; the ext_proc exchange filter on that egress route attempts the exchange and fails — no consent and/or no vault session for this (user, agent, service).
+2. The failure returns to the caller carrying an authorization URL.
+3. The user visits the URL and completes a real OAuth authorization-code flow against the third party — the only write path into AIB's vault ([research/001](../research/001-why-aib-cannot-authorize-internal-traffic.md)). AIB stores the access + refresh tokens as a vault session and records the consent (`UserGrant` for the user + agent + service triple).
+4. The caller retries; the exchange now finds consent and a live session, swaps the subject token for the vaulted third-party token, and the request proceeds with the user's GitHub identity.
+5. Subsequent requests need no re-consent: the vault holds the refresh token and renews access tokens transparently. When the refresh token dies or the user revokes (on either side), the *same* failure-plus-URL surfaces — expiry and first-contact are one failure mode, one recovery path.
+
+The **KAOS UI workflow** wrapping this loop (surfacing the URL, guiding the retry, managing standing connections) is **deferred** — the raw flow is the contract; API callers handle the failure manually until the UI lands. One implementation detail to pin in the spike: how the authorization URL travels from ext_proc's deny back through Envoy to the caller (header vs body).
+
+### Filter composition (from ADR 0001)
+
+AIB's ext_proc returns as an **additional** filter, scoped strictly to third-party egress routes via operator-generated `EnvoyExtensionPolicy`, ordered after `jwt_authn` and the ext_authz PDP. Hard rules: it never attaches to internal routes; its `Authorization` rewrite (vaulted third-party token) must be provably unable to leak onto internal paths; and its absence or failure never weakens internal authorization — the PDP path has no dependency on it.
+
+### Projection scope
+
+The exchange requires a registered service matching the target, a permission set binding the agent to it, a UserGrant, and a vault session. The operator projects **only the first two, only for declared third-party egress targets** — a handful of services, not the phase-1 ambition of mirroring every internal resource into the broker. UserGrants and vault sessions are created exclusively by the user's approval flow and are never projected. This is the `tokenExchange.bindPermissionSets` gate in ADR 0002's chart appendix; permission sets remain exchange-scoped and never touch the PDP path.
+
+### Why AIB and not Keycloak (assessed 2026-07)
+
+Keycloak's supported RFC 8693 exchange (since 26.2) is **internal-to-internal only** — swapping one Keycloak token for another Keycloak token. Its third-party stories are identity-brokering "stored tokens" (requires the user to log in *via* the third party, scopes fixed at IdP configuration) and the legacy external exchange, which is preview and slated for deprecation in favor of RFC 7523 identity chaining (itself preview as of 26.5). Neither has a per-(user, agent, service) consent concept, and neither ships a gateway filter. AIB models exactly our triple (UserGrant per user+agent+service, per-service vault sessions with service-specific scopes, the ext_proc filter). Conclusion: **for delegated third-party access, AIB is the implementation; Keycloak is not a substitute today.** Keycloak identity-chaining maturity is a named re-check trigger. (Sources: [Keycloak 26.2 standard token exchange](https://www.keycloak.org/2025/05/standard-token-exchange-kc-26-2), [token exchange docs](https://www.keycloak.org/securing-apps/token-exchange), [26.5 JWT authorization grant](https://www.keycloak.org/2026/01/jwt-authorization-grant).)
+
+### Simpler alternatives (and why they don't replace this)
+
+1. **Static per-MCP credentials** (PAT/bot token in a Secret) — today's answer; zero new components; one shared identity, no per-user permissions or audit. **Remains the documented default**; the exchange feature is only for use cases that genuinely need the user's own identity downstream.
+2. **GitHub App installation tokens** — better scoping, still a bot identity, provider-specific.
+3. **Per-MCP self-managed OAuth** — relocates the vault into every MCP server, N times, with no shared consent model. Worse, not simpler.
+
+There is no lighter architecture for per-user third-party identity; the honest simplification is staying on option 1 until a use case forces the move.
+
+## Complexity assessment
+
+- **AIB is operated as a third-party dependency** — deployed from its upstream chart and pointed at, like Keycloak; KAOS owns no broker code, images, or CVEs. Operationally this is moderate-to-low (a chart plus its vault database — the one new stateful component). The real cost is **dependency maturity**: unlike Keycloak, AIB is young with no community backstop, so gaps (F0 chart env/`public_url` injection) resolve on upstream's timeline or via KAOS-side workarounds.
+- **The main engineering overhead is composition correctness**, not runtime cost: `EnvoyExtensionPolicy` generation on exactly the egress routes, airtight header ownership, and the deny-payload round-trip. Runtime impact is one exchange/vault hop on third-party egress routes only; internal traffic is untouched.
+- **What the fail-and-retry UX decision avoids**: CIBA-style async approval, notification infrastructure, suspended-task state, and KAOS-built consent screens — where "high" complexity would have lived.
+
+## Decision
+
+**Adopt as a gated optional feature — not defer, not reject** — with the following conditions:
+
+1. **Gated**: everything ships behind `tokenExchange.enabled` (ADR 0002 chart appendix); the default posture is static per-MCP credentials, and no preset enables exchange implicitly.
+2. **Sequenced last**: implementation begins only after the ADR 0001–0003 enforcement path is shipped and validated. Nothing in that path depends on this feature.
+3. **Spike prerequisite (go/no-go gate)**: before implementation, a timeboxed spike in KIND — AIB from its upstream chart, a mock third-party OAuth provider and dummy API in-cluster — walks the full chain end to end: service registration → permission-set binding → ext_proc deny with authorization URL → authorization-code flow against the mock → vault session → successful retry with the exchanged token → session kill → same deny resurfaces. Exit criteria: every step observed, F0 gaps enumerated with workarounds, deny-payload plumbing confirmed. This is the direct lesson of phase 1, where the structural gap was discovered only in live integration; the spike's findings are recorded against this ADR and can still flip it to defer.
+4. **UI deferred**: the raw fail/approve/retry flow is the contract; the KAOS UI workflow is a later UX layer that changes nothing underneath.
+5. **Re-check trigger**: if Keycloak's identity-chaining (RFC 7523) path reaches supported status with a comparable consent model, re-evaluate the AIB dependency before further investment.
+
+## Consequences
+
+- KAOS gains a credible path to per-user third-party delegation — the capability that closes ADR 0003's deferred "per-user downstream access" item properly (scoped third-party tokens rather than header forwarding).
+- The AIB relationship is now fully specified across ADRs: optional issuer adapter (0002) + optional exchange filter (this ADR), never enforcement (0001), permission sets never in the PDP path.
+- A new stateful dependency (vault) and its failure modes enter the system — but only in deployments that enable the feature, and every failure mode surfaces through the single fail-with-URL path.
+- The F0 upstream gaps become a prerequisite conversation with AIB upstream at implementation time, with the KIND spike quantifying the workaround cost if upstream does not move.
