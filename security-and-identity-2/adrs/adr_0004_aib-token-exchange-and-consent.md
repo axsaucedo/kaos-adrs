@@ -5,6 +5,26 @@
 **Depends on**: [ADR 0001](./adr_0001_enforcement-topology-pdp-and-policy-delivery.md) (filter composition rules), [ADR 0002](./adr_0002_agent-identity-issuers-and-aib-boundary.md) (the AIB adapter and re-entry criteria)
 **Research**: [001](../research/001-why-aib-cannot-authorize-internal-traffic.md), [002](../research/002-aib-agent-authn-surface.md), [005](../research/005-control-plane-pdp-and-relationship-model.md)
 
+## Amendment (2026-07-12) — AIB is exchange-only; identity is never AIB
+
+This ADR was written before P18/P19 shipped and before a live end-to-end validation. Two findings ([manual e2e "Flow E"](../impl/learnings/manual-e2e-phase2-validation.md); [independent code assessment](#) of the `aib-222-verify` broker) require correcting its central premise. The sections below are retained for history; where they conflict with this amendment, this amendment governs. The detailed exchange contract remains **deferred until an in-cluster spike proves the binding described here** (go/no-go).
+
+**Corrections (proven from the broker code / live cluster):**
+
+1. **AIB is not an agent identity issuer.** P19's ServiceAccount and Keycloak-DCR issuers own agent identity completely. An "identity-only AIB" posture is **falsified**: the broker rejects agent registration without ≥1 permission set, and a permission set must reference a *real* third-party service and scope (`permission_set.go:18-49`). So AIB is used **only for token exchange**, and an agent is registered in AIB **iff** it declares a real third-party service (always a real permission set — never a dummy).
+
+2. **The exchange uses two independent tokens, not the agent's actor token.** RFC 8693 to AIB carries `subject_token` (the user's Keycloak token) plus a separate `client_assertion` (an OAuth `client_credentials` JWT for the caller). The exchange does **not** authenticate the caller from `x-agent-authorization`. So an exchange-enabled agent holds a *distinct* AIB exchange credential in addition to its Keycloak/SA identity — these serve different purposes.
+
+3. **Keycloak subject-token trust is supported but constrained.** AIB validates a subject token against the configured upstream issuer + a required exchange audience (default `token-exchange-broker`) — so Keycloak *can* be the subject issuer, provided the token is minted with the exact issuer and audience.
+
+4. **The central open risk (the spike's go/no-go): AIB derives the acting agent from the *subject* token's `azp` (or a configured claim).** A KAOS-propagated Keycloak user token carries `azp` = the user-facing client, **not** the acting agent — so it can pass validation yet resolve the wrong agent or none. Making option (b) real requires one of: mint an agent-specific subject token per hop (`azp` = agent), a trusted custom claim carrying the AIB agent id, or an upstream AIB change binding the agent to the client assertion. AIB's default caller CEL is literally `true` — insufficient for multi-agent; a real caller↔agent binding is required.
+
+5. **SA-primary agents cannot present their K8s token as the exchange assertion** (assertion trust is tied to the configured upstream issuer); they need a secondary Keycloak/upstream exchange credential.
+
+6. **Keycloak-native exchange is green-field, not a drop-in.** Our deployed Keycloak is **26.0**; standard token exchange arrived in 26.2 and external-IdP exchange remains preview/legacy. Keycloak 26.6/26.7 add JWT-grant + Identity-Brokering-V2 as supported primitives, but none supplies AIB's per-(user, agent, service) consent triple or a gateway filter. It is a separate build to compare by prototype, not configuration.
+
+**Decision unchanged in direction, sharpened:** adopt **AIB exchange-only** (option b), keep static per-MCP credentials as the default, and gate everything behind an in-cluster spike whose go/no-go is precisely the subject-token→agent binding (§4). ext_proc tenancy (per-agent / per-service / shared), the exchange-credential owner, and the SA-primary story are **decided after the spike**, from evidence. A negative spike result is a valid outcome — fall back to static credentials and redesign the exchange contract; do **not** reintroduce AIB as an identity issuer or manufacture dummy permission sets.
+
 ## Context
 
 Everything in ADRs 0001–0003 works with agents acting **as themselves** against internal resources. What none of it provides: an agent calling an *external* OAuth-protected API (GitHub, Google Drive, Slack) **as the requesting user** — delegated third-party access. Note this is distinct from ADR 0003's subject propagation: the user's Keycloak token reaches every internal hop, but it is worthless at api.github.com — GitHub does not trust Keycloak. Per-user third-party access requires the user's *GitHub* credential, which requires consent, a token vault, and RFC 8693 exchange.

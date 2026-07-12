@@ -5,6 +5,14 @@
 **Depends on**: [ADR 0001](./adr_0001_enforcement-topology-pdp-and-policy-delivery.md) (the PDP consumes issuer JWKS and identity mappings via `data.kaos.*`)
 **Research**: [002](../research/002-aib-agent-authn-surface.md), [005](../research/005-control-plane-pdp-and-relationship-model.md)
 
+## Amendment (2026-07-12) — AIB is removed as an agent identity issuer
+
+A live end-to-end validation ([manual e2e "Flow E"](../impl/learnings/manual-e2e-phase2-validation.md)) and an [independent assessment of the broker code](../adrs/adr_0004_aib-token-exchange-and-consent.md) falsify this ADR's "AIB as an optional identity issuer" framing. The original text below is retained for history; where it conflicts, this amendment governs.
+
+- **The three agent identity issuers are `serviceaccount` and `oidc` (Keycloak DCR) only. AIB is not an identity issuer.** The "identity-only AIB adapter" (Option 3; Decision 5's "AIB remains selectable as the agent issuer"; the "Keycloak + AIB agent issuer (exchange off)" chart posture) does not exist: the broker rejects agent registration without ≥1 permission set, and a permission set must reference a real third-party service + scope — so registering an agent purely for identity is impossible and meaningless.
+- **AIB's only role is token exchange**, specified (and gated on a spike) in [ADR 0004](./adr_0004_aib-token-exchange-and-consent.md). An agent is registered in AIB **iff** it declares a real third-party service. Exchange is an **orthogonal optional capability**, not an `identity.provider` value and not "required when exchange is enabled" — enabling exchange does not make AIB the issuer of any agent's internal actor token (that stays SA or Keycloak-DCR).
+- **Consequences for this ADR:** the `identity.provider: serviceaccount | oidc | aib` selector drops `aib`; the AIB adapter is not a retained standalone authn adapter; the chart's AIB-issuer posture is removed. The F0 single-issuer mechanism and the multi-issuer JWKS story still apply to `serviceaccount`/`oidc`.
+
 ## Context
 
 With ADR 0001 placing the authorization decision in a KAOS-owned PDP, the identity provider's role shrinks to what IdPs actually do: issue verifiable credentials and tokens. This ADR decides who issues agent (actor) credentials, how workloads obtain and present them, how the gateway and PDP verify them, and — since AIB is no longer an enforcement component — the explicit contract of what KAOS still uses AIB for.
