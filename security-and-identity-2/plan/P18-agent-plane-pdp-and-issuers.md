@@ -29,3 +29,13 @@
 10. **Validation**: full unit suites (operator, kaos-cli, pais), chart render matrix, KIND e2e with the reworked presets reproducing the phase-1 allow/deny matrix (granted allowed / ungranted denied / no-token denied / PDP-down 403). Never delete an existing KIND cluster.
 11. **Docs in lockstep**: rewrite `docs/security/*` to describe only the new topology (PDP, issuers, presets); no references to ext_proc enforcement or the old knobs anywhere in the repo.
 12. **REPORT.md** (gitignored, never committed): thorough task-by-task status; contents posted as the PR comment.
+
+## Outcome — PR #270 (delivered)
+
+Implemented across 12 removal-before-addition commits, then a review round. A fresh high-effort Codex review (independent session) plus maintainer inline comments surfaced findings; each was verified in code by the orchestrator (not taken on the reviewer's or implementer's word). Orchestrator-caught beyond the reviewer: a fail-open on missing JWKS (proven with an adversarial forged-token probe), the MemoryStore slug-consistency chain, and a `# ty: ignore` comment-mangling that only surfaced in CI's full-project type check.
+
+**Review fixes (each verified):** header-spoof resource-identity bypass closed (path is now authoritative, spoofable header dropped from ext_authz); actor-token `alg`/`aud` pinned for all issuers with the additive-rule bypass collapsed; fail-closed on missing JWKS (unverified fallback removed); MemoryStore grants projected; chart default issuer → `serviceaccount`; rego package `aib.extproc.authz` → `kaos.authz`; `ConfigMapProjector` → `AuthzPolicyProjector`; issuer-consistency check folded into the AIB identity projector; `agentJwtVerification=skip` deleted; dead `EnvoyExtensionPolicy` RBAC removed; AIB credential e2e fixed; `pydantic-ai-server/aib` → `kaos_identity`; walkthroughs restructured by identity plane.
+
+**Carried forward (documented, not blocking):** AIB tokens must carry the `kaos-gateway` audience under the new aud pinning; RS256-only allowlist (extend for ES256 clusters); SA JWKS frozen at operator startup (periodic refresh is a follow-up); two vestigial `x-aib-*` propagation headers to rename `x-kaos-*`.
+
+**Process lessons folded into the delegate workflow:** run a fresh-session Codex reviewer at high effort (never the implementing session); the orchestrator is the final judge of every Codex conclusion; local green ≠ CI green when CI runs extra gates (full-project `ty`, real OPA `opa test`) — install/run those gates locally before pushing.
