@@ -7,7 +7,7 @@
 
 ## Amendment (2026-07-12) — AIB is exchange-only; identity is never AIB
 
-This ADR was written before P18/P19 shipped and before a live end-to-end validation. Two findings ([manual e2e "Flow E"](../impl/learnings/manual-e2e-phase2-validation.md); [independent code assessment](#) of the `aib-222-verify` broker) require correcting its central premise. The sections below are retained for history; where they conflict with this amendment, this amendment governs. The detailed exchange contract remains **deferred until an in-cluster spike proves the binding described here** (go/no-go).
+This ADR was written before P18/P19 shipped and before a live end-to-end validation. Findings from [manual e2e "Flow E"](../impl/learnings/manual-e2e-phase2-validation.md), an [independent code assessment](../impl/learnings/aib-exchange-boundary-assessment.md), and a **live in-cluster spike (2026-07-12) that PASSED** ([SPIKE-RESULT](#the-design-spike-validated-2026-07-12)) require correcting its central premise. The original sections below are retained for history; where they conflict, this amendment and the **spike-validated design** section govern.
 
 **Corrections (proven from the broker code / live cluster):**
 
@@ -23,7 +23,52 @@ This ADR was written before P18/P19 shipped and before a live end-to-end validat
 
 6. **Keycloak-native exchange is green-field, not a drop-in.** Our deployed Keycloak is **26.0**; standard token exchange arrived in 26.2 and external-IdP exchange remains preview/legacy. Keycloak 26.6/26.7 add JWT-grant + Identity-Brokering-V2 as supported primitives, but none supplies AIB's per-(user, agent, service) consent triple or a gateway filter. It is a separate build to compare by prototype, not configuration.
 
-**Decision unchanged in direction, sharpened:** adopt **AIB exchange-only** (option b), keep static per-MCP credentials as the default, and gate everything behind an in-cluster spike whose go/no-go is precisely the subject-token→agent binding (§4). ext_proc tenancy (per-agent / per-service / shared), the exchange-credential owner, and the SA-primary story are **decided after the spike**, from evidence. A negative spike result is a valid outcome — fall back to static credentials and redesign the exchange contract; do **not** reintroduce AIB as an identity issuer or manufacture dummy permission sets.
+**Decision:** adopt **AIB exchange-only** (option b), keep static per-MCP credentials as the default, gate the feature, and require a concrete third-party use case before implementation. The spike passed; the settled design follows.
+
+## The design (spike-validated, 2026-07-12)
+
+The live in-cluster spike (fresh KIND cluster, real Keycloak + AIB + a mock third-party OAuth provider and API) proved the exchange works and pinned every mechanic. Verdict: **yes, with a re-mint requirement.** Evidence: correct exchange → third-party token → mock API accepts (200); all deny paths deny (absent-agent, no-consent, no-vault, wrong-audience, caller-binding-mismatch); revocation (delete vault session) re-denies.
+
+### The two-exchange chain
+
+Delegated third-party access is a *three-party* statement — "user Alice, via agent Researcher, may act on GitHub" — but a propagated Keycloak user token only encodes two (Alice + the login client, `azp = login-client`). AIB identifies the acting agent from `subject_token.azp`, so the propagated token resolves the wrong agent. The design therefore chains two standard exchanges:
+
+```
+① Alice's login token (sub=alice, azp=login-client)
+      ── Keycloak internal token-exchange, authenticated AS the agent's own client ──►
+② Re-minted token (sub=alice, azp=agent-researcher, aud=token-exchange-broker)
+      ── AIB RFC 8693 exchange (② + the agent's client-assertion) ──►
+③ GitHub access token (Alice's real credential, from AIB's vault)
+      ──► agent calls api.github.com as Alice
+```
+
+Both ① and ② are calls to **standard endpoints** — Keycloak's token endpoint and AIB's exchange endpoint. No custom endpoint, no rego (this is token *acquisition*, not an authorization decision; the PDP is not in this path).
+
+### Spike-proven mechanics (do not re-derive)
+
+- AIB resolves the agent via `agent_id_expression: resolveAgentIdByClientId(subject_token.azp)`.
+- Caller↔agent binding via CEL `client_assertion.azp == subject_token.azp` (AIB's default caller CEL is `true` — insufficient; this binding is required).
+- Required audience `token-exchange-broker`; subject token issuer = Keycloak (trusted as the configured upstream).
+- Consent (`UserGrant`) + a vault session are created **only** by a completed interactive OAuth authorization-code flow against the third party (the only vault write path); revocation = delete the vault session.
+
+### Component boundaries — thin seam (AIB self-managed like Keycloak)
+
+- **AIB (broker + ext_proc + vault) = its own self-managed Helm release**, exactly like Keycloak. The KAOS operator deploys **none** of it. (Upstream gap: AIB's chart must actually ship the ext_proc workload — the manual e2e found it does not; this is an AIB-chart fix, not a KAOS workaround.)
+- **Runtime (`kaos_identity`) does the re-mint (①)** — a standard Keycloak token-exchange call authenticated as the agent's own Keycloak DCR client. This lives in the runtime because the agent already holds those credentials; putting it at the gateway would require distributing per-agent Keycloak secrets to the gateway.
+- **Operator provides a thin integration seam, identical in kind to the Keycloak seam** (JWT-provider config + DCR projection): (a) generate an `EnvoyExtensionPolicy` attaching AIB's ext_proc to **only the declared third-party egress routes** (safe-by-construction per ADR 0001 — never internal routes; the token-swap can never leak onto internal paths); (b) project the third-party **service definitions + agent→service permission sets** into AIB (the exchange-scoped permission-set projection; always real, never dummy).
+
+### The declaration surface
+
+"Agent Researcher may reach third-party service GitHub" is a KAOS-side fact that drives both the ext_proc route attachment and the AIB service/permission-set projection. Proposed: a spec field on the Agent (or a small `ThirdPartyService` + binding CRD) declaring `{service, scopes}` per agent. This keeps the edge declarative/GitOps-reviewable (like AccessGrant), with membership/consent administered by the user's approval flow.
+
+### Consent UX (inherited)
+
+Fail → approve → retry, no async machinery: the ext_proc exchange fails with an authorization URL; the user completes the third-party OAuth flow (seeding the vault + consent); the retry succeeds. Expiry/revocation surface through the same fail-with-URL path. The KAOS UI wrapping is deferred.
+
+### Dependencies and constraints
+
+- Exchange requires the agent to have a **Keycloak client** for the re-mint — so an exchange-enabled agent uses the `oidc` identity issuer, or is provisioned a dedicated Keycloak exchange client. **ServiceAccount-primary agents cannot re-mint** (no Keycloak client) and need a secondary Keycloak exchange credential — documented, decided per deployment.
+- Feature-gated; static per-MCP credentials remain the default; **implementation requires a concrete third-party use case** (validated against a mock OAuth provider, as the spike did).
 
 ## Context
 
