@@ -55,7 +55,7 @@ An exchange-enabled agent, on a **third-party egress route only**, gets the requ
 
 ## Decisions made
 
-- Declaration surface: a namespaced `ThirdPartyService` CRD with provider metadata, a dedicated `routeRef`, and Agent/scope `access` bindings.
+- Declaration surface — **REVISED 2026-07-13** (see ADR 0004): the `ThirdPartyService` CRD (first implementation, validated live) is superseded by an **AIB-native** surface. The operator registers Agents into AIB by stable logical name (`kaos/<ns>/<name>`, keeping the DCR `client_id` current) and REFLECTS AIB's admin-configured services/permission sets into: generated egress `Backend`/`HTTPRoute` objects, ext_proc attachment on exactly those generated routes, and per-agent re-mint targets. One admin surface (AIB), no third-party YAML, no CRD. E2/E4 runtime work is unchanged by this rework.
 - ext_proc attachment: one operator-generated `EnvoyExtensionPolicy` per declared third-party route; internal routes are never selected implicitly.
 - Current identity restriction: exchange requires Keycloak user and Agent identity. ServiceAccount-primary exchange credentials remain deferred.
 - Validation: manual/opt-in rather than part of the core CI matrix; the completed rig used a mock provider and captured wire evidence.
