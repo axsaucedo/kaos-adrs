@@ -14,6 +14,7 @@ Working folder for the third KAOS blog post, covering the learnings from designi
 | `OUTLINE_PROPOSED.md` | The proposed outline for this post (approved before drafting) |
 | `BLOGPOST_DRAFT_1.md` | First full draft against the approved outline (mermaid diagrams in place of UI screenshots) |
 | `BLOGPOST_DRAFT_2.md` | Second draft: v2 citation set woven in (~16 verified sources) + content adoptions (honest accuracy framing, source-of-truth/projections rule, memory-poisoning threat grounding, supersession≠erasure, break-even heuristic) — current canonical draft |
+| `STYLE_REVISION_PLAN.md` | Style rules (neutral academic register, no em-dashes, no LLM-formulaic constructions, personable-touch budget) and the audited change outline for draft 3 |
 | `REFERENCES_PROPOSED.md` | Citation proposal (v2 consolidated) mapped to draft sections, plus superseded v1/external-report assessments |
 | `RESEARCH_SOURCES.md` | Verified source bank (~40 sources across foundations, benchmarks, security, tenancy/erasure/temporal, production systems) — reusable for later iterations and other posts |
 
