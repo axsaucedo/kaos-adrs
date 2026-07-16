@@ -16,7 +16,7 @@ I also share the learnings and best practices that came out of navigating throug
 
 As with my previous posts on [observability for agentic systems](https://hackernoon.com/production-observability-for-multi-agent-ai-with-kaos-otel-signoz) and [autonomous always-on agentic patterns](https://hackernoon.com/), I will use KAOS as the concrete implementation example, but the goal is to provide practical intuition for the primitives (tiers, scopes, folding, degradation), so that it applies whether you use KAOS, Mem0 directly, LangGraph, CrewAI, or a memory layer you wrote yourself.
 
-## The Useful Part of the Hype
+## A Working Taxonomy of Agent Memory
 
 "Memory" is one of the most overloaded words in agentic systems, so it is worth separating it from the concepts it gets conflated with, such as:
 
@@ -85,39 +85,27 @@ Another tempting alternative as the next step is "context windows are huge now, 
 
 However this is not a great approach, and there are some benchmarks like [UCLA's Bench on Long-Term Interactive Memory](https://arxiv.org/abs/2410.10813), which showed that models reasoning over full ~115K-token interaction histories lose 30-60% accuracy versus the same models given oracle retrieval. 
 
-None of the three naive versions survives contact with production:
+If we look at it from a feature / functionality standpoint, we can summarise the gaps between the base and the production implementation as follows:
 
-| Naive memory | Production memory |
-| --- | --- |
-| Last-N turns, unbounded token growth | Token-budgeted window with principled eviction |
-| Verbatim replay of everything | Distilled facts, separated from the transcript |
-| One user, one process | Many tenants, many agents, many replicas |
-| Memory lives inside the agent pod | Memory survives restarts and is shared across the fleet |
-| Writes block the response | Extraction runs off the hot path |
-| Nothing is ever forgotten | Decay, retention, and right-to-erasure |
-| Memory failure crashes the turn | Memory failure degrades the turn |
+| Naive memory                         | Production memory                                                      |
+| ------------------------------------ | ---------------------------------------------------------------------- |
+| Last-N turns, unbounded token growth | Token-budgeted window with principled eviction                         |
+| Verbatim replay of everything        | Distilled facts, separated from the transcript (eg long- / short-term) |
+| One user, one process                | Many tenants, many agents, many replicas                               |
+| Memory lives inside the agent pod    | Memory survives restarts and is shared across the fleet                |
+| Writes block the response            | Extraction runs off the hot path                                       |
+| Nothing is ever forgotten            | Decay, retention, and right-to-erasure                                 |
+| Memory failure crashes the turn      | Memory failure degrades the turn                                       |
 
-Which brings us to the thesis of this post:
+In this case we can position "production memory" a tiered, scoped, context-specific and dynamic store, as opposed to purely a vector database connected to an agent. 
 
-> Production memory is a tiered, scoped, degradable subsystem, and not simply a vector database bolted onto an agent. What makes it hard is deciding who sees each memory, when it folds, and how the agent behaves when memory fails, more than storing the memories themselves.
+Achieving this in a way that scales does get complex, as we need to decide who can see each memory tier, when we store facts, and how the agent behaves when memory fails. 
 
-## What Changes at Scale: The Fleet Questions
-
-A single hobby agent can get away with the naive version. The problem changes shape the moment you run many agents, for many users, across many sessions: the same inflection point I described for [autonomous agents](https://hackernoon.com/), where the loops that never stop are also the ones producing memory events 24/7.
-
-At that point, a set of questions becomes unavoidable:
-
-- **Whose memory is it?** The agent's? The user's? The team's? The whole fleet's?
-- **Who is allowed to recall it?** And critically, can a model-controlled tool call *choose* which scope it reads from?
-- **What happens to a serving agent when the memory backend dies?** Does the agent go down with it?
-- **Where does extraction run?** Distilling facts requires LLM calls. Do they run on the request path, while the user waits?
-- **How do you delete a user's memory everywhere, on demand?** Across every tier, every store, every replica?
-
-Notice that none of these are machine-learning questions. They are tenancy, topology, and failure-mode questions, the same "ordinary distributed-systems plumbing" that showed up when making agent loops autonomous.
+However now that we have the conceptual foundation in place, we can start looking at these functionalities relative to the frameworks available.
 
 ## Choosing an Engine: Build, Adopt, or Wrap
 
-Before designing anything, I surveyed the landscape properly: roughly 38 tools, from dedicated memory layers to vector substrates to framework-native memory. Most of them fell to three hard filters:
+Before designing anything, I surveyed the landscape thoroughly, assessing 38 tools ranging from dedicated memory layers to raw-vector layers (as well as framework-native memory). Most of them fell to three hard filters:
 
 1. **Self-hostable in a customer Kubernetes cluster.** This removes SaaS-only options (Mem0 Platform, Zep Cloud, Letta Cloud, OpenAI memory) as primary choices, though their OSS counterparts stay in scope.
 2. **A dedicated memory layer.** This excludes bare substrates, since pgvector, Qdrant, Chroma, and Neo4j are backend choices within a design and not the memory layer itself, and it excludes framework-native memory that can only be obtained by adopting a second agent runtime.
