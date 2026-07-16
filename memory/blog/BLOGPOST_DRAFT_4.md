@@ -105,13 +105,25 @@ However now that we have the conceptual foundation in place, we can start lookin
 
 ## Choosing an Engine: Build, Adopt, or Wrap
 
-Before designing anything, I surveyed the landscape thoroughly, assessing 38 tools ranging from dedicated memory layers to raw-vector layers (as well as framework-native memory). Most of them fell to three hard filters:
+Before designing anything, I surveyed the landscape thoroughly, assessing ~38 tools across four tiers.
 
-1. **Self-hostable in a customer Kubernetes cluster.** This removes SaaS-only options (Mem0 Platform, Zep Cloud, Letta Cloud, OpenAI memory) as primary choices, though their OSS counterparts stay in scope.
-2. **A dedicated memory layer.** This excludes bare substrates, since pgvector, Qdrant, Chroma, and Neo4j are backend choices within a design and not the memory layer itself, and it excludes framework-native memory that can only be obtained by adopting a second agent runtime.
-3. **Actively maintained.**
+**1. Dedicated memory frameworks.** Purpose-built layers whose whole job is agent memory. The actively maintained ones anchored the evaluation:
 
-That left a shortlist chosen deliberately for architectural diversity: five genuinely different answers to the same question.
+- [Mem0](https://github.com/mem0ai/mem0) - vector-first fact extraction across user, session, and agent scopes
+- [Zep/Graphiti](https://github.com/getzep/graphiti) - a temporal knowledge graph that tracks how facts change over time, with provenance
+- [Cognee](https://github.com/topoteretes/cognee) - a hybrid graph-plus-vector platform fed by an Extract-Cognify-Load pipeline
+- [Memobase](https://github.com/memodb-io/memobase) - profile-first memory built on structured user profiles and event timelines
+- [Redis Agent Memory Server](https://github.com/redis/agent-memory-server) - a two-tier (working plus long-term) memory server on Redis
+
+Others in this tier fell early: Memary was no longer maintained, Honcho carried a distribution-risk AGPL license, and [Letta (MemGPT)](https://www.letta.com/) is a full agent runtime whose memory cannot be adopted on its own.
+
+**2. Agent frameworks with native memory.** [LangGraph's Store and LangMem](https://docs.langchain.com/oss/python/langgraph/persistence), [CrewAI memory](https://docs.crewai.com/introduction), [LlamaIndex memory](https://docs.llamaindex.ai/), [Google ADK](https://google.github.io/adk-docs/)'s MemoryService, and the [Microsoft Agent Framework](https://github.com/microsoft/agent-framework) all embed memory. These were studied for their design choices, but adopting one for its memory means importing a second agent runtime next to your own, so they served as references and not as candidates. (Pydantic AI, the KAOS data plane itself, provides message history only.)
+
+**3. Managed and commercial services.** Mem0 Platform, Zep Cloud, Letta Cloud, [OpenAI memory](https://openai.com/index/memory-and-new-controls-for-chatgpt/), and Google's Vertex Memory Bank. These set the product bar, but a SaaS memory layer means user conversation data leaves the cluster, which conflicts with the self-hosting requirement.
+
+**4. Building from scratch on vector and/or graph stores.** pgvector, Qdrant, Chroma, Weaviate, and Milvus on the vector side, and Neo4j and FalkorDB on the graph side, are the substrates a custom layer would sit on, and KAOS already had a baseline conversation log to extend. This tier stayed a live option through the whole evaluation.
+
+The first and fourth tiers produced the shortlist: five dedicated frameworks chosen for architectural diversity, plus the build-it-yourself baseline.
 
 | Candidate | Architecture | License | Store | Notable strength | Notable cost |
 | --- | --- | --- | --- | --- | --- |
@@ -122,7 +134,7 @@ That left a shortlist chosen deliberately for architectural diversity: five genu
 | [Redis Agent Memory Server](https://github.com/redis/agent-memory-server) | two-tier working + long-term | MIT | Redis | the two-tier model mirrors what agents actually need | young project, no OTel |
 | Build it yourself | whatever you design | n/a | whatever you run | perfect fit, zero new deps | every capability built and maintained in-house |
 
-I then scored these against twelve criteria derived from actual requirements: long-term capability coverage, retrieval quality, Kubernetes deployability, infrastructure delta, integration fit, multi-tenancy, observability, licensing, maturity, and write-path cost. The full matrix is too long for a blog post, but the reading of it is the useful part:
+I then scored these against criteria derived from actual requirements: long-term capability coverage, retrieval quality, embeddability as a library behind KAOS's own interface, pluggable storage backends, infrastructure delta, multi-tenancy hooks, observability, licensing, maturity, and write-path cost. Notably, Kubernetes packaging was not a criterion, since KAOS wraps whatever it adopts in its own deployment layer anyway. The full matrix is too long for a blog post, but the reading of it is the useful part:
 
 **No candidate dominates.** The graph-first leaders (Graphiti, Cognee) buy the most capability at the highest operational cost: you are importing a graph database and an LLM-heavy ingestion pipeline. [Zep's paper](https://arxiv.org/abs/2501.13956) is the capability ceiling of the field, a bi-temporal knowledge graph reporting 94.8% on the DMR benchmark against MemGPT's 93.4% (the design itself is what matters here, even if the numbers were provided by these frameworks themselves). The low-delta options (Redis AMS) buy fit at maturity cost. Building it yourself buys perfect fit at the cost of rebuilding mature extraction and retrieval that already exists under permissive licenses.
 
