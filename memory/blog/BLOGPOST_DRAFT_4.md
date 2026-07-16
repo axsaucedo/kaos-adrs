@@ -2,13 +2,22 @@ _A practical guide to memory tiers, multi-tenant scoping, engine selection, and 
 
 ---
 
-Most agent systems do not persist anything across sessions. Every session starts from zero, facts established in one conversation are gone in the next, and the "personal assistant" you configured yesterday greets you today like a stranger.
+LLMs are stateless models which do not persist data (by design); if you don't add logic to addres this, it means that:
+* Every chat session starts from zero
+* Facts from one conversation are gone in the next
+* Learnings from across conversations or users are not available
 
-A number of dedicated memory layers have emerged in response: [Mem0](https://github.com/mem0ai/mem0), [Zep/Graphiti](https://github.com/getzep/graphiti), [Letta (MemGPT)](https://www.letta.com/), [Cognee](https://github.com/topoteretes/cognee), [Memobase](https://github.com/memodb-io/memobase), and the [Redis Agent Memory Server](https://github.com/redis/agent-memory-server). Memory features are also landing natively in [OpenAI's products](https://openai.com/index/memory-and-new-controls-for-chatgpt/), [Claude](https://claude.com/blog/memory), [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview), [CrewAI](https://docs.crewai.com/introduction), and [Google ADK](https://google.github.io/adk-docs/).
+This means that the "personal assistant" you configured will always greet you like a stranger.
 
-As part of building the Kubernetes Agent Orchestration System (KAOS), we carried out this work end to end: a research phase surveying ~38 tools, a scored selection, a set of architecture decision records, and an implementation that now ships as a `MemoryStore` resource that any agent can bind to. Along the way we hit most of the traps: narrative digests shredded into vector fragments, scope models that leak across tenants, memory backends that take serving agents down with them.
+A number of dedicated memory layers have emerged in response: [Mem0](https://github.com/mem0ai/mem0), [Zep/Graphiti](https://github.com/getzep/graphiti), [Letta (MemGPT)](https://www.letta.com/), [Cognee](https://github.com/topoteretes/cognee), [Memobase](https://github.com/memodb-io/memobase), and most recently, the [Redis Agent Memory Server](https://github.com/redis/agent-memory-server). Memory features are also landing natively in [OpenAI's products](https://openai.com/index/memory-and-new-controls-for-chatgpt/), [Claude](https://claude.com/blog/memory), [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview), [CrewAI](https://docs.crewai.com/introduction),  [Google ADK](https://google.github.io/adk-docs/), and pretty much every other agentic product out there.
 
-In this post we want to share those learnings. As with our previous posts on [observability for agentic systems](https://hackernoon.com/production-observability-for-multi-agent-ai-with-kaos-otel-signoz) and [autonomous always-on agentic patterns](https://hackernoon.com/), we will use KAOS as the concrete implementation example, but the goal is for the primitives (tiers, scopes, folding, degradation) to be useful whether you use KAOS, Mem0 directly, LangGraph, CrewAI, or a memory layer you wrote yourself.
+I spent some time recently extending the Kubernetes Agent Orchestration System (KAOS) to support multi-tiered memory persistence (aka short- / long-term memory), and there were quite a lot of interesting learnings that were worth sharing in a post.
+
+This post includes the research findings from exploring ~38 tools, which then followed with a set of architecture decisions, and then the implementation that now ships as a `MemoryStore` resource that any agent can bind to. 
+
+Along the way I hit most of the same issues that anyone would whilst building or integrating mult-tiered memory into an agentic system, so hopefully this post is useful for anyone looking to do this.
+
+As with previous posts on [observability for agentic systems](https://hackernoon.com/production-observability-for-multi-agent-ai-with-kaos-otel-signoz) and [autonomous always-on agentic patterns](https://hackernoon.com/), I will use KAOS as the concrete implementation example, but the goal is for the primitives (tiers, scopes, folding, degradation) to be useful whether you use KAOS, Mem0 directly, LangGraph, CrewAI, or a memory layer you wrote yourself.
 
 ## The Useful Part of the Hype
 
