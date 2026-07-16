@@ -2,47 +2,55 @@ _A practical guide to memory tiers, multi-tenant scoping, engine selection, and 
 
 ---
 
-LLMs are stateless models which do not persist data (by design); if you don't add logic to address this, it means that:
-* Every chat session starts from zero
-* Facts from one conversation are gone in the next
-* Learnings from across conversations or users are not available
+LLMs are stateless by design, and without added memory logic every session starts from zero. 
 
-This means that the "personal assistant" you configured will always greet you like a stranger.
+A number of dedicated memory layers have emerged (and continue emerging almost daily) in to tackle this, each with different approaches and tradeoffs. Which one should you adopt?
 
-A number of dedicated memory layers have emerged in response: [Mem0](https://github.com/mem0ai/mem0), [Zep/Graphiti](https://github.com/getzep/graphiti), [Letta (MemGPT)](https://www.letta.com/), [Cognee](https://github.com/topoteretes/cognee), [Memobase](https://github.com/memodb-io/memobase), and most recently, the [Redis Agent Memory Server](https://github.com/redis/agent-memory-server). Memory features are also landing natively in [OpenAI's products](https://openai.com/index/memory-and-new-controls-for-chatgpt/), [Claude](https://claude.com/blog/memory), [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview), [CrewAI](https://docs.crewai.com/introduction),  [Google ADK](https://google.github.io/adk-docs/), and pretty much every other agentic product out there.
+Recently I spent some time extending the Kubernetes Agent Orchestration System (KAOS) to support multi-tiered memory persistence (aka short- / long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into an agentic system, so I thought it would be useful compiling all the learnings, design choices and examples. 
 
-I spent some time recently extending the Kubernetes Agent Orchestration System (KAOS) to support multi-tiered memory persistence (aka short- / long-term memory), and there were quite a lot of interesting learnings that were worth sharing in a post.
+Hopefully this post is useful for anyone looking to do this on their own project.
 
-This post includes the research findings from exploring ~38 tools, which then followed with a set of architecture decisions, and then the implementation that now ships as a `MemoryStore` resource that any agent can bind to. 
+This post includes the research findings from exploring ~38 tools, including tools like [Mem0](https://github.com/mem0ai/mem0), [Zep/Graphiti](https://github.com/getzep/graphiti), [Letta (MemGPT)](https://www.letta.com/), [Cognee](https://github.com/topoteretes/cognee), [Memobase](https://github.com/memodb-io/memobase), [Redis Agent Memory Server](https://github.com/redis/agent-memory-server), as well as native implementations in [OpenAI's products](https://openai.com/index/memory-and-new-controls-for-chatgpt/), [Claude](https://claude.com/blog/memory), [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview), [CrewAI](https://docs.crewai.com/introduction),  and [Google ADK](https://google.github.io/adk-docs/) - between many others.
 
-Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into an agentic system, so hopefully this post is useful for anyone looking to do this.
+I also reflect learnings and best practices inferred whilst navigating through a long number of architecture tradeoffs, and getting my hands dirty on the implementation that now ships as a distributed and highly available / scalable `MemoryStore` resource that any agent can bind to. 
 
-As with previous posts on [observability for agentic systems](https://hackernoon.com/production-observability-for-multi-agent-ai-with-kaos-otel-signoz) and [autonomous always-on agentic patterns](https://hackernoon.com/), I will use KAOS as the concrete implementation example, but the goal is for the primitives (tiers, scopes, folding, degradation) to be useful whether you use KAOS, Mem0 directly, LangGraph, CrewAI, or a memory layer you wrote yourself.
+As with my previous posts on [observability for agentic systems](https://hackernoon.com/production-observability-for-multi-agent-ai-with-kaos-otel-signoz) and [autonomous always-on agentic patterns](https://hackernoon.com/), I will use KAOS as the concrete implementation example, but the goal is to provide practical intuition for the primitives (tiers, scopes, folding, degradation), so that it's applicable for you whether you use KAOS, Mem0 directly, LangGraph, CrewAI, or a memory layer you wrote yourself.
 
 ## The Useful Part of the Hype
 
-"Memory" is one of the most overloaded words in agentic systems, so it is worth separating it from the concepts it gets conflated with:
+"Memory" is one of the most overloaded words in agentic systems, so it is worth separating it from the concepts it gets conflated with, such as:
 
-- The **context window** holds working state for a single model call.
-- **RAG** retrieves over a corpus the agent did not produce.
-- **Session history** is a transcript of what was said.
-- **Task state**, as I argued in the [autonomous agents post](https://hackernoon.com/), is an external lifecycle contract.
+- The **context window**, which holds working state for a single model call.
+- **Session history**, which holds an auditable transcript of what was said.
+* **Prompt telemetry**, which holds the specific prompts relative to events in the system.
 
-Memory overlaps with each of these, however it is none of them. It is the information an agent carries across turns and sessions to inform its reasoning, and mixing it with the concepts above gives you noisy APIs and a memory system responsible for lifecycle control.
+To be more precise we can look at Princeton University's paper on [Cognitive Architectures for Language Agents (CoALA)](https://arxiv.org/abs/2309.02427) to provide a more precise definition for "Memory" in agentic systems. We can define "Memory" as the component that holds the short-, medium- and long-term information an agent carries across turns and sessions to inform its reasoning.
 
-The research literature gives us a more useful taxonomy, systematized for agents by [CoALA](https://arxiv.org/abs/2309.02427), which imported the episodic, semantic, and procedural split from cognitive science, and echoed in how [MemGPT](https://arxiv.org/abs/2310.08560) framed the OS-style memory hierarchy and how [Generative Agents](https://arxiv.org/abs/2304.03442) framed reflection over an event stream:
+This research paper quoted also provides a useful taxonomy for "memory types" that we will use to reason about the latter sections. This includes the memory types for episodic, semantic, procedural and temporal memory. 
 
-| Memory type | What it holds | Example |
-| --- | --- | --- |
-| Short-term (working) | verbatim recent turns of the live conversation | "the user just said port 8080" |
-| Episodic | records of specific past events | "on Tuesday the deploy failed twice" |
-| Semantic | distilled, durable facts | "the user prefers blue-green deploys" |
-| Procedural | learned skills and how-tos | "here is how we roll back this service" |
-| Temporal | facts with validity intervals | "Alice *was* on-call until March" |
+These memory types are also mentioned in the Berkeley paper that released [MemGPT](https://arxiv.org/abs/2310.08560), as well as how the Stanford paper on large-scale LLM simulations [Generative Agents: Interactive Simulacra of Human Behavior](https://arxiv.org/abs/2304.03442) structured their memory event stream.
 
-But the distinction that matters most in practice is simpler, and it is the one that gets conflated constantly:
+The formal definition of these memory types (+ a few examples) is outlined as follows:
 
-**Conversational continuity** (the agent remembers what was said three turns ago) is a *same-session* problem. **Learned knowledge** (the agent remembers what it figured out last week) is a *cross-session* problem. They feel like one feature ("the agent remembers things") but they need different machinery, different storage, and different lifecycle rules. The ecosystem has converged on exactly this line: [LangGraph](https://docs.langchain.com/oss/python/langgraph/persistence) separates thread-scoped checkpointers from a cross-thread store, and [Letta](https://docs.letta.com/guides/core-concepts/memory/memory-blocks) separates always-in-context memory blocks from an archival tier. Most of the design mistakes I made early came from treating them as one thing.
+| Memory type          | What it holds                                  | Example                                                     |
+| -------------------- | ---------------------------------------------- | ----------------------------------------------------------- |
+| Short-term (working) | verbatim recent turns of the live conversation | "the user just said port 8080"                              |
+| Episodic             | records of specific past events                | "on Tuesday the deploy failed twice"                        |
+| Semantic             | distilled, durable facts                       | "the user prefers blue-green deploys"                       |
+| Procedural           | learned skills and how-tos                     | "here is how we roll back this service"                     |
+| Temporal             | facts with validity intervals                  | "Joe *was* in a relationship until March, but not anymore." |
+
+In practice what I found out however is that most frameworks only implement a small number of these, namely **short-term** is always present, **episodic and semantic** are bundled (the only difference is whether time is preserved), **procedural** tends to be present mainly in coding agents (eg creating skills, commands, extensions), and **temporal** tends to be replaced with "forgetting memory" functionality instead, or embedded with episodic/semantic.
+
+These appear more informally defined as:
+* **Conversational continuity**: The agent remembers what was said three turns ago; a *same-session* problem. 
+* **Learned knowledge**: The agent remembers what it figured out last week; a *cross-session* problem. 
+
+For example, frameworks like [LangGraph](https://docs.langchain.com/oss/python/langgraph/persistence) separate thread-scoped checkpointers from a cross-thread store. Another example is [Letta](https://docs.letta.com/guides/core-concepts/memory/memory-blocks), which separates always-in-context memory blocks from an archival tier. 
+
+Most of the design mistakes I made early came from either trying to tackle all of these "memory-types" separately, by bundling sub-optimally, or by oversimplifying too much. 
+
+But before we dive into the implementation, let's cover the basics.
 
 ## Memory 101: The Version Everyone Starts With
 
@@ -58,7 +66,7 @@ async def handle_message(user_message):
     return response
 ```
 
-And to be honest, the original KAOS memory was exactly this, an in-process `deque` bounded by `maxlen`, replaying the last N events into the prompt. It was sufficient until the requirements described below appeared.
+And to be honest, the original KAOS memory was exactly this. It was an in-process queue with a max length, which ensured it was replaying the last N events into the next prompt.
 
 The second version everyone builds is "just embed everything":
 
@@ -71,7 +79,11 @@ async def handle_message(user_message):
     return response
 ```
 
-And the tempting third option is "skip all of this, context windows are huge now, just replay everything." The benchmarks show this does not hold. On [LongMemEval](https://arxiv.org/abs/2410.10813), models reasoning over full ~115K-token interaction histories lose 30-60% accuracy versus the same models given oracle retrieval (GPT-4o drops from 87-92% to 60-64%), and [LoCoMo](https://arxiv.org/abs/2402.17753) finds that even long-context plus RAG remains far below human recall, weakest of all on temporal reasoning. A bigger window gives you a longer transcript, although it still provides none of the distillation, scoping, or recall that memory requires.
+This is better, but this is not memory in the form that we introduced eariler, it is just a better search mechanism across the prompt history.
+
+Another tempting alternative as the next step is "context windows are huge now, just replay everything". 
+
+However this is not a great approach, and there are some benchmarks like [UCLA's Bench on Long-Term Interactive Memory](https://arxiv.org/abs/2410.10813), which showed that models reasoning over full ~115K-token interaction histories lose 30-60% accuracy versus the same models given oracle retrieval. 
 
 None of the three naive versions survives contact with production:
 
