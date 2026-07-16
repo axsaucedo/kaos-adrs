@@ -2,7 +2,7 @@ _A practical guide to memory tiers, multi-tenant scoping, engine selection, and 
 
 ---
 
-LLMs are stateless models which do not persist data (by design); if you don't add logic to addres this, it means that:
+LLMs are stateless models which do not persist data (by design); if you don't add logic to address this, it means that:
 * Every chat session starts from zero
 * Facts from one conversation are gone in the next
 * Learnings from across conversations or users are not available
@@ -15,7 +15,7 @@ I spent some time recently extending the Kubernetes Agent Orchestration System (
 
 This post includes the research findings from exploring ~38 tools, which then followed with a set of architecture decisions, and then the implementation that now ships as a `MemoryStore` resource that any agent can bind to. 
 
-Along the way I hit most of the same issues that anyone would whilst building or integrating mult-tiered memory into an agentic system, so hopefully this post is useful for anyone looking to do this.
+Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into an agentic system, so hopefully this post is useful for anyone looking to do this.
 
 As with previous posts on [observability for agentic systems](https://hackernoon.com/production-observability-for-multi-agent-ai-with-kaos-otel-signoz) and [autonomous always-on agentic patterns](https://hackernoon.com/), I will use KAOS as the concrete implementation example, but the goal is for the primitives (tiers, scopes, folding, degradation) to be useful whether you use KAOS, Mem0 directly, LangGraph, CrewAI, or a memory layer you wrote yourself.
 
@@ -26,7 +26,7 @@ As with previous posts on [observability for agentic systems](https://hackernoon
 - The **context window** holds working state for a single model call.
 - **RAG** retrieves over a corpus the agent did not produce.
 - **Session history** is a transcript of what was said.
-- **Task state**, as we argued in the [autonomous agents post](https://hackernoon.com/), is an external lifecycle contract.
+- **Task state**, as I argued in the [autonomous agents post](https://hackernoon.com/), is an external lifecycle contract.
 
 Memory overlaps with each of these, however it is none of them. It is the information an agent carries across turns and sessions to inform its reasoning, and mixing it with the concepts above gives you noisy APIs and a memory system responsible for lifecycle control.
 
@@ -42,7 +42,7 @@ The research literature gives us a more useful taxonomy, systematized for agents
 
 But the distinction that matters most in practice is simpler, and it is the one that gets conflated constantly:
 
-**Conversational continuity** (the agent remembers what was said three turns ago) is a *same-session* problem. **Learned knowledge** (the agent remembers what it figured out last week) is a *cross-session* problem. They feel like one feature ("the agent remembers things") but they need different machinery, different storage, and different lifecycle rules. The ecosystem has converged on exactly this line: [LangGraph](https://docs.langchain.com/oss/python/langgraph/persistence) separates thread-scoped checkpointers from a cross-thread store, and [Letta](https://docs.letta.com/guides/core-concepts/memory/memory-blocks) separates always-in-context memory blocks from an archival tier. Most of the design mistakes we made early came from treating them as one thing.
+**Conversational continuity** (the agent remembers what was said three turns ago) is a *same-session* problem. **Learned knowledge** (the agent remembers what it figured out last week) is a *cross-session* problem. They feel like one feature ("the agent remembers things") but they need different machinery, different storage, and different lifecycle rules. The ecosystem has converged on exactly this line: [LangGraph](https://docs.langchain.com/oss/python/langgraph/persistence) separates thread-scoped checkpointers from a cross-thread store, and [Letta](https://docs.letta.com/guides/core-concepts/memory/memory-blocks) separates always-in-context memory blocks from an archival tier. Most of the design mistakes I made early came from treating them as one thing.
 
 ## Memory 101: The Version Everyone Starts With
 
@@ -58,7 +58,7 @@ async def handle_message(user_message):
     return response
 ```
 
-And to be honest about our own history: the original KAOS memory was exactly this, an in-process `deque` bounded by `maxlen`, replaying the last N events into the prompt. It was sufficient until the requirements described below appeared.
+And to be honest, the original KAOS memory was exactly this, an in-process `deque` bounded by `maxlen`, replaying the last N events into the prompt. It was sufficient until the requirements described below appeared.
 
 The second version everyone builds is "just embed everything":
 
@@ -91,7 +91,7 @@ Which brings us to the thesis of this post:
 
 ## What Changes at Scale: The Fleet Questions
 
-A single hobby agent can get away with the naive version. The problem changes shape the moment you run many agents, for many users, across many sessions: the same inflection point we described for [autonomous agents](https://hackernoon.com/), where the loops that never stop are also the ones producing memory events 24/7.
+A single hobby agent can get away with the naive version. The problem changes shape the moment you run many agents, for many users, across many sessions: the same inflection point I described for [autonomous agents](https://hackernoon.com/), where the loops that never stop are also the ones producing memory events 24/7.
 
 At that point, a set of questions becomes unavoidable:
 
@@ -101,11 +101,11 @@ At that point, a set of questions becomes unavoidable:
 - **Where does extraction run?** Distilling facts requires LLM calls. Do they run on the request path, while the user waits?
 - **How do you delete a user's memory everywhere, on demand?** Across every tier, every store, every replica?
 
-Notice that none of these are machine-learning questions. They are tenancy, topology, and failure-mode questions, the same "ordinary distributed-systems plumbing" that showed up when we made agent loops autonomous.
+Notice that none of these are machine-learning questions. They are tenancy, topology, and failure-mode questions, the same "ordinary distributed-systems plumbing" that showed up when making agent loops autonomous.
 
 ## Choosing an Engine: Build, Adopt, or Wrap
 
-Before designing anything, we surveyed the landscape properly: roughly 38 tools, from dedicated memory layers to vector substrates to framework-native memory. Most of them fell to three hard filters:
+Before designing anything, I surveyed the landscape properly: roughly 38 tools, from dedicated memory layers to vector substrates to framework-native memory. Most of them fell to three hard filters:
 
 1. **Self-hostable in a customer Kubernetes cluster.** This removes SaaS-only options (Mem0 Platform, Zep Cloud, Letta Cloud, OpenAI memory) as primary choices, though their OSS counterparts stay in scope.
 2. **A dedicated memory layer.** This excludes bare substrates, since pgvector, Qdrant, Chroma, and Neo4j are backend choices within a design and not the memory layer itself, and it excludes framework-native memory that can only be obtained by adopting a second agent runtime.
@@ -122,17 +122,17 @@ That left a shortlist chosen deliberately for architectural diversity: five genu
 | [Redis Agent Memory Server](https://github.com/redis/agent-memory-server) | two-tier working + long-term | MIT | Redis | the two-tier model mirrors what agents actually need | young project, no OTel |
 | Build it yourself | whatever you design | n/a | whatever you run | perfect fit, zero new deps | every capability built and maintained in-house |
 
-We then scored these against twelve criteria derived from actual requirements: long-term capability coverage, retrieval quality, Kubernetes deployability, infrastructure delta, integration fit, multi-tenancy, observability, licensing, maturity, and write-path cost. The full matrix is too long for a blog post, but the reading of it is the useful part:
+I then scored these against twelve criteria derived from actual requirements: long-term capability coverage, retrieval quality, Kubernetes deployability, infrastructure delta, integration fit, multi-tenancy, observability, licensing, maturity, and write-path cost. The full matrix is too long for a blog post, but the reading of it is the useful part:
 
 **No candidate dominates.** The graph-first leaders (Graphiti, Cognee) buy the most capability at the highest operational cost: you are importing a graph database and an LLM-heavy ingestion pipeline. [Zep's paper](https://arxiv.org/abs/2501.13956) is the capability ceiling of the field, a bi-temporal knowledge graph reporting 94.8% on the DMR benchmark against MemGPT's 93.4% (the design itself is what matters here, even if the numbers were provided by these frameworks themselves). The low-delta options (Redis AMS) buy fit at maturity cost. Building it yourself buys perfect fit at the cost of rebuilding mature extraction and retrieval that already exists under permissive licenses.
 
 Interestingly enough, there is published research from these frameworks that actually supports that extraction-based memory improves latency and cost, however it does not improve raw accuracy. In [Mem0's own evaluation](https://arxiv.org/abs/2504.19413) on LoCoMo, a full-context baseline beats Mem0 on raw accuracy (72.9% vs 66.9%), while memory buys a 91% cut in p95 latency (1.44s vs 17.1s) and over 90% fewer tokens per conversation. At fleet scale that trade is exactly right, since you cannot ship 17-second turns and 26K-token replays, but you should make it knowingly.
 
-We selected **Mem0 as the long-term engine, as a library behind our own interface**. It maximized capability with the lowest integration friction, the strongest ecosystem maturity, and pluggable backends. But the equally important half of the decision is the second clause, because it reflects what production systems actually do:
+I selected **Mem0 as the long-term engine, as a library behind KAOS's own interface**. It maximized capability with the lowest integration friction, the strongest ecosystem maturity, and pluggable backends. But the equally important half of the decision is the second clause, because it reflects what production systems actually do:
 
 > Adopting a memory engine means choosing which 60% of the system you do not have to build, and committing to build the remaining 40% around it.
 
-Agent frameworks like Pydantic AI provide message history only, so long-term memory remains the application's responsibility, and surveying production systems shows the norm is to wrap an external engine behind the application's own contract instead of adopting it as is. Every gap you accept in the selection becomes your integration layer. For Mem0 that meant four gaps. It has no OpenTelemetry, so we instrument every operation ourselves. Its tenant isolation is application-level, so we enforce scope in our service, fail-closed. It has no Kubernetes packaging, so the operator deploys it like any other KAOS component. And it has **no short-term tier at all**, which turned out to be a feature, as the next section explains.
+Agent frameworks like Pydantic AI provide message history only, so long-term memory remains the application's responsibility, and surveying production systems shows the norm is to wrap an external engine behind the application's own contract instead of adopting it as is. Every gap you accept in the selection becomes your integration layer. For Mem0 that meant four gaps. It has no OpenTelemetry, so I instrument every operation in the KAOS layer. Its tenant isolation is application-level, so I enforce scope in the memory service, fail-closed. It has no Kubernetes packaging, so the operator deploys it like any other KAOS component. And it has **no short-term tier at all**, which turned out to be a feature, as the next section explains.
 
 ## The Three Tiers
 
@@ -182,19 +182,19 @@ Every memory operation in a multi-tenant fleet needs an answer to "whose memory?
 | `shared` | `agent_id = "kaos:shared"` (reserved sentinel) | every agent on the same store |
 | `session` | `run_id = <session id>` | one conversation |
 
-Two design choices here did more work than we expected.
+Two design choices here did more work than I expected.
 
-**The store is the group.** We never built a "memory group" resource. The set of agents bound to the same `MemoryStore` *is* the sharing boundary, and the four scope levels already express agent-private, per-user, fleet-shared, and per-session memory within it. When we drafted a richer model (hierarchical scope paths, group CRDs, membership indirection), every version added authorization machinery that the flat model plus deployment topology already covered.
+**The store is the group.** I never built a "memory group" resource. The set of agents bound to the same `MemoryStore` *is* the sharing boundary, and the four scope levels already express agent-private, per-user, fleet-shared, and per-session memory within it. When I drafted a richer model (hierarchical scope paths, group CRDs, membership indirection), every version added authorization machinery that the flat model plus deployment topology already covered.
 
 **The strength of tenant isolation turned out to be an architectural tradeoff that goes beyond the code implementation, and is expressed through deployment topology.** The default is one shared store with scope filtering. If a tenant needs hard guarantees, you deploy them their own `MemoryStore`, so their data is not co-located at all and no filtering defect can leak across tenants. There is no isolation-mode flag, only the choice of how many stores you run.
 
-And then there is the rule that we would put in bold in any memory system's security review:
+And then there is the rule that I would put in bold in any memory system's security review:
 
 > **Never let the model choose the scope.** Scope is derived server-side from the authenticated agent identity and request context, and never from model- or tool-supplied arguments. When the agent's `search_memory` tool fires, the model supplies the query while the service supplies the scope. Enforcement is fail-closed, so an operation that cannot resolve a usable owner key fails instead of falling through to an unscoped query over everyone's memories.
 
 Memory is now a documented attack surface. [AgentPoison](https://arxiv.org/abs/2407.12784) showed that poisoning less than 0.1% of an agent's memory store yields over 80% attack success, and [MINJA](https://arxiv.org/abs/2503.03704) showed an attacker needs no write access at all, because if the agent writes its own memory from conversations then every user is a write path. Worse, memory turns prompt injection *persistent*, and recent work frames it as [stored XSS for agents](https://arxiv.org/abs/2606.04425), where content saved in one session executes as instructions in a later, unrelated one. Scope enforcement stops unauthorized *reads*. For *writes*, treat recalled memory as untrusted data with provenance, which the model may weigh as evidence although it must never be allowed to override system policy.
 
-One more property worth checking in whatever store you use is that the scope filter must be applied **inside** the vector query instead of as a post-filter. The failure mode is silent, as shown in [a concrete pgvector demonstration](https://dev.to/franckpachot/no-pre-filtering-in-pgvector-means-reduced-ann-recall-1aa1) where an HNSW query asked for 15 filtered results returned only 11, because post-filtering discards non-matching candidates from a fixed search window. Engines like [Qdrant apply the tenant filter inside the graph traversal](https://qdrant.tech/documentation/manage-data/multitenancy/) for exactly this reason. Pre-filtered search means a tenant's relevant memories are never silently dropped because the nearest-neighbour window filled up with other tenants' vectors. We validated this against both Chroma and pgvector before committing to the design.
+One more property worth checking in whatever store you use is that the scope filter must be applied **inside** the vector query instead of as a post-filter. The failure mode is silent, as shown in [a concrete pgvector demonstration](https://dev.to/franckpachot/no-pre-filtering-in-pgvector-means-reduced-ann-recall-1aa1) where an HNSW query asked for 15 filtered results returned only 11, because post-filtering discards non-matching candidates from a fixed search window. Engines like [Qdrant apply the tenant filter inside the graph traversal](https://qdrant.tech/documentation/manage-data/multitenancy/) for exactly this reason. Pre-filtered search means a tenant's relevant memories are never silently dropped because the nearest-neighbour window filled up with other tenants' vectors. I validated this against both Chroma and pgvector before committing to the design.
 
 Finally, scope is also where right-to-erasure lives. A single `forget` operation fans out synchronously across all three tiers in one pass, deleting the session's short-term rows, the medium-term digests, and the scope-filtered long-term facts. Note that this is a genuinely different operation from temporal supersession, since a bi-temporal engine *invalidates* superseded facts but keeps them for history and audit, while right-to-erasure must *destroy* them everywhere, derived projections included. If you cannot answer "delete everything you know about this user" with one operation, you have a compliance incident waiting for a trigger.
 
@@ -202,7 +202,7 @@ Finally, scope is also where right-to-erasure lives. A single `forget` operation
 
 So far everything has been framework-agnostic. Now for the part where running fleets makes the topology decision for you.
 
-The first fork in the road is whether the memory engine runs **inside every agent** (as a library) or as a **central service**. Embedding the engine looks attractive at first, since it adds no new workload and no network hop. We rejected it, and the reasons compound with fleet size: extraction's LLM calls land on the serving process, every agent replica opens its own datastore connections, every agent image carries the engine and its dependencies, and replicas of the same agent silently diverge in what they remember. Centralizing inverts all four:
+The first fork in the road is whether the memory engine runs **inside every agent** (as a library) or as a **central service**. Embedding the engine looks attractive at first, since it adds no new workload and no network hop. I rejected it, and the reasons compound with fleet size: extraction's LLM calls land on the serving process, every agent replica opens its own datastore connections, every agent image carries the engine and its dependencies, and replicas of the same agent silently diverge in what they remember. Centralizing inverts all four:
 
 ```mermaid
 flowchart TB
@@ -253,7 +253,7 @@ spec:
 
 Two storage modes cover the dev-to-prod arc: `local` packs embedded Chroma plus a SQLite short-term table into one container on a PersistentVolume (a single-replica, zero-external-dependency on-ramp), while `external` puts long-term vectors *and* the short-term table on the same Postgres, which makes the service stateless and lets it run two replicas behind a disruption budget. Note the models are references to `ModelAPI` resources instead of provider keys, so the memory system is an LLM consumer like any other component and goes through the same gateway, quotas, and observability as everything else.
 
-But the design decision we would defend hardest is the failure contract:
+But the design decision I would defend hardest is the failure contract:
 
 > **Memory is augmentation and not a hard dependency**, so a memory outage should degrade an agent and never stop it.
 
@@ -261,7 +261,7 @@ Concretely, in KAOS, **recall is always soft**. If the long-term tier is unavail
 
 The decision I expect readers to push back on is that background extraction is **in-process fire-and-forget, with no durable job queue**. The implementation is a bounded executor with bounded retries and a graceful drain on shutdown. Turn latency is dominated by the model call, and [systems-level characterizations of agent memory workloads](https://arxiv.org/abs/2606.06448) confirm the economics, showing that the expensive side of memory is the LLM-driven write path, which is precisely the part you amortize in the background (the [Redis Agent Memory Server](https://github.com/redis/agent-memory-server) independently converged on the same pattern, running extraction through a background task queue). And because the short-term tier is the durable source of truth, a lost extraction costs one recomputable projection as opposed to any actual data, since the facts can be re-extracted from the retained turns. A durable at-least-once queue is a recorded follow-up to build *if measurement ever shows it is needed*, instead of building durable queue infrastructure before the failure mode has been observed even once.
 
-The rationale at a glance, in the format we wish more architecture write-ups used:
+The rationale at a glance, in the format I wish more architecture write-ups used:
 
 | Decision | Why |
 | --- | --- |
@@ -397,7 +397,7 @@ One caution applies even when memory *is* the right call, which is that remember
 
 ## Lessons for Production Agentic Memory
 
-Here are the patterns we would carry into any agentic memory system.
+Here are the patterns I would carry into any agentic memory system.
 
 ### 1. Memory is augmentation
 
@@ -441,7 +441,7 @@ The context window is the real constraint and turns vary wildly in size, which m
 
 ## Closing: Boring Memory
 
-In the observability post we argued the goal is *boring debugging*, and in the autonomy post that the loop is easy while the operating model is the work. Memory completes the trilogy, and the shape of the lesson is the same.
+In the observability post I argued the goal is *boring debugging*, and in the autonomy post that the loop is easy while the operating model is the work. Memory completes the trilogy, and the shape of the lesson is the same.
 
 The extraction models and retrieval tricks will keep improving underneath you, and the research is still openly arguing about where memory systems lose information. What makes agent memory production-grade is instead the tiered structure, the durable source of truth, the non-spoofable scopes, the degradation contract, the background write path, and the one-shot erasure.
 
