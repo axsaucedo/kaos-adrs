@@ -105,7 +105,7 @@ However now that we have the conceptual foundation in place, we can start lookin
 
 ## Choosing an Engine: Build, Adopt, or Wrap
 
-Before designing anything, I surveyed the landscape thoroughly, assessing dozens of tools across four tiers, and we will cover the scope, approach and learnings in this section, starting with an overview of the four tiers as follows.
+Before designing anything, I surveyed the landscape thoroughly, assessing dozens of tools across three tiers, and we will cover the scope, approach and learnings in this section, starting with an overview of all the tiers as follows.
 
 **Tier 1: Dedicated memory frameworks.** 
 This tier encompasses purpose-built frameworks whose whole job is agent memory. From the longer list, we reduced it to the actively maintained ones:
@@ -118,42 +118,38 @@ This tier encompasses purpose-built frameworks whose whole job is agent memory. 
 | [Memobase](https://github.com/memodb-io/memobase) | maintains structured user profiles and event timelines, with no embeddings on the hot path | Postgres + Redis | cheapest write path | profile-only recall, weak self-hosted multi-tenancy |
 | [Redis Agent Memory Server](https://github.com/redis/agent-memory-server) | serves two memory tiers (working and long-term) behind one REST API | Redis | the two-tier model mirrors what agents actually need | young project, no OTel |
 
-The ones that were still explored but were not shortlisted were [Memary](https://github.com/kingjulio8238/Memary) as not actively maintained, [Honcho](https://github.com/plastic-labs/honcho) due to AGPL license, and [Letta (MemGPT)](https://www.letta.com/) which seemed to be full agent runtime whose memory cannot be adopted on its own easily.
+What this tier taught me is that the architectural differences are really differences in recall pattern and write cost. Vector-first designs answer "what do we know about X" cheaply, graph-first designs answer "how did this fact change over time" at the price of an LLM-heavy ingestion pipeline plus a graph database. The profile-first designs answer "who is this user" with no embeddings on the hot path at all, and the two-tier designs bake in the working-versus-long-term split directly. 
 
-What this tier taught me is that the architectural differences are really differences in recall pattern and write cost. Vector-first designs answer "what do we know about X" cheaply, graph-first designs answer "how did this fact change over time" at the price of an LLM-heavy ingestion pipeline plus a graph database, profile-first designs answer "who is this user" with no embeddings on the hot path at all, and the two-tier designs bake in the working-versus-long-term split directly. The less visible learning is what they share: none of them enforces tenant isolation below the application level, and almost none ships OpenTelemetry, so whichever one you pick, scope enforcement and observability become your integration work. That shared gap shaped the KAOS design more than any individual feature did.
+There were also clear shared gaps, mainly at the infrastructure level; none of them enforces tenant isolation below the application level, and almost none ships OpenTelemetry, so whichever one you pick, scope enforcement and observability become your integration work. That shared gap shaped the KAOS design more than any individual feature did.
 
-A second learning is to treat the published numbers as directional. The headline benchmarks in this space are vendor-authored (Zep's DMR and latency figures, Mem0's LoCoMo results), the Mem0-versus-Zep comparisons circulating online are disputed in both directions, and the same benchmark can rank the same systems differently depending on who runs it. The architecture is the durable signal, and the numbers are marketing until reproduced.
-
-A third learning came from looking at what the open-source versions withhold. [Mem0's own platform-versus-OSS documentation](https://docs.mem0.ai/platform/platform-vs-oss) gates temporal reasoning, memory decay, webhooks, export, analytics, and auto-scaling behind the managed platform, and [Zep draws the line](https://www.getzep.com/platform/graphiti/) at governed multi-tenancy and compliance, with the OSS Graphiti engine giving you a single context graph to run yourself. The pattern across vendors is that the memory algorithms are open while the operational maturity is the commercial product, which previews the exact layer a platform adopting one of these engines has to build.
-
-Finally, this tier validated the tiered design itself before I built anything: the Redis Agent Memory Server bakes the working-versus-long-term split directly into its API, and as the managed services below show, every production memory product converges on a layered model instead of a single store.
+It's also worth noting that several of these libraries also offer an enterprise tier, so it was important to validate that basic features are not gated behind a paywall (similar to what we previously experienced with Google ADK and Vertex). More specificaly [Mem0's own platform-versus-OSS documentation](https://docs.mem0.ai/platform/platform-vs-oss) gates temporal reasoning, memory decay, webhooks, export, analytics, and auto-scaling behind the managed platform, and [Zep draws the line](https://www.getzep.com/platform/graphiti/) at governed multi-tenancy and compliance, with the OSS Graphiti engine giving you a single context graph to run yourself. The pattern across vendors is that the memory algorithms are open while the operational maturity is the commercial product, which previews the exact layer a platform adopting one of these engines has to build.
 
 **Tier 2. Agent frameworks with native memory.** 
 This tier encompasses the embedded memory functionality across end-to-end agentic frameworks, and included the usual suspect / popular frameworks like [LangGraph's Store and LangMem](https://docs.langchain.com/oss/python/langgraph/persistence), [CrewAI memory](https://docs.crewai.com/introduction), [LlamaIndex memory](https://docs.llamaindex.ai/), [Google ADK](https://google.github.io/adk-docs/)'s MemoryService, and the [Microsoft Agent Framework](https://github.com/microsoft/agent-framework). These were reviewed for their design choices, but adopting one for its memory means importing a second agent runtime next to your own, so they served as references and not as candidates.
 
-The learning from this tier is convergence. Every framework independently draws the same line between session-scoped state and cross-session knowledge, as seen in LangGraph's thread-scoped checkpointer versus its cross-thread Store, which gave me confidence that the split between conversational continuity and learned knowledge is a stable foundation to design on.
+The learning from this tier is actually what they all had in common. Every framework independently separates session-scoped state and cross-session knowledge, such as how LangGraph has thread-scoped checkpointers versus its cross-thread Store. 
 
-The convergence goes further than the split itself: every framework's own documentation steers production users away from its shipped default. [LangGraph's docs](https://docs.langchain.com/oss/python/langgraph/add-memory) state that production should use a database-backed checkpointer and store, since the in-memory versions lose everything on restart. [Google ADK](https://adk.dev/sessions/memory/) positions its `InMemoryMemoryService` for prototyping and points production to Vertex Memory Bank. The [Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/get-started/memory) defaults to an in-memory context provider and ships first-party Cosmos checkpoint storage plus, tellingly, a first-party `Mem0ContextProvider`. CrewAI's community documented replacing its native store with Mem0 after hitting redeploy and user-isolation gaps. Native memory is increasingly an extensible interface where the shipped default is a placeholder, which means memory is being externalized by design across the ecosystem, and the dominant production pattern is framework plus engine.
+There was also a clear separation between "local playground" and "production grade" when it comes to memory for all frameworks. 
 
-Two smaller observations also carried into the KAOS design. [LangMem](https://langchain-ai.github.io/langmem/) runs its extraction and consolidation through a debounced background executor, an independent convergence on keeping memory writes off the response path. And only LangGraph names the cognitive taxonomy (semantic, episodic, procedural) explicitly, while every other framework collapses the types into one vector store, and the collapse is a pragmatic production decision instead of a defect, which is why KAOS commits to a unified long-term store whose metadata can still distinguish the types.
+* [LangGraph](https://docs.langchain.com/oss/python/langgraph/add-memory): In-memory store is for development, but it's recommended to use a database-backed checkpointer and store for production. 
+* [Google ADK](https://adk.dev/sessions/memory/): Heavier paywall, as it only offers the `InMemoryMemoryService` as open source, but anything serious would need to use Vertex AI. 
+* [Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/get-started/memory): Defaults to an in-memory context provider and ships first-party.
+* Cosmos: Checkpoint storage plus a first-party `Mem0ContextProvider`
+* CrewAI: Community documented replacing its native store with Mem0 after hitting redeploy and user-isolation gaps. 
 
-The frontier in this tier is procedural memory, and it is emerging from agent harnesses instead of memory engines. [OpenClaw](https://docs.openclaw.ai/reference/AGENTS.default) layers markdown memory files (`MEMORY.md`, dated notes, per-skill `SKILL.md`) and runs a "Skill Workshop" where the agent proposes new skills from successful conversations for human approval. The [NousResearch Hermes agent](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/skills.md) frames skills explicitly as procedural memory: they are auto-proposed after repeated successful tool-call patterns, carry semver versions bumped on each self-improvement, and follow an anti-sediment principle where a skill should get shorter and sharper over time. [Claude Code skills](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview) use progressive disclosure, loading only ~100 tokens of metadata until a skill triggers. All of them echo [Voyager's 2023 skill library](https://arxiv.org/abs/2305.16291), and none of them carries validity timestamps. This is the capability I would watch most closely, and it is also why KAOS defers the procedural tier instead of shipping a half-version of it.
+Also interesting learnings from coding agents:
+
+* [OpenClaw](https://docs.openclaw.ai/reference/AGENTS.default): layers markdown memory files (`MEMORY.md`, dated notes, per-skill `SKILL.md`) and runs a "Skill Workshop" where the agent proposes new skills from successful conversations for human approval. 
+* [Hermes agent](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/skills.md): Uses skills explicitly as procedural memory, which are auto-proposed after repeated successful tool-call patterns, carry semver versions bumped on each self-improvement, and follow an anti-sediment principle where a skill should get shorter and sharper over time.
+
+Native memory is increasingly an extensible interface where the shipped default is a placeholder, which means memory is being externalized by design across the ecosystem, and the dominant production pattern is framework plus engine. This is something that we had to take into consideration as well.
 
 **Tier 3. Managed and commercial services.** 
-This tier included commercial services with managed memory platforms, which provided insights on the broader design of the system and the interactions with the memory, as opposed to just the design of the memory capability itself. These included the [Mem0 Platform](https://mem0.ai/), [Zep Cloud](https://www.getzep.com/), [Letta Cloud](https://www.letta.com/), [OpenAI memory](https://openai.com/index/memory-and-new-controls-for-chatgpt/), and [Google's Vertex Memory Bank](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/agent-engine/memory-bank/overview). The learnings from this tier were the strongest product signals in the survey. Every managed product converges on a two-layer model: an explicit, user-curated layer (OpenAI's saved memories, Claude's editable memory summary) that gets the visible control surface, on top of an automatically inferred and consolidated layer (OpenAI's chat-history reference, Vertex Memory Bank's LLM extraction with per-scope deduplication and contradiction checks) where the hard engineering lives. This maps directly onto the automatic-baseline-plus-explicit-tools design KAOS landed on.
+This tier included commercial services with managed memory platforms, which provided insights on the broader design of the system and the interactions with the memory, as opposed to just the design of the memory capability itself. These included the [Mem0 Platform](https://mem0.ai/), [Zep Cloud](https://www.getzep.com/), [Letta Cloud](https://www.letta.com/), [OpenAI memory](https://openai.com/index/memory-and-new-controls-for-chatgpt/), and [Google's Vertex Memory Bank](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/agent-engine/memory-bank/overview). 
 
-The second signal is that the scoping default is a genuine product decision, and the vendors disagree: Claude scopes memory per project, Vertex Memory Bank scopes per identity with configurable memory topics, and Zep scopes per subject graph. None of them defaults to one global memory per account, which reinforced treating the isolation boundary as a first-class design surface.
+The learnings from this tier were also quite helpful to undersand some of the architectural and feature tradeoffs that were done at the platform level. Every managed platform has the same two-layer model: namely 1) an explicit, user-curated layer (eg. OpenAI's saved memories, Claude's editable memory summary) that is visible/available at the surface, and that is build on top of; 2) an automatically inferred and consolidated layer (eg. OpenAI's chat-history reference, Vertex Memory Bank's LLM extraction with per-scope deduplication and contradiction checks) where the memory store/retrieval algorithms live.
 
-The third signal is that erasure in these products is more honest in the fine print than in the UI: deleting a ChatGPT conversation does not delete memories derived from it, and both OpenAI and Anthropic retain deleted content server-side for around 30 days. "Deleted" in a production memory system means removed from the retrieval path first and physically destroyed later, a distinction worth designing for explicitly instead of discovering during a compliance review.
-
-Finally, latency: Zep publishes [155ms retrieval on LoCoMo](https://www.getzep.com/platform/graphiti/) as the basis of its sub-200ms positioning, which is a useful calibration point that recall sits on the hot path of every turn and has a budget, in contrast to extraction which does not.
-
-**Tier 4. Building from scratch on vector and/or graph stores.** 
-Finally, this tier focused on the raw vector and graph stores from which all memory frameworks are built upon. Here we reviewed the ecosystem with the perspective on how raw memory stores integrate directly into these stores. These included [pgvector](https://github.com/pgvector/pgvector), [Qdrant](https://github.com/qdrant/qdrant), [Chroma](https://github.com/chroma-core/chroma), [Weaviate](https://github.com/weaviate/weaviate), and [Milvus](https://github.com/milvus-io/milvus) on the vector side, and [Neo4j](https://neo4j.com/) and [FalkorDB](https://github.com/FalkorDB/FalkorDB) on the graph side.
-
-The learning from this tier is that the substrate decision is not neutral, and one property turned out to be load-bearing for multi-tenancy: whether the store applies metadata filters inside the vector search or after it, since post-filtering can silently drop a tenant's results below the requested count. This later became a validation requirement in the KAOS scope design, covered in the scopes section. The other learning is that building from scratch on these stores means rebuilding extraction, deduplication, and consolidation, which is exactly the majority share an adopted engine provides, so this tier ended up quantifying the cost of the build-it-yourself option more than offering a genuine alternative.
-
-Beyond the pre-filtering property, this tier also showed that multi-tenant vector indexing is a research area of its own. [Qdrant's filterable HNSW](https://qdrant.tech/articles/multitenancy/) extends the index structure specifically so filters apply during graph traversal, its recent tiered multitenancy adds automatic promotion of large tenants from shared to dedicated shards to handle noisy neighbours, and academic work such as [Curator](https://arxiv.org/abs/2401.07119) studies exactly the per-tenant-index versus shared-index-with-filtering trade-off. A related and easily missed point is that embeddings are sensitive data in their own right, since published [inversion attacks](https://arxiv.org/abs/2411.05034) reconstruct most of the source text from stored vectors alone, so a shared vector index is a data-leak surface even without access to the raw text. And on the pragmatic side, the substrate decision is dominated by what you already operate, since an engine that can sit on the Postgres you run (pgvector) changes the infrastructure bill far more than any feature difference between stores.
+There was however a clear distinction on the scope in which memory is available across each platform: For Claude, memory scope is per project, in Vertex scope is per identity with configurable memory "topics", and Zep scopes per subject graph. None of them defaults to one global memory per account, which makes it clear that there is a design decision required on the isolation boundary.
 
 #### Conclusions from Surveying the Ecosystem
 
@@ -188,16 +184,33 @@ Based on these initial decisions we were able to proceed with the architectural 
 
 ## Designing our Memory Architecture: The Three Tiers
 
-As we now had the decision on Mem0 as the base layer, we can converge into the memory architecture for KAOS, which broke down into 3 memory tiers. An agent binds to a store and talks to one service, and behind that one contract sit three tiers with very different characters:
+As we now locked the decision to go forward with Mem0 as the memory library, we can move to the broader design architecture for the distributed memory tiers in KAOS.
+
+Based on the requirements we have in we needed to support basically three tiers, a short-term window, a medium-term summary and long-term "facts". These are intuitively used as follows: 
+ 
+ [TODO: Convert to table]
+ 
+- **Short-term memory** is the session window, basically the context of the conversation itself. It is bounded by a **token budget** analogous to how you would see this in your coding agent. This tier is also the fallback when the long-term store is unavailable.
+- **Medium-term memory** is the rolling summary that is triggered when the short-term window reaches its **context limit**. This is analogous to what you see in your agentic coding agent when compaction triggers, which is [research backed as effective](https://arxiv.org/abs/2308.15022). In this case we also refer to it as medium term as we also store each summary meaning that it can be accessed.
+- **Long-term memory** is the **"atomic facts"** that can be extracted from the conversation, which are stored semantically as vectors, and available across sessions, keyed by scope. Retrieval is also ranked by relevance-importance-recency as per the [Stanford research shared previously](https://arxiv.org/abs/2304.03442).
+
+Defining these tiers allow us to formalise the following design decisions:
+
+* Long-term memory functionality is enabled via Mem0; short- and medium-term memory are custom; These three tiers should cohesively integrate as a single interoperable unit.
+* Medium- and long-term extraction **is lossy**. T There's definitely some interesting approaches where [we could enable provenance](https://arxiv.org/abs/2605.04897), however I decided to keep this out of scope at least for now.
+* Medium- and long-term extraction are always **off the write path**; when compaction threshold is crossed, as opposed to in every insert [TODO: link here where mem0 also recommends this].
+* Temporal (bi-temporal validity) and procedural (aka skill persistence) memory are deliberately **deferred** in its explicit form; but achievable through the long-term memory.
+
+This allowed the actual distributed design to land on a service that offers the short-, medium- and long-term memory tiers through a single coherent interface; **"The MemoryStore Service".
 
 ```mermaid
 graph LR
   subgraph agent["Agent pod"]
     rt["Agent runtime<br/>(remote memory client)"]
   end
-  subgraph svc["Memory service"]
+  subgraph svc["MemoryStore service"]
     st["Short-term window<br/>(relational rows)<br/>Verbatim turns, token-budgeted"]
-    mt["Medium-term digest<br/>(relational, append-only)<br/>One rolling window per session"]
+    mt["Medium-term summary<br/>(relational, append-only)<br/>One rolling window per session"]
     lt["Long-term facts<br/>(Mem0 -> vector store)<br/>Extracted + deduplicated"]
   end
   store[("Storage<br/>dev: SQLite + Chroma<br/>prod: Postgres + pgvector")]
@@ -207,44 +220,41 @@ graph LR
   lt --- store
 ```
 
-- **Short-term** is the verbatim recent-turn window: session-scoped, plain relational rows, no embeddings. It is bounded by a **token budget** because the limiting resource is context-window space and turns vary wildly in size, which makes a turn count a poor proxy. This tier is also the fallback when the long-term store is unavailable.
-- **Medium-term** is a single rolling narrative digest per session: when older turns fall out of the window, they are folded into a summary so continuity survives eviction, following the pattern whose research lineage is [recursive summarization for long-term dialogue](https://arxiv.org/abs/2308.15022). Append-only and versioned.
-- The **long-term** tier is what Mem0 supports in the framework. Mem0 extracts atomic facts from evicted turns, deduplicates and revises them, and serves them back by semantic relevance, across sessions, keyed by scope, with retrieval ranked along the relevance-importance-recency lines that [Generative Agents](https://arxiv.org/abs/2304.03442) made canonical.
 
-The structural rule underneath all three tiers is that **the raw turns are the source of truth, and everything else is a derived projection.** The digest is one projection of the turns, the extracted facts are another, and the embeddings are a projection of those. Projections can be recomputed from the source, whereas the source can never be recomputed from a projection.
-
-That rule matters because write-time extraction is *lossy*, and the literature has started measuring just how lossy. A 2026 counterpoint paper, [Storage Is Not Memory](https://arxiv.org/abs/2605.04897), argues that content discarded before the query is known can never be recovered at retrieval time, and supports this by storing events verbatim and beating extraction-based systems on LoCoMo by a wide margin. [WhenLoss](https://arxiv.org/abs/2605.24579) finds write-side compression loss exceeds retrieval-side loss in four of six systems it diagnoses. The fault line is genuinely contested, though, as [other work](https://arxiv.org/abs/2603.02473) finds retrieval quality swings accuracy by 20 points while the choice of write strategy moves it only 3-8. Instead of picking a winner in that debate, the design goal is to avoid being locked into the limitations of either choice. Keeping the verbatim turns as the durable record is that hedge, and extraction then becomes a recomputable optimization instead of a destructive act.
-
-The medium-term memory concept is the tier that carried the most internal design choices, and in my opinion it carries the most transferable design rule in this post:
-
-> **Keep the narrative digest OUT of the vector store.** An extraction engine like Mem0 decomposes input into atomic, individually-revisable facts, because that is what vector retrieval wants. A rolling digest is the opposite, a coherent narrative whose value *is* its continuity. Index it into Mem0 and you shred the story into fragments and pollute semantic search with summary-of-summary noise. The digest is stored as a plain relational row and injected verbatim at recall time, and only the raw evicted turns are handed to Mem0 for fact extraction.
-
-The second design rule that pays for itself daily: **folding and extraction are always off the write path.** The active window is computed lazily on read. When a compaction threshold is crossed, folding older turns into the digest and handing them to Mem0 for extraction happen as background work. The user is already waiting on one LLM, so they should never wait on the memory system's LLM too.
-
-And in the spirit of honesty about scope: temporal (bi-temporal validity) and procedural (skill) memory are deliberately **deferred** in KAOS. Temporal memory involves more than attaching timestamps to facts. It means separating when an event happened, when the system learned it, and the interval during which the fact was true, plus supersession so that "Alice is on-call" can become historical without being erased. That is precisely what [Zep's temporal knowledge graph](https://arxiv.org/abs/2501.13956) models with bi-temporal edges, and it wants a graph engine underneath. Shipping it half-baked on a vector store would be worse than not shipping it. The committed set is short-term plus a unified semantic-and-episodic long-term store.
+We will cover more on the `MemoryStore` service in the kubernetes section below, but before we do that, we need to talk about another important (+ tricky) topic; access scopes.
 
 ## Scopes: Whose Memory Is It Anyway?
 
-Every memory operation in a multi-tenant fleet needs an answer to "whose memory?", and the answer has to come from the structure of the system instead of from convention. KAOS lands on a deliberately flat model: a single `scope` value per agent, mapped by the service onto exactly one owner key.
+Every memory operation in a multi-tenant fleet needs an answer to "whose memory?". The answer has to come from the structure of the system instead of from purely convention. 
 
-| `scope` | Owner key | Who shares it |
-| --- | --- | --- |
-| `private` (default) | `agent_id = <the agent's own identity>` | only this agent |
-| `user` | `user_id = <principal>` | every agent serving the same user |
-| `shared` | `agent_id = "kaos:shared"` (reserved sentinel) | every agent on the same store |
-| `session` | `run_id = <session id>` | one conversation |
+In KAOS the choice was to go for a deliberately flat model: a single `scope` value per agent, mapped by the service onto exactly one owner key, as follows:
 
-Two design choices here did more work than I expected.
+[TODO: i've updated the scope names as these are not intuitive; let's reflect this in the rest of the blog post. ALso let's discuss if we need to update in the codebase]
 
-**The store is the group.** I never built a "memory group" resource. The set of agents bound to the same `MemoryStore` *is* the sharing boundary, and the four scope levels already express agent-private, per-user, fleet-shared, and per-session memory within it. When I drafted a richer model (hierarchical scope paths, group CRDs, membership indirection), every version added authorization machinery that the flat model plus deployment topology already covered.
+| `scope`   | Owner key                    | Who shares it                         |
+| --------- | ---------------------------- | ------------------------------------- |
+| `session` | `run_id = <session id>`      | Only this conversation session        |
+| `agent`   | `agent_id = <agen identity>` | Only this agent.                      |
+| `user`    | `user_id = <user identity>`  | Every agent serving the same user.    |
+| `group`   | `agent_id = "kaos:shared"`   | Every agent + user in the same group. |
 
-**The strength of tenant isolation turned out to be an architectural tradeoff that goes beyond the code implementation, and is expressed through deployment topology.** The default is one shared store with scope filtering. If a tenant needs hard guarantees, you deploy them their own `MemoryStore`, so their data is not co-located at all and no filtering defect can leak across tenants. There is no isolation-mode flag, only the choice of how many stores you run.
+This scope is probably the obvious choice; the important question that arises here is, how do we enable this "shared memory" functionality? There are multiple flavours in which this can be achieved:
 
-And then there is the rule that I would put in bold in any memory system's security review:
+[TODO: restructure these bulletpoints to cohesive]
+* Multiple Groups per MemoryStore; This would require... multiple shared groups... multitenency supported in mem0... api functionality for segregation... etc... tradeoffs: ... [TODO: expand, also add other actions]
+* One Group per MemoryStore; ... tradeoffs... [TODO: quote how mem0 managed platform also approaches like this, or quote othres; also do this for the one above]
+* [TODO: if relevant add other options]
 
-> **Never let the model choose the scope.** Scope is derived server-side from the authenticated agent identity and request context, and never from model- or tool-supplied arguments. When the agent's `search_memory` tool fires, the model supplies the query while the service supplies the scope. Enforcement is fail-closed, so an operation that cannot resolve a usable owner key fails instead of falling through to an unscoped query over everyone's memories.
+Based on the tradeoffs, it was decided to go for one group per MemoryStore. This means that the four scope levels are supported via the same store. 
 
-Memory is now a documented attack surface. [AgentPoison](https://arxiv.org/abs/2407.12784) showed that poisoning less than 0.1% of an agent's memory store yields over 80% attack success, and [MINJA](https://arxiv.org/abs/2503.03704) showed an attacker needs no write access at all, because if the agent writes its own memory from conversations then every user is a write path. Worse, memory turns prompt injection *persistent*, and recent work frames it as [stored XSS for agents](https://arxiv.org/abs/2606.04425), where content saved in one session executes as instructions in a later, unrelated one. Scope enforcement stops unauthorized *reads*. For *writes*, treat recalled memory as untrusted data with provenance, which the model may weigh as evidence although it must never be allowed to override system policy.
+[TODO: this is not true is it? As it uses the same postgres database; is it the case that we are saying it's a differnt table? Let's clarify this if it's the case. Make a proposal.]
+The strength of tenant isolation turned out to be an architectural tradeoff that goes beyond the code implementation, and is expressed through deployment topology. Namely if a tenant needs hard guarantees, you deploy them their own `MemoryStore`, so their data is not co-located at all and no filtering defect can leak across tenants. There is no isolation-mode flag, only the choice of how many stores you run.
+
+This is beneficial as also diving into this space, it was clear that memory is now a documented attack surface. There's a few interesting papers like [AgentPoison](https://arxiv.org/abs/2407.12784) that show the impact of poisoning memory (ie 0.1% poisoned memory yields over 80% attack success), as well as [MINJA](https://arxiv.org/abs/2503.03704) which shows that an attacker needs no write access at all, because if the agent writes its own memory from conversations then every user is a write path.
+
+Now that we have sorted the tiers and the access scopes, we can move forward to the end-to-end platform implementation.
+
+[TODO: The next two paragraphs I no longer see how they fit. Review and make a proposal if they still do. but should be max a sentence or a few words on an existing sentence. REview how papers have been updated to fit.]
 
 One more property worth checking in whatever store you use is that the scope filter must be applied **inside** the vector query instead of as a post-filter. The failure mode is silent, as shown in [a concrete pgvector demonstration](https://dev.to/franckpachot/no-pre-filtering-in-pgvector-means-reduced-ann-recall-1aa1) where an HNSW query asked for 15 filtered results returned only 11, because post-filtering discards non-matching candidates from a fixed search window. Engines like [Qdrant apply the tenant filter inside the graph traversal](https://qdrant.tech/documentation/manage-data/multitenancy/) for exactly this reason. Pre-filtered search means a tenant's relevant memories are never silently dropped because the nearest-neighbour window filled up with other tenants' vectors. I validated this against both Chroma and pgvector before committing to the design.
 
