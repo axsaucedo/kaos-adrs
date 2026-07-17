@@ -274,7 +274,7 @@ The answer did not need to be a single store, because the requirements differ be
 * ***For development** the priority is zero external dependencies, so the store should be embeddable in the service container. 
 * **For production** the priorities are durability, horizontal scaling, and reusing infrastructure you already operate. 
 
-This ruled out SaaS-only options (Pinecone), library-only indexes with no persistence or filtering story (FAISS), and dedicated clusters that would add heavy new infrastructure (Milvus, Weaviate), and landed on two storage modes with the same service code on top of both:
+This ruled out SaaS-only options like Pinecone for the first iteration, as well as library-only indexes with no persistence or filtering (eg FAISS), or also dedicated clusters that would add heavy new infrastructure (Milvus, Weaviate). For this we landed on two storage modes with the same service code on top of both:
 
 ```mermaid
 flowchart LR
@@ -293,11 +293,13 @@ flowchart LR
   MS --> prod
 ```
 
-The second design decision was, where the memory engine runs. Should it run runs **inside every agent** as a library? as a **side-car** next to every pod? or as a **central service component**?. 
+The second design decision was where, and how, the memory layer runs. Should it run **inside every agent** as a library? As a **side-car** next to every pod? Or as a **central service component**?
 
-Embedding in the engine looks attractive at first, but the challenges compound with the number of agents. Namely as LLM calls for extraction land on the serving process, every agent replica opens its own datastore connections, every agent image carries the engine and its dependencies, and replicas of the same agent silently diverge in what they remember. 
+Integrating the memory SDK directly in the agent service looks attractive at first, but the challenges compound with the number of agents. Namely as LLM calls for extraction land on the serving process, every agent replica opens its own datastore connections, every agent image carries the engine and its dependencies, and replicas of the same agent silently diverge in what they remember. 
 
-Instead, going for the central option gives us the opposite: LLM extraction lands on the `MemoryStore` service, agents only interact with the respective store, agent images can use only the client, and scales with replicas horizontally. Here's the visual overview:
+Instead, going for the central option gives us the opposite: LLM extraction lands on the `MemoryStore` service, agents only interact with the respective store, agent images can use only the client, and scales with replicas horizontally.
+
+The "how" mattered as much as the "where", however. Had the requirement been long-term memory alone, the central option could have been as easy as "just deploy Mem0". The requirements went beyond what any single engine exposes though: a unified layer where short-, medium- and long-term memory behave as one integrated contract, server-side scope enforcement, and telemetry on every operation. That abstraction layer is what ships as `kaos-memory`, a single Python package providing both sides of the wire: the runtime imports the thin client, the `MemoryStore` deployment runs the service, and both import one shared contract so the two cannot drift apart (we will cover the package in more detail in the integration section below). Here's the visual overview:
 
 ```mermaid
 flowchart TB
@@ -322,13 +324,7 @@ flowchart TB
 ```
 
 
-The third design decision was the failure contract: namely, what should happen if the memory service is unreachable? 
-
-The decision here was that **Memory should be an augmentation and not a hard dependency**, so a memory outage should degrade an agent and never stop it.
-
-That means that in KAOS, **recall is always soft**. If the long-term tier is unavailable, recall returns short-term-only context and the turn proceeds, so a recall failure can never fail a user's request (configurable with the failure mode).
-
-And the fourth design decision was the architectural abstraction of "Memory" as an infrastructure component in Kubernetes. In this case it meant codifying the `MemoryStore` resources into a specification that is described as follows:
+And the third design decision was the architectural abstraction of "Memory" as an infrastructure component in Kubernetes. In this case it meant codifying the `MemoryStore` resources into a specification that is described as follows:
 
 ```yaml
 apiVersion: kaos.tools/v1alpha1
@@ -362,9 +358,11 @@ To provide the intuition on the one we landed on, here's what these mean:
 * `extraction.concurrency`: the bound on background extraction workers.
 * `defaultFailureMode`: `soft` or `strict` write behaviour for bound agents, overridable per agent.
 
-And the fifth design decision was how all of this ships as code. The whole memory layer is packaged as `kaos-memory`, a single Python package that provides both the client and the server: the runtime imports the thin client, the `MemoryStore` deployment runs the service, and both import one shared wire contract so the two cannot drift apart. We will cover the package in more detail in the integration section below.
-
-These were some of the major design decisions worth highlighting, there were quite a lot of others but I'd never finish the blog post if we cover all of them. A few honorable mentions are: wrapping Mem0 as a library inside the service instead of running the stock Mem0 server, which provides none of the tiering, scope injection, or telemetry; serializing compaction through database advisory locks so multiple service replicas can fold the same session without double-folds; and shipping without a durable extraction queue, since the short-term tier is the recoverable source of truth and a queue is only worth building once measurement shows it is needed.
+These were some of the major design decisions worth highlighting, there were quite a lot of others but I'd never finish the blog post if we cover all of them. A few honorable mentions are: 
+* Treating memory as augmentation and not a hard dependency: recall is always soft, so a memory outage degrades an agent and never stops it (shown live in the example below)
+* Wrapping Mem0 as a library inside the service instead of running the stock Mem0 server
+* Serializing compaction through database locks so multiple service replicas can fold the same session without double-folds
+* Shipping without a durable extraction queue (for now), since the short-term tier is the recoverable source of truth and a queue is only worth building once needed
 
 Now that we have all the major pieces threaded together, we can now dive into a hands on example to show how it all works in practice.
 
