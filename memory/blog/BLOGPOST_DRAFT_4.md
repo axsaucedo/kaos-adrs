@@ -8,7 +8,9 @@ A number of dedicated memory layers have emerged (and continue emerging almost d
 
 Recently I spent some time extending the Kubernetes Agent Orchestration System (KAOS) to support multi-tiered memory persistence (aka short-, medium- and long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into an agentic system, so I thought it would be useful to compile all the learnings, design choices and examples. 
 
-Hopefully this post is useful for anyone looking to do this on their own project. My objective here is to make the memory layer BORING, so that the agents can continue to be the fun part.
+Hopefully this post is useful for anyone looking to do this on their own project. My objective:
+
+> Let's make the memory layer BORING, so that the agents can continue to be the fun part.
 
 This post includes the research findings from exploring ~38 tools, including tools like [Mem0](https://github.com/mem0ai/mem0), [Zep/Graphiti](https://github.com/getzep/graphiti), [Letta (MemGPT)](https://www.letta.com/), [Cognee](https://github.com/topoteretes/cognee), [Memobase](https://github.com/memodb-io/memobase), [Redis Agent Memory Server](https://github.com/redis/agent-memory-server), as well as native implementations in [OpenAI's products](https://openai.com/index/memory-and-new-controls-for-chatgpt/), [Claude](https://claude.com/blog/memory), [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview), [CrewAI](https://docs.crewai.com/introduction), and [Google ADK](https://google.github.io/adk-docs/), among many others.
 
@@ -269,7 +271,14 @@ The part of the package I would call genuinely novel relative to the ecosystem i
 
 Now that we have all the separate pieces, it's required make a decision on how do we stitch them together; as part of this, I needed to go through several architectural design choices. We'll go through a few of these in this section.
 
-The first design decision was, which data store should we go for? Should we go for FAISS? Chroma? pgvector? Milvus? Pinecone? The answer did not need to be a single store, because the requirements differ between a local development loop and a production fleet. For development the priority is zero external dependencies, so the store should be embeddable in the service container. For production the priorities are durability, horizontal scaling, and reusing infrastructure you already operate. This ruled out SaaS-only options (Pinecone), library-only indexes with no persistence or filtering story (FAISS), and dedicated clusters that would add heavy new infrastructure (Milvus, Weaviate), and landed on two storage modes with the same service code on top of both:
+The first design decision was, which data store should we go for? Should we go for FAISS? Chroma? pgvector? Milvus? Pinecone? 
+
+The answer did not need to be a single store, because the requirements differ between a local development loop and a production fleet. 
+
+* ***For development** the priority is zero external dependencies, so the store should be embeddable in the service container. 
+* **For production** the priorities are durability, horizontal scaling, and reusing infrastructure you already operate. 
+
+This ruled out SaaS-only options (Pinecone), library-only indexes with no persistence or filtering story (FAISS), and dedicated clusters that would add heavy new infrastructure (Milvus, Weaviate), and landed on two storage modes with the same service code on top of both:
 
 ```mermaid
 flowchart LR
@@ -428,13 +437,15 @@ curl -s http://localhost:18080/v1/recall \
 
 ```json
 {
+  "facts": [],
   "short_term": {
     "recent": [
       ["user", "My favourite deployment port is 8080"],
       ["assistant", "Noted, your favourite deployment port is 8080."]
     ]
   },
-  "long_term": {"results": []}
+  "medium_term": {"summary": ""},
+  "degraded": false
 }
 ```
 
@@ -487,7 +498,14 @@ The skeleton shows the load-bearing choices: recall wrapped so failure degrades 
 
 What it deliberately does not show, and what you must add before this becomes a production dependency: server-side scope enforcement, the erasure fan-out across tiers, the soft/strict write contract, OpenTelemetry on every operation, and a service boundary so a fleet shares one memory instead of one process hoarding it.
 
-Alternatively, you can adopt the packaged version of exactly this design: `pip install kaos-memory` gives you the `MemoryServiceClient` against a running MemoryStore service, with all of the above already handled:
+Alternatively, you can adopt the packaged version of exactly this design, which handles all of the above already:
+
+```bash
+pip install kaos-memory                  # wire contract + MemoryServiceClient
+pip install "kaos-memory[pydantic-ai]"   # + runtime adapters and the memory toolset
+```
+
+The core install gives you the `MemoryServiceClient` against a running MemoryStore service:
 
 ```python
 from kaos_memory import MemoryServiceClient, Scope
@@ -501,6 +519,28 @@ await client.write(scope, turns=[("user", user_message), ("assistant", response)
 ```
 
 Recall degrades to empty context on failure instead of raising, writes honour the soft or strict failure mode, and every call emits the `kaos.memory.*` telemetry spans covered in the observability post.
+
+If your agent runs on Pydantic AI, the `[pydantic-ai]` extra adds the helpers that wire the pieces from this post together: server-side scope derivation, the explicit memory tools, and full-fidelity history replay.
+
+```python
+from kaos_memory.pydantic_ai import (
+    scope_from_deps, build_memory_toolset, reconstruct_message_history,
+)
+from kaos_memory.pydantic_ai.toolset import MemoryTools
+
+# derive the scope from the authenticated request context; by design
+# there is no way for the model or a tool to pass a scope in
+scope = scope_from_deps(deps, level="group", agent_identity=agent_identity)
+
+# expose save_memory / search_memory to the model (the tools carry no scope argument)
+toolset = build_memory_toolset(MemoryTools.ALL, scope.level, agent_identity)
+
+# rebuild message history from the short-term turns plus the rolling summary,
+# so overflow is represented by summarization instead of truncation
+history = reconstruct_message_history(recalled.short_term.recent, recalled.medium_term.summary)
+
+result = await agent.run(user_message, message_history=history, toolsets=[toolset])
+```
 
 ## When NOT to Add Long-Term Memory
 
