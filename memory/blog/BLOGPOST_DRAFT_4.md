@@ -155,11 +155,11 @@ For Mem0, this meant working on the bridge to close some of the gaps, particular
 * Bundle up the kubernetes packaging to ensure high availability and scalability as a distributed service.
 * Bridge the short- and medium-term memory with a native integration with the Pydantic AI server that we have built as part of KAOS.
 
-initially had some potential risks as they do gate some features behind the "enterprise product" (such as [...]), however it seems that the division was clean enough that these would make sense to design and build them at the KAOS infrastructure level.
+Based on these initial decisions we were able to proceed with the architectural choices at the end-to-end agent level.
 
-## The Three Tiers
+## Designing our Memory Architecture: The Three Tiers
 
-Here is the memory architecture that KAOS converged on. An agent binds to a store and talks to one service, and behind that one contract sit three tiers with very different characters:
+As we followed up from the learnings KAOS converged on. An agent binds to a store and talks to one service, and behind that one contract sit three tiers with very different characters:
 
 ```mermaid
 graph LR
