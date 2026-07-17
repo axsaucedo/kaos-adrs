@@ -263,12 +263,6 @@ There are two interesting caveats that also become important when we consider ac
 
 Now that we have sorted the tiers and the access scopes, we can move forward to the end-to-end platform implementation.
 
-## The kaos-memory Package
-
-Before assembling everything on Kubernetes, it is worth introducing the piece that carries the design above as code: the `kaos-memory` Python package. It is pip-installable and deliberately layered behind extras. The core carries the wire contract and the `MemoryServiceClient`, `[service]` adds Mem0, the vector store, and the FastAPI service, and `[pydantic-ai]` adds the runtime adapters, server-side scope derivation, and the memory toolset. Because the client and the service import the one shared contract, the two cannot drift apart.
-
-The part of the package I would call genuinely novel relative to the ecosystem is that **medium-term memory is a first-class tier**. The two-tier (working plus long-term) split is the industry norm, and the rolling, versioned session summary that keeps continuity across compaction is a concept the surveyed engines do not ship. The package owns the short- and medium-term tiers relationally, wraps Mem0 for the long-term tier, and exposes all three behind the single recall, write, and forget contract used throughout this post.
-
 ## Kubernetes Enters the Picture: Memory as Infrastructure
 
 Now that we have all the separate pieces, it's required make a decision on how do we stitch them together; as part of this, I needed to go through several architectural design choices. We'll go through a few of these in this section.
@@ -368,7 +362,9 @@ To provide the intuition on the one we landed on, here's what these mean:
 * `extraction.concurrency`: the bound on background extraction workers.
 * `defaultFailureMode`: `soft` or `strict` write behaviour for bound agents, overridable per agent.
 
-These were some of the major design decisions worth highlighting, there were quite a lot of others but I'd never finish the blog post if we cover all of them. A few honorable mentions are: the split of what lives client-side versus server-side, where the runtime is a thin client and all tiering, folding, scope enforcement, and telemetry live in the service; wrapping Mem0 as a library inside the service instead of running the stock Mem0 server, which provides none of the tiering, scope injection, or telemetry; serializing compaction through database advisory locks so multiple service replicas can fold the same session without double-folds; and shipping without a durable extraction queue, since the short-term tier is the recoverable source of truth and a queue is only worth building once measurement shows it is needed.
+And the fifth design decision was how all of this ships as code. The whole memory layer is packaged as `kaos-memory`, a single Python package that provides both the client and the server: the runtime imports the thin client, the `MemoryStore` deployment runs the service, and both import one shared wire contract so the two cannot drift apart. We will cover the package in more detail in the integration section below.
+
+These were some of the major design decisions worth highlighting, there were quite a lot of others but I'd never finish the blog post if we cover all of them. A few honorable mentions are: wrapping Mem0 as a library inside the service instead of running the stock Mem0 server, which provides none of the tiering, scope injection, or telemetry; serializing compaction through database advisory locks so multiple service replicas can fold the same session without double-folds; and shipping without a durable extraction queue, since the short-term tier is the recoverable source of truth and a queue is only worth building once measurement shows it is needed.
 
 Now that we have all the major pieces threaded together, we can now dive into a hands on example to show how it all works in practice.
 
@@ -575,9 +571,9 @@ The agent picks its memory back up on the next turn, with no restarts and no cod
 
 Memory behaving as augmentation is precisely this: the difference between an incident and a status condition. As a closing note on this example, running it end-to-end for this post surfaced a real bug (a race in the CLI's port-forward startup that could silently swallow connection failures), which is its own small lesson: worked examples that actually run are also a test suite for your product.
 
-## How You Could Build the Basics Yourself
+## How You Can Integrate It In Your Agent From Scratch
 
-As with the autonomous loop, you don't need a framework to understand the minimal shape. This is not the KAOS implementation itself (that is the `kaos-memory` package introduced earlier), it is the framework-agnostic skeleton of the same design, so the load-bearing choices are visible in ~30 lines. Tiered memory is a wrapper around the agent run:
+As with the autonomous loop, you don't need a framework to understand the minimal shape. Let's first look at the framework-agnostic skeleton of the design from this post, so the load-bearing choices are visible in ~30 lines, and then at the packaged version you can integrate directly. Tiered memory is a wrapper around the agent run:
 
 ```python
 async def run_with_memory(session_id, user_message, memory, agent):
@@ -608,12 +604,14 @@ The skeleton shows the load-bearing choices: recall wrapped so failure degrades 
 
 What it deliberately does not show, and what you must add before this becomes a production dependency: server-side scope enforcement, the erasure fan-out across tiers, the soft/strict write contract, OpenTelemetry on every operation, and a service boundary so a fleet shares one memory instead of one process hoarding it.
 
-Alternatively, you can adopt the packaged version of exactly this design, which handles all of the above already:
+Alternatively, you can adopt the packaged version of exactly this design: the `kaos-memory` package mentioned in the design section. It is pip-installable and deliberately layered behind extras. The core carries the wire contract and the `MemoryServiceClient`, `[service]` adds Mem0, the vector store, and the FastAPI service, and `[pydantic-ai]` adds the runtime adapters, server-side scope derivation, and the memory toolset:
 
 ```bash
 pip install kaos-memory                  # wire contract + MemoryServiceClient
 pip install "kaos-memory[pydantic-ai]"   # + runtime adapters and the memory toolset
 ```
+
+The part of the package I would call genuinely novel relative to the ecosystem is that **medium-term memory is a first-class tier**. The two-tier (working plus long-term) split is the industry norm, and the rolling, versioned session summary that keeps continuity across compaction is a concept the surveyed engines do not ship. The package owns the short- and medium-term tiers relationally, wraps Mem0 for the long-term tier, and exposes all three behind the single recall, write, and forget contract used throughout this post.
 
 The core install gives you the `MemoryServiceClient` against a running MemoryStore service:
 
