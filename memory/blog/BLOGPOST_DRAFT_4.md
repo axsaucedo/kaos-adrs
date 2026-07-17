@@ -242,20 +242,20 @@ This scope model is probably the obvious choice; the trickier question is how do
 
 1. **Many groups inside one MemoryStore.** One store holds the memories of several groups at once. This sounds efficient, however it means building and operating a whole group-management layer: an API to create and delete groups and to add and remove members, a group key on every record, per-group quotas, and a single store whose failure affects every group in it.
 2. **One group per MemoryStore.** The store itself is the group: whichever agents are bound to the same store share it, so membership is just the existing binding and no new API is needed. The cost is that every group needs its own store deployment, and sharing across two groups means binding to a second store. 
-3. *Hierarchical scope paths.** A richer model where scopes are nested paths (for example `org:team:agent`) and agents share memory up to the point where their paths diverge. Every version of this I drafted ended up re-creating an authorization system that the two simpler options already covered.
+3. **Hierarchical scope paths.** A richer model where scopes are nested paths (for example `org:team:agent`) and agents share memory up to the point where their paths diverge. Every version of this I drafted ended up re-creating an authorization system that the two simpler options already covered.
 
 Although the most intuitive choice initially could be the first one, interestingly enough the second model is the one that most (if not all) managed platforms expose. A few examples:
-* [Mem0 platform:](https://docs.mem0.ai/platform/platform-vs-oss) TODO
-* [Vertex Memory Bank](https://docs.cloud.google.com/agent-builder/agent-engine/memory-bank/overview) Provisions one [TODO] per Agent Engine instance, with exact-scope-filtered partitions inside [TODO: provide slightly more coheisve sentence]
-* [Zep Cloud](https://www.getzep.com/platform/graphiti/): TODO
+* [Mem0 platform](https://docs.mem0.ai/platform/platform-vs-oss): A project is the container that memories cannot cross; API keys are scoped to a project, and the user and agent partitions live within it.
+* [Vertex Memory Bank](https://docs.cloud.google.com/agent-builder/agent-engine/memory-bank/overview): Provisions one Memory Bank per Agent Engine instance, and within it memories are partitioned by scope, with retrieval only returning memories whose scope exactly matches the request.
+* [Zep Cloud](https://www.getzep.com/platform/graphiti/): Each subject (a user, or a group via their group-graph API) gets its own isolated context graph, and the cloud platform is the control plane that manages millions of them.
 
 Based on this, I decided to go for option 2 as well. This means that the four scope levels are supported via the same `MemoryStore`, and are backed by a multi-tenant database layer.
 
 There are two interesting caveats that also become important when we consider access control in these memory choices:
 
-* **Post-retrieval filtering**: Some database engines apply scope filters after the retrieval step, which means that in some cases a query expecting a number of results may return less than expected. This is a known consideration on [pgvector as it is post-filters by default](https://dev.to/franckpachot/no-pre-filtering-in-pgvector-means-reduced-ann-recall-1aa1) ; similarly this is why engines like [Qdrant filters inside the index traversal](https://qdrant.tech/documentation/manage-data/multitenancy/).  **To mitigate this**, [TODO]
+* **Post-retrieval filtering**: Some database engines apply scope filters after the retrieval step, which means that in some cases a query expecting a number of results may return less than expected. This is a known consideration on [pgvector as it post-filters by default](https://dev.to/franckpachot/no-pre-filtering-in-pgvector-means-reduced-ann-recall-1aa1), and it is why engines like [Qdrant filter inside the index traversal](https://qdrant.tech/documentation/manage-data/multitenancy/). **To mitigate this**, I validated the pre-filtering behaviour on both Chroma and pgvector before committing to the design.
 * **Security Attack Surfaces**: Interesting research such as [AgentPoison](https://arxiv.org/abs/2407.12784)  show the impact of poisoning memory (ie 0.1% poisoned memory yields over 80% attack success), as well as [MINJA](https://arxiv.org/abs/2503.03704) which shows that an attacker needs no write access at all, because if the agent writes its own memory from conversations then every user is a write path. **To mitigate this**, KAOS  derives the scope server-side from the authenticated agent identity, fail-closed, and never from model- or tool-supplied arguments.
-* **Right to Erasure**: A single `forget` operation fans out across all three tiers, deleting the short-term rows, the summaries, and the scope-filtered long-term facts in one pass. It was important to be able to address the compliance challenge of "delete everything you know about this user" with one operation. **To mitigate this**, [TODO: restructure this bullet like the others on content and complete]
+* **Right to Erasure**: Compliance requirements such as GDPR mean you must be able to answer "delete everything you know about this user" reliably, and in a multi-tier design the same information lives in several derived forms at once (raw turns, summaries, extracted facts, and their embeddings), so deleting from one tier is not enough. **To mitigate this**, KAOS implements `forget` as a single operation that fans out across all three tiers in one pass, deleting the short-term rows, the summaries, and the scope-filtered long-term facts. Note this is destruction, which is different from supersession, where facts are merely marked invalid but kept for history.
 
 Now that we have sorted the tiers and the access scopes, we can move forward to the end-to-end platform implementation.
 
@@ -521,30 +521,3 @@ The extraction models and retrieval tricks will keep improving underneath you, a
 
 If your memory system is boring (a store outage is a degraded condition instead of an incident, "whose memory is this?" has a structural answer, and deletion is one operation) then your agents get to be the interesting part.
 
----
-
-### Appendix: Quick Checklist
-
-**Tiers**
-- [ ] short-term window bounded by a token budget
-- [ ] rolling digest stored relationally and injected whole, never indexed into the vector store
-- [ ] long-term facts extracted in the background, deduplicated, scope-keyed
-- [ ] raw turns retained as the durable source of truth, with projections recomputable
-
-**Scoping**
-- [ ] scope derived server-side from authenticated identity and never from model or tool arguments
-- [ ] fail-closed behaviour where an unresolvable scope fails instead of widening
-- [ ] scope filter applied inside the vector query (pre-filtered)
-- [ ] recalled memory treated as untrusted data with provenance
-- [ ] physical isolation available by deploying separate stores
-
-**Degradation**
-- [ ] recall is always soft, falling back to short-term-only
-- [ ] write failure mode explicit (soft with retry, or strict surfacing)
-- [ ] memory outage degrades serving agents and never removes them
-
-**Operations**
-- [ ] extraction and folding off the response path
-- [ ] memory's LLM and embedding calls routed through the same model gateway as agents
-- [ ] every memory operation emits telemetry (see the observability post)
-- [ ] erasure fans out across all tiers and derived projections in one operation
