@@ -8,7 +8,7 @@ A number of dedicated memory layers have emerged (and continue emerging almost d
 
 Recently I spent some time extending the Kubernetes Agent Orchestration System (KAOS) to support multi-tiered memory persistence (aka short-, medium- and long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into an agentic system, so I thought it would be useful to compile all the learnings, design choices and examples. 
 
-Hopefully this post is useful for anyone looking to do this on their own project.
+Hopefully this post is useful for anyone looking to do this on their own project. My objective here is to make the memory layer BORING, so that the agents can continue to be the fun part.
 
 This post includes the research findings from exploring ~38 tools, including tools like [Mem0](https://github.com/mem0ai/mem0), [Zep/Graphiti](https://github.com/getzep/graphiti), [Letta (MemGPT)](https://www.letta.com/), [Cognee](https://github.com/topoteretes/cognee), [Memobase](https://github.com/memodb-io/memobase), [Redis Agent Memory Server](https://github.com/redis/agent-memory-server), as well as native implementations in [OpenAI's products](https://openai.com/index/memory-and-new-controls-for-chatgpt/), [Claude](https://claude.com/blog/memory), [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview), [CrewAI](https://docs.crewai.com/introduction), and [Google ADK](https://google.github.io/adk-docs/), among many others.
 
@@ -259,11 +259,34 @@ There are two interesting caveats that also become important when we consider ac
 
 Now that we have sorted the tiers and the access scopes, we can move forward to the end-to-end platform implementation.
 
+## The kaos-memory Package
+
+Before assembling everything on Kubernetes, it is worth introducing the piece that carries the design above as code: the `kaos-memory` Python package. It is pip-installable and deliberately layered behind extras. The core carries the wire contract and the `MemoryServiceClient`, `[service]` adds Mem0, the vector store, and the FastAPI service, and `[pydantic-ai]` adds the runtime adapters, server-side scope derivation, and the memory toolset. Because the client and the service import the one shared contract, the two cannot drift apart.
+
+The part of the package I would call genuinely novel relative to the ecosystem is that **medium-term memory is a first-class tier**. The two-tier (working plus long-term) split is the industry norm, and the rolling, versioned session summary that keeps continuity across compaction is a concept the surveyed engines do not ship. The package owns the short- and medium-term tiers relationally, wraps Mem0 for the long-term tier, and exposes all three behind the single recall, write, and forget contract used throughout this post.
+
 ## Kubernetes Enters the Picture: Memory as Infrastructure
 
 Now that we have all the separate pieces, it's required make a decision on how do we stitch them together; as part of this, I needed to go through several architectural design choices. We'll go through a few of these in this section.
 
-The first design decision was, which data store should we go for? Should we go for Faais? Chroma? Pgvector? Milvus? Pinecone? [TODO add a small section here that shows the options for local and prod, and outlines it, as well as a simple graph that shows this too]
+The first design decision was, which data store should we go for? Should we go for FAISS? Chroma? pgvector? Milvus? Pinecone? The answer did not need to be a single store, because the requirements differ between a local development loop and a production fleet. For development the priority is zero external dependencies, so the store should be embeddable in the service container. For production the priorities are durability, horizontal scaling, and reusing infrastructure you already operate. This ruled out SaaS-only options (Pinecone), library-only indexes with no persistence or filtering story (FAISS), and dedicated clusters that would add heavy new infrastructure (Milvus, Weaviate), and landed on two storage modes with the same service code on top of both:
+
+```mermaid
+flowchart LR
+  MS[MemoryStore service]
+  subgraph dev["local mode (development)"]
+    C["Chroma (embedded)<br/>long-term vectors"]
+    S["SQLite<br/>short + medium tiers"]
+    PVC[("one PersistentVolume")]
+    C --- PVC
+    S --- PVC
+  end
+  subgraph prod["external mode (production)"]
+    PG[("Postgres + pgvector<br/>all tiers, all durable state")]
+  end
+  MS --> dev
+  MS --> prod
+```
 
 The second design decision was, where the memory engine runs. Should it run runs **inside every agent** as a library? as a **side-car** next to every pod? or as a **central service component**?. 
 
@@ -326,17 +349,21 @@ spec:
 ```
 
 To provide the intuition on the one we landed on, here's what these mean:
-* `storage.type`: provides the `local` type for dev and `external` for prod
-* `storage.internal/external.provider`: As of now it supports postgres/pgvector for external, and Chroma/SQlite 
-* [TODO the rest as bullet point] storage modes cover the dev-to-prod arc: `local` packs embedded Chroma plus a SQLite short-term table into one container on a PersistentVolume (a single-replica, zero-external-dependency on-ramp), while `external` puts long-term vectors *and* the short-term table on the same Postgres, which makes the service stateless and lets it run two replicas behind a disruption budget. ...`ModelAPI` resources ...
+* `storage.type`: provides the `local` type for dev and `external` for prod.
+* `storage.local.provider` / `storage.external.provider`: embedded Chroma plus SQLite for local (one container on a PersistentVolume, single replica); Postgres with pgvector for external, referenced through a `connectionSecretRef` as a bring-your-own database.
+* `storage.external.embeddingDims`: the vector dimensions of the embedding model.
+* `replicas`: defaults by mode, 1 for local (the volume is single-writer) and 2 for external (the service is stateless over Postgres, guarded by a disruption budget).
+* `models.summarization` / `models.embedding`: references to `ModelAPI` resources instead of provider keys, so the memory system's LLM calls go through the same gateway, quotas, and observability as every other component.
+* `extraction.concurrency`: the bound on background extraction workers.
+* `defaultFailureMode`: `soft` or `strict` write behaviour for bound agents, overridable per agent.
 
-These were some of the major design decisions worth highlighting, there were quite a lot of others but I'd never finish the blog post if we cover all of them. A few honorable mentions are: [TODO: add a few others that are not covered, like also the design of the kaos-memory client python package and the choices of what goes in the server vs the client, the design of the memorystore server and how it wraps the three tiers (including mem0), also linked to that the choice of using the vanilla mem0 server vs creating a new one, etc- find others worth calling out.]
+These were some of the major design decisions worth highlighting, there were quite a lot of others but I'd never finish the blog post if we cover all of them. A few honorable mentions are: the split of what lives client-side versus server-side, where the runtime is a thin client and all tiering, folding, scope enforcement, and telemetry live in the service; wrapping Mem0 as a library inside the service instead of running the stock Mem0 server, which provides none of the tiering, scope injection, or telemetry; serializing compaction through database advisory locks so multiple service replicas can fold the same session without double-folds; and shipping without a durable extraction queue, since the short-term tier is the recoverable source of truth and a queue is only worth building once measurement shows it is needed.
 
 Now that we have all the major pieces threaded together, we can now dive into a hands on example to show how it all works in practice.
 
 ## Worked Example: Memory Across Sessions
 
-Let's now take a practical example where we show an end-to-end flow of what memory-enabled KAOS agents get for free. We will be setting up the following example, which consists of [TODO: add brief/succint description of the compnets in the graph].
+Let's now take a practical example where we show an end-to-end flow of what memory-enabled KAOS agents get for free. We will be setting up the following example, which consists of a `ModelAPI` (returning mocked responses so the run is deterministic), a `local`-mode `MemoryStore` (embedded Chroma plus SQLite on a PersistentVolume, no external database), and an `Agent` bound to the store with the `group` scope and the memory tools enabled.
 
 ```mermaid
 graph LR
@@ -369,42 +396,7 @@ spec:
       failureMode: soft
 ```
 
-[TODO: we never covered what the tools:all is, this is something definitely worth covering. Also currently the agent above has an automatic recall and flush, but we are activating the tools, or is that what you mean by "automatic recall?" Would be worth just clarifying the terminology on for example flush happening automatially vs triggered via tool]
-
-Session 1: tell the agent a fact. This is an ordinary chat request, and the runtime persists the conversation to the central store after the run:
-
-```bash
-kaos agent invoke memory-agent -m "My favourite deployment port is 8080"
-```
-
-Now verify the integration by asking the **memory service** directly, instead of trusting the agent's word for it:
-
-[TODO: We made a comment earlier about how memory poisoning is something that we are addressing as it's all server side, but here we are sending a request that is defined from the client side; which one is it?]
-
-```bash
-kubectl port-forward svc/memorystore-shared-memory 18080:8080 &
-curl -s http://localhost:18080/v1/recall \
-  -H 'content-type: application/json' \
-  -d '{"scope": {"level": "group"}, "query": "deployment port", "include_short_term": true}'
-```
-
-[TODO: For all commands include explicitly the output, including above and below]
-
-The response contains the turn we just sent, which proves the write path works. 
-
-Then open a **completely new session**:
-
-```bash
-kaos agent invoke memory-agent -m "What deployment port did I choose earlier?"
-```
-
-The automatic recall pulls the earlier turns from the store and injects them before the model runs, so the agent answers from memory it was never handed in this session. 
-
-Recall from the service again and both sessions' turns are there, giving one cross-session memory read and written by both.
-
-On top of that automatic baseline, the `tools` knob hands the *model* explicit memory tools:
-
-[TODO: Ok it seems that here it's being explained, let's pull this to the top, and make it more explicit as otherwise it's magic when we are walkting through the example, instead we should explain the mechanics first and then the examples can reference them]
+Before running it, it is worth separating the two mechanisms this config enables. Binding a store applies an **automatic baseline** unconditionally: the runtime recalls relevant memory and injects it before every run, and flushes the conversation for persistence and extraction after every run, with no involvement from the model. The `tools` field layers **explicit, model-driven tools** on top of that baseline:
 
 | `tools` | Exposed | The model can… |
 | --- | --- | --- |
@@ -413,13 +405,58 @@ On top of that automatic baseline, the `tools` knob hands the *model* explicit m
 | `write` | `save_memory` | distil and save a durable fact on demand |
 | `all` | both | save and search explicitly |
 
-Note two deliberate conservatisms here. The tools are **additive and off by default**, and that default is now empirically backed, since [a 2026 systematic study of memory poisoning](https://arxiv.org/abs/2606.04329) found that the agents which write to and retrieve from memory most aggressively are the most exploitable. And the tools do **not** take a scope, because the model supplies queries and content while the service derives the scope from the agent's identity, the fail-closed rule from earlier applied at the tool boundary where it matters most.
+So in the walkthrough below, the cross-session recall works even with `tools` unset; the tools are there for when the model should decide what is worth remembering. Note two deliberate conservatisms in this design. The tools are **additive and off by default**, and that default is now empirically backed, since [a 2026 systematic study of memory poisoning](https://arxiv.org/abs/2606.04329) found that the agents which write to and retrieve from memory most aggressively are the most exploitable. And the tools do **not** take a scope, because the model supplies queries and content while the service derives the scope from the agent's identity, the fail-closed rule from earlier applied at the tool boundary where it matters most.
+
+Session 1: tell the agent a fact. This is an ordinary chat request, and the runtime persists the conversation to the central store after the run:
+
+```bash
+kaos agent invoke memory-agent -m "My favourite deployment port is 8080"
+```
+
+```
+Noted, your favourite deployment port is 8080.
+```
+
+Now verify the integration by asking the **memory service** directly, instead of trusting the agent's word for it:
+
+```bash
+kubectl port-forward svc/memorystore-shared-memory 18080:8080 &
+curl -s http://localhost:18080/v1/recall \
+  -H 'content-type: application/json' \
+  -d '{"scope": {"level": "group"}, "query": "deployment port", "include_short_term": true}'
+```
+
+```json
+{
+  "short_term": {
+    "recent": [
+      ["user", "My favourite deployment port is 8080"],
+      ["assistant", "Noted, your favourite deployment port is 8080."]
+    ]
+  },
+  "long_term": {"results": []}
+}
+```
+
+The response contains the turn we just sent, which proves the write path works. Note the distinction between this request and the security discussion earlier: the curl here is an operator's debug view, run from inside the cluster boundary with a port-forward, at the same trust level as `kubectl` itself. The fail-closed scope rule applies to the *model channel*: an agent's tool call can never choose its scope, because the runtime derives it server-side from the agent identity. Direct access to the service is governed by the cluster network (NetworkPolicy, and the gateway when enabled), not by the model.
+
+Then open a **completely new session**:
+
+```bash
+kaos agent invoke memory-agent -m "What deployment port did I choose earlier?"
+```
+
+```
+You chose port 8080 as your favourite deployment port.
+```
+
+The automatic recall pulls the earlier turns from the store and injects them before the model runs, so the agent answers from memory it was never handed in this session. 
+
+Recall from the service again and both sessions' turns are there, giving one cross-session memory read and written by both.
 
 ## How You Could Build the Basics Yourself
 
-As with the autonomous loop, you don't need a framework to understand the minimal shape. Tiered memory is a wrapper around the agent run:
-
-[TODO: is this using the KAOS-memory? We actually published the kaos-memory package, I would say that there should be an assessment of where we actually introduce it, as I would like to actually talk about the package itself, and also the unique pieces about it, for example that it supports the concept of medium-term memory. That is already something new. Then we can show here on the "building the basics yourself" could just use the kaos memory; and here it could be ore on how you can integate it into your agent.]
+As with the autonomous loop, you don't need a framework to understand the minimal shape. This is not the KAOS implementation itself (that is the `kaos-memory` package introduced earlier), it is the framework-agnostic skeleton of the same design, so the load-bearing choices are visible in ~30 lines. Tiered memory is a wrapper around the agent run:
 
 ```python
 async def run_with_memory(session_id, user_message, memory, agent):
@@ -449,6 +486,21 @@ async def run_with_memory(session_id, user_message, memory, agent):
 The skeleton shows the load-bearing choices: recall wrapped so failure degrades instead of raising, the digest and facts injected as one structured block instead of fake conversation turns, the cheap verbatim append on the hot path, and the expensive fold-and-extract pushed to the background the moment the token budget trips.
 
 What it deliberately does not show, and what you must add before this becomes a production dependency: server-side scope enforcement, the erasure fan-out across tiers, the soft/strict write contract, OpenTelemetry on every operation, and a service boundary so a fleet shares one memory instead of one process hoarding it.
+
+Alternatively, you can adopt the packaged version of exactly this design: `pip install kaos-memory` gives you the `MemoryServiceClient` against a running MemoryStore service, with all of the above already handled:
+
+```python
+from kaos_memory import MemoryServiceClient, Scope
+
+client = MemoryServiceClient(endpoint="http://memorystore-shared-memory:8080")
+scope = Scope(level="group")
+
+recalled = await client.recall(scope, query=user_message, include_short_term=True)
+response = await agent.run(recalled, user_message)
+await client.write(scope, turns=[("user", user_message), ("assistant", response)])
+```
+
+Recall degrades to empty context on failure instead of raising, writes honour the soft or strict failure mode, and every call emits the `kaos.memory.*` telemetry spans covered in the observability post.
 
 ## When NOT to Add Long-Term Memory
 
@@ -513,7 +565,7 @@ The context window is the real constraint and turns vary wildly in size, which m
 
 "Forget everything about this user" must be one operation that fans out across every tier and every derived projection, and it is a different operation from temporal supersession, which preserves history. Retrofitting either across a live system is far harder than designing them in.
 
-## Closing: Boring Memory
+## Closing Thoughts: Making Memory Boring
 
 In the observability post I argued the goal is *boring debugging*, and in the autonomy post that the loop is easy while the operating model is the work. Memory completes the trilogy, and the shape of the lesson is the same.
 
