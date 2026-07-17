@@ -1,4 +1,6 @@
-_A practical guide to memory tiers, multi-tenant scoping, engine selection, and Kubernetes-native memory infrastructure, using KAOS as the worked example._
+# Agentic Memory: A Journey Across the Galaxy
+
+_How agents remember: building short-, medium- and long-term memory that scales across users, agents, and groups._
 
 ---
 
@@ -370,20 +372,23 @@ These were some of the major design decisions worth highlighting, there were qui
 
 Now that we have all the major pieces threaded together, we can now dive into a hands on example to show how it all works in practice.
 
-## Worked Example: Memory Across Sessions
+## Worked Example: Memory Across Sessions, Scopes, and Failures
 
-Let's now take a practical example where we show an end-to-end flow of what memory-enabled KAOS agents get for free. We will be setting up the following example, which consists of a `ModelAPI` (returning mocked responses so the run is deterministic), a `local`-mode `MemoryStore` (embedded Chroma plus SQLite on a PersistentVolume, no external database), and an `Agent` bound to the store with the `group` scope and the memory tools enabled.
+Let's now take a practical end-to-end example that exercises the three claims this post has been making: that memory persists across sessions automatically, that scopes actually isolate, and that a memory outage degrades an agent without stopping it. The setup consists of a `ModelAPI`, a `local`-mode `MemoryStore` (embedded Chroma plus SQLite on a PersistentVolume, no external database), and two `Agent`s bound to the same store with different scopes.
 
 ```mermaid
 graph LR
-    U1[Session 1: user message] --> A[Agent]
-    A -->|automatic flush| M[(MemoryStore)]
-    U2[Session 2: new session] --> A
-    M -->|automatic recall| A
-    A --> R[Earlier facts recalled ✓]
+    subgraph store["MemoryStore: shared-memory"]
+      G[("group partition")]
+      P[("agent partition")]
+    end
+    A1[Agent: memory-agent<br/>scope: group] -->|recall + flush| G
+    A2[Agent: private-agent<br/>scope: agent] -->|recall + flush| P
 ```
 
-Deploy a store and bind an agent to it (a `local`-mode store, so this runs on any cluster with no external database):
+### Part 1: Cross-Session Continuity
+
+Deploy a store and bind the first agent to it (a `local`-mode store, so this runs on any cluster with no external database):
 
 ```yaml
 apiVersion: kaos.tools/v1alpha1
@@ -464,6 +469,94 @@ You chose port 8080 as your favourite deployment port.
 The automatic recall pulls the earlier turns from the store and injects them before the model runs, so the agent answers from memory it was never handed in this session. 
 
 Recall from the service again and both sessions' turns are there, giving one cross-session memory read and written by both.
+
+### Part 2: Scope Isolation and the Right to Erasure
+
+The `group` scope above shares memory across every agent bound to the store. To see the isolation side, deploy a second agent bound to the *same* store, but with the default `agent` scope, so its memory is private to its own identity:
+
+```yaml
+apiVersion: kaos.tools/v1alpha1
+kind: Agent
+metadata:
+  name: private-agent
+spec:
+  modelAPI: memory-modelapi
+  model: gpt-4o-mini
+  config:
+    instructions: |
+      You are a helpful assistant with long-term memory.
+    memory:
+      type: remote
+      memoryStore: shared-memory
+      scope: agent
+      failureMode: soft
+```
+
+Ask it about the port from Part 1:
+
+```bash
+kaos agent invoke private-agent -m "What deployment port did I choose earlier?"
+```
+
+```
+I don't have any earlier context about a deployment port.
+```
+
+Both agents talk to the same service, the same database, and the same tables, however the service filters every operation by the owner key derived from each agent's identity, so the private agent cannot see the group's memory (and the group cannot see its). The same check against the service confirms the private partition is empty:
+
+```bash
+curl -s http://localhost:18080/v1/recall \
+  -H 'content-type: application/json' \
+  -d '{"scope": {"level": "agent", "agent_client_id": "kaos://agent/memory-example/private-agent"}, "query": "deployment port", "include_short_term": true}'
+```
+
+```json
+{"facts": [], "short_term": {"recent": []}, "medium_term": {"summary": ""}, "degraded": false}
+```
+
+Erasure is the other side of scoping, and it is one operation. A single `forget` erases everything the scope holds, across all three tiers:
+
+```bash
+curl -s http://localhost:18080/v1/forget \
+  -H 'content-type: application/json' \
+  -d '{"scope": {"level": "group"}}'
+```
+
+Recall the `group` scope again and it comes back empty, and the first agent no longer remembers the port on its next session:
+
+```bash
+kaos agent invoke memory-agent -m "What deployment port did I choose earlier?"
+```
+
+```
+I don't have a record of a deployment port from an earlier conversation.
+```
+
+### Part 3: Unplugging the Memory
+
+The failure contract from the Kubernetes section says a memory outage should degrade an agent and never stop it, and this is directly testable: delete the store out from under a running agent.
+
+```bash
+kubectl delete memorystore shared-memory
+kaos agent invoke memory-agent -m "Are you still there?"
+```
+
+```
+Yes, I'm here and ready to help.
+```
+
+The agent keeps serving without its memory, and instead of an outage the operator surfaces the state as a condition:
+
+```bash
+kubectl get agent memory-agent \
+  -o jsonpath='{.status.conditions[?(@.type=="MemoryDegraded")].status}'
+```
+
+```
+True
+```
+
+Re-apply the `MemoryStore`, wait for it to become `Ready`, and the agent picks its memory back up on the next turn, with no restarts and no code involved. Memory behaving as augmentation is precisely this: the difference between an incident and a status condition.
 
 ## How You Could Build the Basics Yourself
 
