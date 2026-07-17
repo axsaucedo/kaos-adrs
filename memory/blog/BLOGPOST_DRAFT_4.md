@@ -188,13 +188,11 @@ As we now locked the decision to go forward with Mem0 as the memory library, we 
 
 Based on the requirements, we needed to support three tiers: a short-term window, a medium-term summary, and long-term "facts". These are intuitively used as follows:
 
-| Tier | What it holds | When it updates | Backing |
-| --- | --- | --- | --- |
-| Short-term | verbatim turns of the live session, bounded by a token budget | every turn (cheap append) | relational rows |
-| Medium-term | one rolling summary per session, versioned so past summaries stay accessible | on compaction, when the window hits its token budget | relational rows, append-only |
-| Long-term | atomic facts extracted from evicted turns, keyed by scope, recalled semantically | in the background, after compaction | Mem0 into the vector store |
-
-The short- and medium-term behaviour is analogous to what you see in your coding agent: a token-budgeted context that triggers compaction into a summary when the limit is reached, a pattern that is [research backed as effective](https://arxiv.org/abs/2308.15022). The short-term window is also the fallback tier when the long-term store is unavailable. Long-term retrieval is ranked by relevance-importance-recency as per the [Stanford research shared previously](https://arxiv.org/abs/2304.03442).
+| Tier        | What it holds                                                                     | When it updates                                      | Backing                      |
+| ----------- | --------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------- |
+| Short-term  | The context window of the live session, bounded by a token budget                 | Every turn (cheap append)                            | Relational rows              |
+| Medium-term | Rolling summary per session, versioned so past summaries stay accessible          | On compaction, when the window hits its token budget | Relational rows, append-only |
+| Long-term   | Atomic facts extracted from context window, keyed by scope, recalled semantically | In the background, after compaction                  | Mem0 into the vector store   |
 
 Defining these tiers allow us to formalise the following design decisions:
 
@@ -205,7 +203,7 @@ Defining these tiers allow us to formalise the following design decisions:
 * Underneath all three tiers, the **raw turns are the source of truth** and everything else (summaries, facts, embeddings) is a recomputable projection, which is also what makes lossy extraction and fire-and-forget background processing acceptable.
 * Temporal (bi-temporal validity) and procedural (aka skill persistence) memory are deliberately **deferred** in its explicit form; but achievable through the long-term memory.
 
-This allowed the actual distributed design to land on a service that offers the short-, medium- and long-term memory tiers through a single coherent interface; the **"MemoryStore Service"**.
+ These definitions also allow us to design the singel coherent service that offers the short-, medium- and long-term memory tiers; the **"MemoryStore Service"**.
 
 ```mermaid
 graph LR
@@ -229,24 +227,24 @@ We will cover more on the `MemoryStore` service in the kubernetes section below,
 
 ## Scopes: Whose Memory Is It Anyway?
 
-Every memory operation in a multi-tenant fleet needs an answer to "whose memory?". The answer has to come from the structure of the system instead of from purely convention. 
+Every memory operation in a multi-tenant fleet needs an answer to "whose memory is it?". And the answer has to come from the design of the system components. 
 
-In KAOS the choice was to go for a deliberately flat model: a single `scope` value per agent, mapped by the service onto exactly one owner key, as follows:
+In KAOS the choice was to go for a deliberately flat model; a single `scope` value per agent, mapped by the service onto exactly one owner key, as follows:
 
-| `scope`   | Owner key                    | Who shares it                         |
-| --------- | ---------------------------- | ------------------------------------- |
-| `session` | `run_id = <session id>`      | Only this conversation session        |
+| `scope`           | Owner key                     | Who shares it                         |
+| ----------------- | ----------------------------- | ------------------------------------- |
+| `session`         | `run_id = <session id>`       | Only this conversation session        |
 | `agent` (default) | `agent_id = <agent identity>` | Only this agent.                      |
-| `user`    | `user_id = <user identity>`  | Every agent serving the same user.    |
-| `group`   | `agent_id = "kaos:group"`    | Every agent + user in the same group. |
+| `user`            | `user_id = <user identity>`   | Every agent serving the same user.    |
+| `group`           | `agent_id = "kaos:group"`     | Every agent + user in the same group. |
 
-This scope model is probably the obvious choice; the more interesting question is how to support the `group` scope. In other words, where does a group actually live? There were a few options:
+This scope model is probably the obvious choice; the trickier question is how do we enable these shared scopes. There were a few design options for this:
 
-* **Many groups inside one MemoryStore.** One store holds the memories of several groups at once. This sounds efficient, however it means building and operating a whole group-management layer: an API to create and delete groups and to add and remove members, a group key on every record, per-group quotas, and a single store whose failure affects every group in it. The managed platforms do work this way internally ([Mem0's platform organises memories into organisations and projects](https://docs.mem0.ai/platform/platform-vs-oss), and [Zep Cloud hosts millions of governed context graphs](https://www.getzep.com/platform/graphiti/)), however they have entire control planes dedicated to that job.
-* **One group per MemoryStore.** The store itself is the group: whichever agents are bound to the same store share it, so membership is just the existing binding and no new API is needed. The cost is that every group needs its own store deployment, and sharing across two groups means binding to a second store.
+* **Many groups inside one MemoryStore.** One store holds the memories of several groups at once. This sounds efficient, however it means building and operating a whole group-management layer: an API to create and delete groups and to add and remove members, a group key on every record, per-group quotas, and a single store whose failure affects every group in it.
+* **One group per MemoryStore.** The store itself is the group: whichever agents are bound to the same store share it, so membership is just the existing binding and no new API is needed. The cost is that every group needs its own store deployment, and sharing across two groups means binding to a second store. Notably, this is also the containment model the managed platforms expose: a [Mem0 platform project](https://docs.mem0.ai/platform/platform-vs-oss) is the container that memories cannot cross, a [Vertex Memory Bank](https://docs.cloud.google.com/agent-builder/agent-engine/memory-bank/overview) is provisioned one per Agent Engine instance with exact-scope-filtered partitions inside, and each [Zep Cloud subject gets its own context graph](https://www.getzep.com/platform/graphiti/). Their control planes exist to create and manage many such containers, which in KAOS is expressed by applying another `MemoryStore`.
 * **Hierarchical scope paths.** A richer model where scopes are nested paths (for example `org:team:agent`) and agents share memory up to the point where their paths diverge. Every version of this I drafted ended up re-creating an authorization system that the two simpler options already covered.
 
-Based on these tradeoffs, it was decided to go for one group per MemoryStore. This means that the four scope levels are supported via the same store.
+Based on the tradeoff on complexity on infrastructure vs features, I decided to go for one group per MemoryStore. This means that the four scope levels are supported via the same store.
 
 It is worth being precise about what "the same store" means for isolation. Within a single `MemoryStore`, isolation between scopes is *logical*: every scope's data lives in the same database, the same short-term and summary tables, and the same vector collection, and rows are separated only by a scope key that the service filters on for every operation. Physical isolation is achieved by deploying a separate `MemoryStore` per tenant: each store runs against its own storage (its own volume in local mode, its own database via its own connection secret in external mode), so tenant data is not co-located at all and no filtering defect can leak across tenants. There is no isolation-mode flag, only the choice of how many stores you run.
 
