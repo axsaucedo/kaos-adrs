@@ -90,6 +90,36 @@ Flagged non-citable: "95%/98–100% cross-tenant leakage" stats circulating in i
 
 Vendor-claimed, flag if used: Mem0 "Token Optimization Playbook" (single-pass extraction cuts write-time LLM calls 60–70%); Supermemory latency-budget anecdote (200ms→400ms as index grows).
 
+## 8. Framework-native memory and procedural skills (v1.1 pass, 2026-07-17)
+
+| Source | Link | Citable point |
+| --- | --- | --- |
+| LangGraph persistence docs | https://docs.langchain.com/oss/python/langgraph/persistence | Checkpointer = thread-scoped short-term; Store = cross-thread long-term; production guidance: database-backed (Postgres), in-memory loses data on restart |
+| LangMem | https://langchain-ai.github.io/langmem/reference/memory/ | Background extraction/consolidation via `create_memory_store_manager` + debounced `ReflectionExecutor` — independent convergence on extraction-off-the-hot-path |
+| CrewAI memory docs | https://docs.crewai.com/en/concepts/memory | Unified `Memory` class replaced the old four-type model; LanceDB default under `./.crewai/memory`; docs warn memory content is sent to the configured LLM (recommend local LLM for sensitive data) |
+| LlamaIndex memory docs | https://developers.llamaindex.ai/python/framework/module_guides/deploying/agents/memory/ | `ChatMemoryBuffer` deprecated for `Memory` (FIFO short-term + pluggable long-term blocks: `VectorMemoryBlock`, `FactExtractionMemoryBlock`) |
+| Google ADK memory docs | https://adk.dev/sessions/memory/ | Session/State vs `BaseMemoryService`; `InMemoryMemoryService` for prototyping; Vertex Memory Bank positioned as production path |
+| Microsoft Agent Framework memory | https://learn.microsoft.com/en-us/agent-framework/get-started/memory | `ContextProvider` abstraction, in-memory default, first-party `Mem0ContextProvider`; Cosmos checkpoint storage for durable state |
+| OpenClaw workspace files | https://docs.openclaw.ai/reference/AGENTS.default | `SOUL.md`/`MEMORY.md`/`HEARTBEAT.md`/`SKILL.md` layered markdown memory; Skill Workshop = agent-proposed skills gated by human approval (R9) |
+| Hermes agent skills | https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/skills.md | Skills explicitly framed as procedural memory; auto-proposed after ≥5 successful tool-call patterns, error resolution, or user correction; semver-versioned, anti-sediment principle (R9) |
+| Claude Code skills | https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview | Progressive disclosure: ~100-token metadata always loaded, SKILL.md body on trigger, resources on reference |
+| Voyager | https://arxiv.org/abs/2305.16291 | The canonical auto-skill-library agent (2023): "ever-growing skill library of executable code... alleviates catastrophic forgetting" |
+
+Flagged unverified: ADK's exact "not for production" phrasing (paraphrase); Azure AI Search as a MAF memory backend (no evidence); Hermes "Curator" background process (third-party blogs only).
+
+## 9. Managed memory services product design (v1.1 pass, 2026-07-17)
+
+| Source | Link | Citable point |
+| --- | --- | --- |
+| OpenAI memory FAQ + announcement | https://help.openai.com/en/articles/8590148-memory-faq (403'd, snippets) / https://openai.com/index/memory-and-new-controls-for-chatgpt/ | Two mechanisms: explicit saved memories (listable, survive chat deletion) vs inferred chat-history reference (not inspectable as a list); Temporary Chat opts out; deleting a chat does NOT delete derived memories; ~30-day server-side retention after deletion |
+| Claude memory blog | https://claude.com/blog/memory | Project-scoped memory isolation; memory is a user-visible, user-editable summary; incognito chats bypass memory; Team/Enterprise Sept 2025 → Pro/Max Oct 2025 |
+| Zep Graphiti platform page | https://www.getzep.com/platform/graphiti/ | Benchmark latency 155ms/94.7% acc (LoCoMo), 162ms/90.2% (LongMemEval) — source of the "sub-200ms" claim; OSS = single context graph, Cloud = governed multi-tenant graphs + SOC 2/HIPAA/BYOC |
+| Mem0 platform-vs-OSS doc | https://docs.mem0.ai/platform/platform-vs-oss | Platform-gated: webhooks, memory export, dashboard, analytics, auto-scaling/HA, memory filters v2, temporal reasoning + memory decay; OSS keeps store/LLM/embedder choice, DIY ops |
+| Letta cloud vs OSS | https://docs.letta.com (snippets) | Agent framework + persistent memory Apache-2.0 self-hostable; Cloud adds hosted ADE, managed state/scaling, LLM gateway; free tier 3 agents |
+| Vertex Memory Bank | https://docs.cloud.google.com/agent-builder/agent-engine/memory-bank/overview (+ search synthesis) | LLM-based extraction (default gemini-2.5-flash) filtered by configured "memory topics"; consolidation compares new vs existing memories in scope and updates/dedups/inserts; retrieval is identity-scoped similarity search |
+
+Key takeaways from this pass: (1) all managed products converge on explicit-curated + inferred-consolidated two-layer memory; (2) product "delete" = removal from retrieval path with ~30-day backend retention (logical vs physical erasure); (3) scoping defaults differ per vendor (project vs identity+topic vs subject-graph) — the isolation boundary is a product decision; (4) paid tiers gate operational maturity (multi-tenancy governance, compliance, HA, dashboards), not memory algorithms.
+
 ## Cross-cutting editorial takeaways from this research
 
 1. **Memory systems trade accuracy for latency/cost** — Mem0's own table shows full-context beats it on accuracy; the production case is 10× latency and token reduction. The post must not overclaim accuracy.
