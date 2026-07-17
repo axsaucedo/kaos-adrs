@@ -421,37 +421,36 @@ Before running it, it is worth separating the two mechanisms this config enables
 
 So in the walkthrough below, the cross-session recall works even with `tools` unset; the tools are there for when the model should decide what is worth remembering. Note two deliberate conservatisms in this design. The tools are **additive and off by default**, and that default is now empirically backed, since [a 2026 systematic study of memory poisoning](https://arxiv.org/abs/2606.04329) found that the agents which write to and retrieve from memory most aggressively are the most exploitable. And the tools do **not** take a scope, because the model supplies queries and content while the service derives the scope from the agent's identity, the fail-closed rule from earlier applied at the tool boundary where it matters most.
 
-Session 1: tell the agent a fact. This is an ordinary chat request, and the runtime persists the conversation to the central store after the run:
+Session 1: tell the agent a fact. This is an ordinary chat request, and the runtime persists the conversation to the central store after the run (note `kaos agent invoke` takes an explicit namespace, as it does not inherit the kubectl context):
 
 ```bash
-kaos agent invoke memory-agent -m "My favourite deployment port is 8080"
+kaos agent invoke memory-agent -n memory-example \
+  -m "My favourite deployment port is 8080"
 ```
 
 ```
+Port-forwarding to agent-memory-agent:8000...
+Sending message: My favourite deployment port is 8080
+
+Response:
 Noted, your favourite deployment port is 8080.
 ```
 
 Now verify the integration by asking the **memory service** directly, instead of trusting the agent's word for it:
 
 ```bash
-kubectl port-forward svc/memorystore-shared-memory 18080:8080 &
+kubectl port-forward -n memory-example svc/memorystore-shared-memory 18080:8080 &
 curl -s http://localhost:18080/v1/recall \
   -H 'content-type: application/json' \
   -d '{"scope": {"level": "group"}, "query": "deployment port", "include_short_term": true}'
 ```
 
 ```json
-{
-  "facts": [],
-  "short_term": {
-    "recent": [
-      ["user", "My favourite deployment port is 8080"],
-      ["assistant", "Noted, your favourite deployment port is 8080."]
-    ]
-  },
-  "medium_term": {"summary": ""},
-  "degraded": false
-}
+{"facts": [],
+ "short_term": {"recent": [
+    ["user", "My favourite deployment port is 8080"],
+    ["assistant", "Noted, your favourite deployment port is 8080."]]},
+ "medium_term": {"summary": ""}, "block": "", "degraded": false}
 ```
 
 The response contains the turn we just sent, which proves the write path works. Note the distinction between this request and the security discussion earlier: the curl here is an operator's debug view, run from inside the cluster boundary with a port-forward, at the same trust level as `kubectl` itself. The fail-closed scope rule applies to the *model channel*: an agent's tool call can never choose its scope, because the runtime derives it server-side from the agent identity. Direct access to the service is governed by the cluster network (NetworkPolicy, and the gateway when enabled), not by the model.
@@ -459,16 +458,11 @@ The response contains the turn we just sent, which proves the write path works. 
 Then open a **completely new session**:
 
 ```bash
-kaos agent invoke memory-agent -m "What deployment port did I choose earlier?"
+kaos agent invoke memory-agent -n memory-example \
+  -m "What deployment port did I choose earlier?"
 ```
 
-```
-You chose port 8080 as your favourite deployment port.
-```
-
-The automatic recall pulls the earlier turns from the store and injects them before the model runs, so the agent answers from memory it was never handed in this session. 
-
-Recall from the service again and both sessions' turns are there, giving one cross-session memory read and written by both.
+The automatic recall pulls the earlier turns from the store and injects them before the model runs, so the agent answers from memory it was never handed in this session. One honesty note on reading the output: this walkthrough runs a deterministic mock model so it is reproducible on any laptop, and a mock's reply text does not depend on the injected context, so the functional evidence is always the service state rather than the reply. Recall from the service again and both sessions' turns are there, giving one cross-session memory read and written by both.
 
 ### Part 2: Scope Isolation and the Right to Erasure
 
@@ -495,14 +489,19 @@ spec:
 Ask it about the port from Part 1:
 
 ```bash
-kaos agent invoke private-agent -m "What deployment port did I choose earlier?"
+kaos agent invoke private-agent -n memory-example \
+  -m "What deployment port did I choose earlier?"
 ```
 
 ```
+Port-forwarding to agent-private-agent:8000...
+Sending message: What deployment port did I choose earlier?
+
+Response:
 I don't have any earlier context about a deployment port.
 ```
 
-Both agents talk to the same service, the same database, and the same tables, however the service filters every operation by the owner key derived from each agent's identity, so the private agent cannot see the group's memory (and the group cannot see its). The same check against the service confirms the private partition is empty:
+Both agents talk to the same service, the same database, and the same tables, however the service filters every operation by the owner key derived from each agent's identity (the operator injects `AGENT_IDENTITY=kaos://agent/memory-example/private-agent`). Checking the private partition against the service shows what isolation actually looks like. The partition is not empty, since the automatic baseline has just persisted the private agent's own question and reply into it, and that is precisely the point: it holds its own conversation and nothing from the group, with no trace of the `8080` fact:
 
 ```bash
 curl -s http://localhost:18080/v1/recall \
@@ -511,7 +510,11 @@ curl -s http://localhost:18080/v1/recall \
 ```
 
 ```json
-{"facts": [], "short_term": {"recent": []}, "medium_term": {"summary": ""}, "degraded": false}
+{"facts": [],
+ "short_term": {"recent": [
+    ["user", "What deployment port did I choose earlier?"],
+    ["assistant", "I don't have any earlier context about a deployment port."]]},
+ "medium_term": {"summary": ""}, "block": "", "degraded": false}
 ```
 
 Erasure is the other side of scoping, and it is one operation. A single `forget` erases everything the scope holds, across all three tiers:
@@ -522,14 +525,14 @@ curl -s http://localhost:18080/v1/forget \
   -d '{"scope": {"level": "group"}}'
 ```
 
-Recall the `group` scope again and it comes back empty, and the first agent no longer remembers the port on its next session:
-
-```bash
-kaos agent invoke memory-agent -m "What deployment port did I choose earlier?"
+```json
+{"forgotten": true, "degraded": false}
 ```
 
-```
-I don't have a record of a deployment port from an earlier conversation.
+Recall the `group` scope again and it comes back empty across every tier, so the next `memory-agent` session starts from nothing:
+
+```json
+{"facts": [], "short_term": {"recent": []}, "medium_term": {"summary": ""}, "block": "", "degraded": false}
 ```
 
 ### Part 3: Unplugging the Memory
@@ -537,26 +540,40 @@ I don't have a record of a deployment port from an earlier conversation.
 The failure contract from the Kubernetes section says a memory outage should degrade an agent and never stop it, and this is directly testable: delete the store out from under a running agent.
 
 ```bash
-kubectl delete memorystore shared-memory
-kaos agent invoke memory-agent -m "Are you still there?"
+kubectl delete memorystore shared-memory -n memory-example
+kaos agent invoke memory-agent -n memory-example -m "Are you still there?"
 ```
 
-```
-Yes, I'm here and ready to help.
-```
-
-The agent keeps serving without its memory, and instead of an outage the operator surfaces the state as a condition:
+The invocation succeeds and the agent replies normally, with no memory backing it. Instead of an outage, the operator surfaces the state as a condition:
 
 ```bash
-kubectl get agent memory-agent \
-  -o jsonpath='{.status.conditions[?(@.type=="MemoryDegraded")].status}'
+kubectl get agent memory-agent -n memory-example \
+  -o jsonpath='{.status.conditions[?(@.type=="MemoryDegraded")]}'
 ```
 
-```
-True
+```json
+{"lastTransitionTime": "2026-07-17T13:57:32Z",
+ "message": "MemoryStore shared-memory not found",
+ "reason": "MemoryStoreNotReady", "status": "True", "type": "MemoryDegraded"}
 ```
 
-Re-apply the `MemoryStore`, wait for it to become `Ready`, and the agent picks its memory back up on the next turn, with no restarts and no code involved. Memory behaving as augmentation is precisely this: the difference between an incident and a status condition.
+Re-apply the `MemoryStore` and wait for it to become ready again:
+
+```bash
+kubectl apply -n memory-example -f memorystore.yaml
+kubectl wait -n memory-example memorystore/shared-memory \
+  --for=jsonpath='{.status.ready}'=true --timeout=180s
+```
+
+The agent picks its memory back up on the next turn, with no restarts and no code involved, and the condition clears:
+
+```json
+{"lastTransitionTime": "2026-07-17T14:08:37Z",
+ "message": "MemoryStore shared-memory is ready",
+ "reason": "MemoryHealthy", "status": "False", "type": "MemoryDegraded"}
+```
+
+Memory behaving as augmentation is precisely this: the difference between an incident and a status condition. As a closing note on this example, running it end-to-end for this post surfaced a real bug (a race in the CLI's port-forward startup that could silently swallow connection failures), which is its own small lesson: worked examples that actually run are also a test suite for your product.
 
 ## How You Could Build the Basics Yourself
 
