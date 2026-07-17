@@ -128,19 +128,34 @@ This tier included commercial services with managed memory platforms, which prov
 
 **Tier 4. Building from scratch on vector and/or graph stores.** 
 Finally, this tier focused on the raw vector and graph stores from which all memory frameworks are built upon. Here we reviewed the ecosystem with the perspective on how raw memory stores integrate directly into these stores. These included [pgvector](https://github.com/pgvector/pgvector), [Qdrant](https://github.com/qdrant/qdrant), [Chroma](https://github.com/chroma-core/chroma), [Weaviate](https://github.com/weaviate/weaviate), and [Milvus](https://github.com/milvus-io/milvus) on the vector side, and [Neo4j](https://neo4j.com/) and [FalkorDB](https://github.com/FalkorDB/FalkorDB) on the graph side. 
-#### Learnings from Surveying the Ecosystem
+#### Conclusions from Surveying the Ecosystem
 
-The review involved long-term capability coverage, retrieval quality, embeddability as a library behind KAOS's own interface, pluggable storage backends, infrastructure delta, multi-tenancy hooks, observability, licensing, maturity, and write-path cost. Notably, Kubernetes packaging was not a criterion, since KAOS wraps whatever it adopts in its own deployment layer anyway. The full matrix is too long for a blog post, but the reading of it is the useful part:
+Given the review was done in context of KAOS, the lens / considerations through which these were reviewed included the following non-exhaustive list:
+* Long-term capability coverage
+* Retrieval quality
+* Embeddability as a library
+* Pluggable storage backends
+* Infrastructure delta / overhead
+* Multi-tenancy hooks
+* Observability
+* Licensing
+* Maturity
+* Write-path cost
 
-**No candidate dominates.** The graph-first leaders (Graphiti, Cognee) buy the most capability at the highest operational cost: you are importing a graph database and an LLM-heavy ingestion pipeline. [Zep's paper](https://arxiv.org/abs/2501.13956) is the capability ceiling of the field, a bi-temporal knowledge graph reporting 94.8% on the DMR benchmark against MemGPT's 93.4% (the design itself is what matters here, even if the numbers were provided by these frameworks themselves). The low-delta options (Redis AMS) buy fit at maturity cost. Building it yourself buys perfect fit at the cost of rebuilding mature extraction and retrieval that already exists under permissive licenses.
+Based on these, the library that clearly stood out was **Mem0**. At least at the time of writing, Mem0 maximized the features and capabilities with the lowest integration friction. Mem0 also has the strongest ecosystem maturity, and pluggable stores. 
 
-Interestingly enough, there is published research from these frameworks that actually supports that extraction-based memory improves latency and cost, however it does not improve raw accuracy. In [Mem0's own evaluation](https://arxiv.org/abs/2504.19413) on LoCoMo, a full-context baseline beats Mem0 on raw accuracy (72.9% vs 66.9%), while memory buys a 91% cut in p95 latency (1.44s vs 17.1s) and over 90% fewer tokens per conversation. At fleet scale that trade is exactly right, since you cannot ship 17-second turns and 26K-token replays, but you should make it knowingly.
+It's however worth noting that despite Mem0 being the right choice for this context, one learning that may seem obvious in retrospect was that **there is no "Perfect Candidate".** The graph-first leaders (Graphiti, Cognee) have the most features but at the highest cost. Low-delta options (Redis AMS) buy fit at maturity cost. Building it yourself buys allows you to have all the features and fit, but at the cost of rebuilding mature extraction and retrieval that already exists under permissive licenses.
 
-I selected **Mem0 as the long-term engine, as a library behind KAOS's own interface**. It maximized capability with the lowest integration friction, the strongest ecosystem maturity, and pluggable backends. But the equally important half of the decision is the second clause, because it reflects what production systems actually do:
+As part of this, despite Mem0 being the strongest choice, it became clear that **adopting a memory engine means choosing which 60% of the system you do not have to build, and committing to build the remaining 40% around it**. 
 
-> Adopting a memory engine means choosing which 60% of the system you do not have to build, and committing to build the remaining 40% around it.
+For Mem0, this meant working on the bridge to close some of the gaps, particularly at the infrastructure and interoperability layer. These included:
 
-Agent frameworks like Pydantic AI provide message history only, so long-term memory remains the application's responsibility, and surveying production systems shows the norm is to wrap an external engine behind the application's own contract instead of adopting it as is. Every gap you accept in the selection becomes your integration layer. For Mem0 that meant four gaps. It has no OpenTelemetry, so I instrument every operation in the KAOS layer. Its tenant isolation is application-level, so I enforce scope in the memory service, fail-closed. It has no Kubernetes packaging, so the operator deploys it like any other KAOS component. And it has **no short-term tier at all**, which turned out to be a feature, as the next section explains.
+* Enabling telemetry by instrumenting every operation and ensure correlation+consistency with the broader KAOS telemetry.
+* Introduce tenant isolation, as this is enforced at the Mem0 applicaion level, so enforce scope through the memory service.
+* Bundle up the kubernetes packaging to ensure high availability and scalability as a distributed service.
+* Bridge the short- and medium-term memory with a native integration with the Pydantic AI server that we have built as part of KAOS.
+
+initially had some potential risks as they do gate some features behind the "enterprise product" (such as [...]), however it seems that the division was clean enough that these would make sense to design and build them at the KAOS infrastructure level.
 
 ## The Three Tiers
 
