@@ -244,7 +244,7 @@ In KAOS the choice was to go for a deliberately flat model; a single `scope` val
 
 This scope model is probably the obvious choice; the trickier question is how do we enable these shared scopes. There were a few design options for this:
 
-1. **Many groups inside one MemoryStore.** One store holds the memories of several groups at once. This sounds efficient, however it means building and operating a whole group-management layer: an API to create and delete groups and to add and remove members, a group key on every record, per-group quotas, and a single store whose failure affects every group in it.
+1. **Many groups inside one MemoryStore.** One store holds the memories of several groups at once. This sounds efficient, however it means building and operating a whole group-management layer: an API to create and delete groups and to add and remove members, per-group quotas, and a single store whose failure affects every group in it. The storage side of this is actually straightforward, as a group key on every record is all the data layer needs. The real cost is the management surface around it.
 2. **One group per MemoryStore.** The store itself is the group: whichever agents are bound to the same store share it, so membership is just the existing binding and no new API is needed. The cost is that every group needs its own store deployment, and sharing across two groups means binding to a second store. 
 3. **Hierarchical scope paths.** A richer model where scopes are nested paths (for example `org:team:agent`) and agents share memory up to the point where their paths diverge. Every version of this I drafted ended up re-creating an authorization system that the two simpler options already covered.
 
@@ -295,11 +295,17 @@ flowchart LR
 
 The second design decision was where, and how, the memory layer runs. Should it run **inside every agent** as a library? As a **side-car** next to every pod? Or as a **central service component**?
 
-Integrating the memory SDK directly in the agent service looks attractive at first, but the challenges compound with the number of agents. Namely as LLM calls for extraction land on the serving process, every agent replica opens its own datastore connections, every agent image carries the engine and its dependencies, and replicas of the same agent silently diverge in what they remember. 
+Integrating the Mem0 Python SDK directly in the agent service looks attractive at first, but the challenges compound with the number of agents. Namely as LLM calls for fact-extraction/summarization land on the serving process, every agent replica opens its own datastore connections, every agent image carries the engine and its dependencies, and replicas of the same agent silently diverge in what they remember. 
 
 Instead, going for the central option gives us the opposite: LLM extraction lands on the `MemoryStore` service, agents only interact with the respective store, agent images can use only the client, and scales with replicas horizontally.
 
-The "how" mattered as much as the "where", however. Had the requirement been long-term memory alone, the central option could have been as easy as "just deploy Mem0". The requirements went beyond what any single engine exposes though: a unified layer where short-, medium- and long-term memory behave as one integrated contract, server-side scope enforcement, and telemetry on every operation. That abstraction layer is what ships as `kaos-memory`, a single Python package providing both sides of the wire: the runtime imports the thin client, the `MemoryStore` deployment runs the service, and both import one shared contract so the two cannot drift apart (we will cover the package in more detail in the integration section below). Here's the visual overview:
+The "how" mattered as much as the "where", however. Had the requirement been long-term memory alone, the central option could have been as easy as "just deploy Mem0". 
+
+The requirements went beyond what any single engine exposes though: we needed a unified layer for short-, medium- and long-term memory where we could interact with it as one integrated contract, server-side scope enforcement, telemetry on every operation, as well as scoped access control. 
+
+For this we had to introduce a new layer through the `kaos-memory` Python packagem which provides both, the runtime thin client and the the `MemoryStore` service.
+
+We will cover the package in more detail in the integration section below. Here's the visual overview:
 
 ```mermaid
 flowchart TB
@@ -324,7 +330,7 @@ flowchart TB
 ```
 
 
-And the third design decision was the architectural abstraction of "Memory" as an infrastructure component in Kubernetes. In this case it meant codifying the `MemoryStore` resources into a specification that is described as follows:
+The third design decision involved designing the architectural abstraction of "Memory" as an infrastructure component in Kubernetes. In this case it meant codifying the `MemoryStore` resources into a specification that brings together all the points that we covered thus far. We settled on the following:
 
 ```yaml
 apiVersion: kaos.tools/v1alpha1
@@ -358,7 +364,7 @@ To provide the intuition on the one we landed on, here's what these mean:
 * `extraction.concurrency`: the bound on background extraction workers.
 * `defaultFailureMode`: `soft` or `strict` write behaviour for bound agents, overridable per agent.
 
-These were some of the major design decisions worth highlighting, there were quite a lot of others but I'd never finish the blog post if we cover all of them. A few honorable mentions are: 
+These were some of the major design decisions worth highlighting - there were of course a much longer list of tradeoff decisions which are out of the scope of this post, as otherwise I'd never finish the blog post if we cover all of them. However to mention a few honorable mentions are: 
 * Treating memory as augmentation and not a hard dependency: recall is always soft, so a memory outage degrades an agent and never stops it (shown live in the example below)
 * Wrapping Mem0 as a library inside the service instead of running the stock Mem0 server
 * Serializing compaction through database locks so multiple service replicas can fold the same session without double-folds
@@ -368,7 +374,7 @@ Now that we have all the major pieces threaded together, we can now dive into a 
 
 ## Worked Example: Memory Across Sessions, Scopes, and Failures
 
-Let's now take a practical end-to-end example that exercises the three claims this post has been making: that memory persists across sessions automatically, that scopes actually isolate, and that a memory outage degrades an agent without stopping it. The setup consists of a `ModelAPI`, a `local`-mode `MemoryStore` (embedded Chroma plus SQLite on a PersistentVolume, no external database), and two `Agent`s bound to the same store with different scopes.
+Let's now take a practical end-to-end example that exercises the three claims this post has been making: 1) memory persists across sessions automatically, 2) scopes actually isolate, and 3) a memory outage degrades an agent without stopping it. The setup consists of a `ModelAPI`, a `local`-mode `MemoryStore` (embedded Chroma plus SQLite on a PersistentVolume, no external database), and two `Agent`s bound to the same store with different scopes.
 
 ```mermaid
 graph LR
@@ -571,14 +577,14 @@ Memory behaving as augmentation is precisely this: the difference between an inc
 
 ## How You Can Integrate It In Your Agent From Scratch
 
-As with the autonomous loop, you don't need a framework to understand the minimal shape. Let's first look at the framework-agnostic skeleton of the design from this post, so the load-bearing choices are visible in ~30 lines, and then at the packaged version you can integrate directly. Tiered memory is a wrapper around the agent run:
+Let's take look at the snippet that we shared at the beginning of this post which showed a framework-agnostic skeleton for memory. We can then see how we convert this into a production level integration for any agent, enabling for the tiered memory that we saw:
 
 ```python
 async def run_with_memory(session_id, user_message, memory, agent):
     # 1. RECALL: assemble the memory block (never let this fail the turn)
     try:
         window = await memory.window(session_id, token_budget=4000)
-        digest = await memory.digest(session_id)
+        medium_term_summary = await memory.medium_term_summary(session_id)
         facts = await memory.search(scope=memory.scope, query=user_message, top_k=5)
     except MemoryError:
         window, digest, facts = await memory.window_only(session_id), None, []
