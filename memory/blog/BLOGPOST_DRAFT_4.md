@@ -248,10 +248,12 @@ This scope model is probably the obvious choice; the trickier question is how do
 2. **One group per MemoryStore.** The store itself is the group: whichever agents are bound to the same store share it, so membership is just the existing binding and no new API is needed. The cost is that every group needs its own store deployment, and sharing across two groups means binding to a second store. 
 3. **Hierarchical scope paths.** A richer model where scopes are nested paths (for example `org:team:agent`) and agents share memory up to the point where their paths diverge. Every version of this I drafted ended up re-creating an authorization system that the two simpler options already covered.
 
-Although the most intuitive choice initially could be the first one, interestingly enough the second model is the one that most (if not all) managed platforms expose. A few examples:
-* [Mem0 platform](https://docs.mem0.ai/platform/platform-vs-oss): A project is the container that memories cannot cross; API keys are scoped to a project, and the user and agent partitions live within it.
+Interestingly enough, when looking at how the managed platforms handle this, they expose a two-level version of the same tradeoff. Each one has a hard container that their control plane creates and manages, and lighter logical partitions inside it. A few examples:
+* [Mem0 platform](https://docs.mem0.ai/platform/platform-vs-oss): A project is the container that memories cannot cross, and the user and agent partitions live within it, with API keys scoped to the project.
 * [Vertex Memory Bank](https://docs.cloud.google.com/agent-builder/agent-engine/memory-bank/overview): Provisions one Memory Bank per Agent Engine instance, and within it memories are partitioned by scope, with retrieval only returning memories whose scope exactly matches the request.
 * [Zep Cloud](https://www.getzep.com/platform/graphiti/): Each subject (a user, or a group via their group-graph API) gets its own isolated context graph, and the cloud platform is the control plane that manages millions of them.
+
+The mapping onto KAOS is direct, as the hard container plays the role of the `MemoryStore`, and the partitions inside it play the role of the scopes.
 
 Based on this, I decided to go for option 2 as well. This means that the four scope levels are supported via the same `MemoryStore`, and are backed by a multi-tenant database layer.
 
