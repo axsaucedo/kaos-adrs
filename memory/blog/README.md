@@ -17,6 +17,7 @@ Working folder for the third KAOS blog post, covering the learnings from designi
 | `STYLE_REVISION_PLAN.md` | Style rules (neutral academic register, no em-dashes, no LLM-formulaic constructions, personable-touch budget) and the audited change outline for draft 3 |
 | `BLOGPOST_DRAFT_3.md` | Third draft: approved style pass applied (all em/en-dashes removed, emphasis-only sentences deleted, banned word fixed); antithesis and register wording deferred to the proposal below - current canonical draft |
 | `STYLE_NORMALISE_VS_PERSONABLE.md` | Per-instance proposal (35 rows) tagging each remaining antithesis/register item as normalise (flowing connectives) or personablise (max 1 per section); applied with user amendments in draft 4 |
+| `WORKED_EXAMPLE_V2_DRAFT.md` | Blend-option worked example drafted against the v2 memory semantics (stack PRs #280/#282); placeholder outputs pending the capture run; replaces the draft-4 example section after stack merge + review |
 | `BLOGPOST_DRAFT_4.md` | Fourth draft: amended style proposal applied (goldfish hook replaced, zero "rather", no clause-joining colons/semicolons, micro-sentences joined, "/" removed from prose, Mem0 named directly) - current canonical draft |
 | `REFERENCES_PROPOSED.md` | Citation proposal (v2 consolidated) mapped to draft sections, plus superseded v1/external-report assessments |
 | `RESEARCH_SOURCES.md` | Verified source bank (~40 sources across foundations, benchmarks, security, tenancy/erasure/temporal, production systems) — reusable for later iterations and other posts |
