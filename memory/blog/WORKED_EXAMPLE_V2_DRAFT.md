@@ -145,6 +145,10 @@ kubectl get agent assistant-a -n memory-example \
 
 Re-apply the `MemoryStore`, wait for `Ready`, and the agent picks its memory back up on the next turn, with the condition clearing to `MemoryHealthy`. No restarts, no code, and no incident: the difference between an outage and a status condition.
 
+### Per-User by Default, When Identity Is On
+
+This example ran without user authentication, so `agent` scope meant "this agent" and we reached per-user behaviour through the explicit `user` scope. On a cluster with OIDC enabled, that flips automatically: the operator detects user identity is configured and the `agent` scope becomes "this agent, for this authenticated user" on every operation, keyed by both the agent and the verified principal from the gateway. Two consequences fall out of it. Alice and Bob talking to the same assistant get entirely separate memory with no configuration at all. And the derivation is fail-closed: if user scoping is required but a request carries no verified principal, the operation errors rather than falling back to a shared pool, so there is no principal-less partition to leak into. Nothing in the agent's own config changes; the cluster's identity posture decides it.
+
 ### Where This Composes: Fleets That Learn
 
 One configuration we did not run here deserves a mention, because it is where the pieces above compose. An agent can set `defaultReadScope: group`, meaning its automatic baseline recalls the *fleet's* knowledge before every run. Combine that with an always-on autonomous agent from the [autonomous agents post](https://hackernoon.com/) publishing its findings at group level, and you get a fleet where one agent's observations become every agent's context, with the group boundary, the attribution, and the erasure semantics above all still holding. That composition is its own post; the primitives it needs are the ones you just watched work.
@@ -153,7 +157,8 @@ One configuration we did not run here deserves a mention, because it is where th
 
 ## Capture run notes (not part of the blog text)
 
-- Requires the merged stack (#280/#282) images; summarization + embedding via Ollama (qwen-class + nomic-embed-text per the earlier e2e setup); principal injection via the header mechanism documented in the validation report.
+- Requires the stack (#280/#282) + OIDC (#286) images; summarization + embedding via Ollama (qwen-class + nomic-embed-text per the earlier e2e setup). Core example runs OIDC-off with explicit scopes; principal injected via the header mechanism documented in the validation report.
 - The `--session` flag shape and the exact recall/forget payload fields must be verified against the CLI/service at capture time (session id addressing changed with per-session windows).
-- Placeholders map 1:1 to validation matrix cases: P4/P5 (Part 1), P1/P2/P3/P6/N1/N3 (Part 2), P7 (erasure), Part 3 (degradation, already captured in the first blog run).
+- Placeholders map 1:1 to validation matrix cases: P4/P5 (Part 1), P1/P2/P3/P6/N1/N3 (Part 2), P7 (erasure), Part 3 (degradation, already captured in the first blog run). The "Per-User by Default" beat is prose only (no capture) — the OIDC per-user cases are covered by the comprehensive validation on the auth-enabled cluster, not re-run here.
+- Bug-fix note: this draft assumes the fixed behaviour (true per-session windows P4, working cross-session dedup P5, complete user erasure P7) — all now landed on the stack; the capture must show the fixed outputs, not the pre-fix ones.
 - Slimming candidates if the section proves too long for the post (per review): the tool-schema excerpt, the second negative, and the group-level recall can each drop to one sentence.
