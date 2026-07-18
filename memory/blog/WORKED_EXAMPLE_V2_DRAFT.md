@@ -265,6 +265,15 @@ Two configurations we did not run are where the pieces compose. An agent can set
 
 ## Capture run notes (not blog text)
 
-- Outputs above are illustrative mocks. Real capture needs the stack (#280/#282/#286) images. Model dependency: Part 1's summary and Part 3's level-routing need a real tool-calling + summarizing model; Parts 1-structure and 2-scopes assert against service state regardless of reply quality. **Open: provide LLM access (small hosted / Ollama tool-capable model) for the capture, or accept mock prose and assert only service/telemetry state.**
-- CLI verbs used but not yet built: `kaos memory recall/forget` (incl. `--all` list mode), `kaos agent tools`. `kaos agent invoke --user/--session` and `kaos agent memory` exist. See `CLI_SPEC_PROPOSAL.md`.
+- Outputs above are illustrative mocks. Real capture needs the stack (#280/#282/#286) images. Model dependency: Part 1's summary and Part 3's level-routing need a real tool-calling + summarizing model; Parts 1-structure and 2-scopes assert against service state regardless of reply quality.
+- CLI verbs: all now SHIPPED on PR #289 (`feat/memory-cli-and-samples`): `kaos memory recall/forget` (incl. `--all` list mode via `POST /v1/list`), `kaos agent tools` (via agent `GET /tools`), `memory` sample. `kaos agent invoke --user/--session` exist.
 - Placeholders map: Part 1 → P4/tiers; Part 2 → P1/P2/P7 erasure + isolation; Part 3 → tool-enum (P6) + unentitled-level rejection (N3) + injection-resistance (N4).
+
+### Confirmed swap deltas (fold into BLOGPOST_DRAFT_4, verified against shipped #289 on 2026-07-19)
+When folding this example into the main post, replacing the old two-agent example (draft lines ~377-578), apply:
+1. **Sample apply verb**: `kaos sample apply memory --namespace support-demo` → `kaos samples deploy memory -n support-demo` (verb is `kaos samples deploy`, plural; command name="deploy").
+2. **tokenBudget**: the shipped `operator/config/samples/memory.yaml` uses `tokenBudget: 64` (not 256). Use `64` in the config excerpt so it matches the captured behaviour.
+3. **CLI recall/forget flags**: VERIFIED to match this draft exactly — `kaos memory recall --scope {session|agent|user|group} [--session|--agent|--user] [--query|--all] [--short-term] [--store] [-n]`; `forget` mirrors it with `--yes`. `--store` is optional when the namespace has exactly one MemoryStore (the sample creates one, `support-memory`), so the commands here correctly omit it.
+4. **Outputs**: replace every mock JSON/text block with the verbatim captured outputs from `kaos/tmp/example-capture-outputs.md` (#11). Keep the EXPECTED/ACTUAL framing out of the blog; blog shows command + real output only.
+5. **Strip**: this draft's status header (line 1-7) and this entire "Capture run notes" section — they are not blog text.
+6. The sample's agents/scopes/readScopes match the draft (assistant user+[session,agent,group], assistant-teamonly user+[session,group], unrelated-bot agent); no change needed there.
