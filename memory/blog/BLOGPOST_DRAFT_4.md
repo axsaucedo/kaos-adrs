@@ -140,7 +140,7 @@ There was also a clear separation between "local playground" and "production gra
 * [Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/get-started/memory): Defaults to an in-memory context provider, with durable state via first-party Cosmos checkpoint storage, and ships a first-party `Mem0ContextProvider`.
 * CrewAI: Community documented replacing its native store with Mem0 after hitting redeploy and user-isolation gaps. 
 
-Also interesting learnings from agent harnesses and coding agents:
+Also interesting learnings from agent runtimes and coding agents:
 
 * [OpenClaw](https://docs.openclaw.ai/reference/AGENTS.default): layers markdown memory files (`MEMORY.md`, dated notes, per-skill `SKILL.md`) and runs a "Skill Workshop" where the agent proposes new skills from successful conversations for human approval. 
 * [Hermes agent](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/skills.md): Uses skills explicitly as procedural memory, which are auto-proposed after repeated successful tool-call patterns, carry semver versions bumped on each self-improvement, and follow an anti-sediment principle where a skill should get shorter and sharper over time.
@@ -240,7 +240,13 @@ In KAOS the choice was to go for a deliberately flat model; a single `scope` val
 | `session`         | `run_id = <session id>`       | Only this conversation session        |
 | `agent` (default) | `agent_id = <agent identity>` | Only this agent.                      |
 | `user`            | `user_id = <user identity>`   | Every agent serving the same user.    |
-| `group`           | `agent_id = "kaos:group"`     | Every agent + user in the same group. |
+| `group`           | `kaos_group = <group id>`     | Every agent + user in the same group. |
+
+The table reads as the recall view, where one scope resolves to one owner key. The write path is the mirror image. A single conversation is authored by an agent, on behalf of a user, inside a session, and within a group, so the service records all of that attribution on every stored record as provenance. Writes are therefore compound and invariant, while a read resolves to a single scope and is a matter of policy. That separation is what lets one write be recalled at several levels later without being duplicated, because the same fact an agent stored for Alice carries her `user_id`, the agent identity, the session, and the group at once, so a `user` recall and a `group` recall each find it through a different owner key.
+
+The read side then needs its own answer to which of those levels a given agent may reach. The automatic baseline recall uses the agent's own `scope` as its `defaultReadScope`, so by default an agent reads at the same level it writes as. The memory search tool is where breadth becomes a deliberate grant. An agent's `readScopes` lists the levels its `search_memory` tool may target, and the model chooses among those and only those. An agent scoped to `user` with `readScopes: [session, group]` writes with full attribution, recalls the user's memory automatically, and may additionally search the session or the shared group on its own, yet can never reach another agent's private partition, because `agent` is absent from its list. The model selects the level from the tool's own enum, so an unentitled level is not something it can even express, which is the fail-closed rule from earlier applied to the read path.
+
+One consequence of deriving scope from identity shows up when the cluster runs with OIDC user authentication. The `agent` scope is a single shared pool per agent by default, which means every user of that agent shares its long-term memory. On a cluster where user identity is enabled that default is wrong, so KAOS narrows it by construction. The `agent` scope derives a two-key `{agent_id, user_id}` partition from the gateway-verified principal, and a request that arrives without one is a fail-closed error instead of a shared bucket to fall into. Alice and Bob then get separate memory on the same agent with no per-agent configuration, and `group` stays the one deliberate cross-user surface. Autonomous agents need no exception, because the loop's own bearer carries the agent identity as its principal, so a loop's memory stays private to the loop and publishing to the fleet remains a deliberate `group`-level write.
 
 This scope model is probably the obvious choice; the trickier question is how do we enable these shared scopes. There were a few design options for this:
 
@@ -255,7 +261,7 @@ Interestingly enough, when looking at how the managed platforms handle this, the
 
 The mapping onto KAOS is direct, as the hard container plays the role of the `MemoryStore`, and the partitions inside it play the role of the scopes.
 
-Based on this, I decided to go for option 2 as well. This means that the four scope levels are supported via the same `MemoryStore`, and are backed by a multi-tenant database layer.
+Based on these tradeoffs, I went for one group per MemoryStore. This is a control plane decision more than a storage one. Membership comes from the store binding, so there is no group management API to build, and the data layer simply records the group as metadata on each record. If finer grouping is ever needed, with several groups inside one store, the storage already supports it, and the actual work would be deciding who is allowed to join which group. The four scope levels are all supported via the same `MemoryStore`, backed by a multi-tenant database layer.
 
 There are two interesting caveats that also become important when we consider access control in these memory choices:
 
@@ -697,7 +703,7 @@ Extraction engines shred input into atomic facts, whereas a rolling summary's va
 
 ### 5. Never let the model choose the scope, and never let recall become policy
 
-Derive scope server-side from authenticated identity, fail closed, with the filter inside the vector query. Treat what comes back as untrusted data with provenance, since memory poisoning and cross-session injection are demonstrated attacks with published success rates.
+Derive scope server-side from authenticated identity, fail closed, with the filter inside the vector query. When the model is allowed to search, bound the levels it can reach to a declared `readScopes` entitlement rendered as the tool's own enum, so an injection cannot widen the reach beyond what the agent was granted. Treat what comes back as untrusted data with provenance, since memory poisoning and cross-session injection are demonstrated attacks with published success rates.
 
 ### 6. The store is the group
 
