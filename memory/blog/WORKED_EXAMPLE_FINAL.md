@@ -68,7 +68,7 @@ spec:
         value: "true"
 ```
 
-Because the `assistant` writes at `user` scope, this example runs on a cluster with user identity enabled, which is exactly the setup the `user` scope needs. A user acts through a verified token, which the CLI obtains and caches with one login. Every conversation turn below then runs through the gateway as that user:
+Every write carries the full attribution (user, agent, session, group), and the `assistant` sets `scope: user` as its home scope, which makes the verified user a required owner key: the server derives the principal from the authenticated request and fails closed when it is absent. This example therefore runs on a cluster with user identity enabled. A user acts through a verified token, which the CLI obtains and caches with one login. Every conversation turn below then runs through the gateway as that user:
 
 ```bash
 kaos auth login alice
@@ -83,7 +83,7 @@ USER_SUB=9dfcf3f2-7ec0-485c-bf2d-3f469874592e
 
 The admin-side `kaos memory` commands used to inspect the store need no token, since they run inside the cluster boundary at the same trust level as `kubectl`.
 
-The sample runs as-is on a secured cluster with no bespoke network or policy edits, given the standard identity prerequisites: the agents registered with the identity provider, an `AccessGrant` binding the user's group to the assistants, and a model provider the `ModelAPI` can reach. On a cluster without user identity the same turns run without the `--user` flag. The `user` scope used in this example is what makes the verified login necessary here.
+The sample runs as-is on a secured cluster with no bespoke network or policy edits, given the standard identity prerequisites: the agents registered with the identity provider, an `AccessGrant` binding the user's group to the assistants, and a model provider the `ModelAPI` can reach. On a cluster without user identity the same turns run without the `--user` flag, with the agents' home `scope` set to `session` or `agent` instead, since a `user` home scope refuses to operate without a verified principal.
 
 ### Part 1: The Three Tiers in One Conversation
 
