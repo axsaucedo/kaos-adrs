@@ -1,6 +1,6 @@
-# Agentic Memory: A Journey Across the Galaxy
+# Whose Memory Is It? Building Multi-Tenant, Multi-Tier Memory for AI Agents
 
-_How agents remember: building short-, medium- and long-term memory that scales across users, agents, and groups._
+_How agents remember: building short-, medium- and long-term memory that scales across users, agents, and kubernetes clusters._
 
 ---
 
@@ -388,7 +388,7 @@ These were some of the major design decisions worth highlighting - there were of
 
 Now that we have all the major pieces threaded together, we can now dive into a hands on example to show how it all works in practice.
 
-## Worked Example: A Support Assistant That Remembers
+## Worked Example: An Agent That Remembers
 
 Let's build one small system and use it to watch each memory mechanism work in turn: the short-term window folding into a medium-term summary, facts recalled by meaning across sessions, scopes isolating and aggregating data, and the memory tools bounded by what each agent is entitled to reach. Everything below is a real run on a secured KAOS cluster with a real model. The messages and the outputs are shown in full, and the only elision in the JSON responses is record metadata (ids, hashes, and timestamps), omitted for readability.
 
@@ -458,7 +458,7 @@ spec:
         value: "true"
 ```
 
-Because the `assistant` writes at `user` scope, this example runs on a cluster with user identity enabled, which is exactly the setup the `user` scope needs. A user acts through a verified token, which the CLI obtains and caches with one login. Every conversation turn below then runs through the gateway as that user:
+Every write carries the full attribution (user, agent, session, group), and the `assistant` sets `scope: user` as its home scope, which makes the verified user a required owner key: the server derives the principal from the authenticated request and fails closed when it is absent. This example therefore runs on a cluster with user identity enabled. A user acts through a verified token, which the CLI obtains and caches with one login. Every conversation turn below then runs through the gateway as that user:
 
 ```bash
 kaos auth login alice
@@ -473,7 +473,7 @@ USER_SUB=9dfcf3f2-7ec0-485c-bf2d-3f469874592e
 
 The admin-side `kaos memory` commands used to inspect the store need no token, since they run inside the cluster boundary at the same trust level as `kubectl`.
 
-The sample runs as-is on a secured cluster with no bespoke network or policy edits, given the standard identity prerequisites: the agents registered with the identity provider, an `AccessGrant` binding the user's group to the assistants, and a model provider the `ModelAPI` can reach. On a cluster without user identity the same turns run without the `--user` flag. The `user` scope used in this example is what makes the verified login necessary here.
+The sample runs as-is on a secured cluster with no bespoke network or policy edits, given the standard identity prerequisites: the agents registered with the identity provider, an `AccessGrant` binding the user's group to the assistants, and a model provider the `ModelAPI` can reach. On a cluster without user identity the same turns run without the `--user` flag, with the agents' home `scope` set to `session` or `agent` instead, since a `user` home scope refuses to operate without a verified principal.
 
 ### Part 1: The Three Tiers in One Conversation
 
