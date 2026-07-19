@@ -418,11 +418,11 @@ graph TB
   X --> store
 ```
 
-- **`session-assistant`** is a conversation-only assistant; the read defaults keep it limit memory to only the current session.
+- **`session-assistant`** is a conversation-only assistant; the read defaults limit its memory to the current session.
 - **`user-assistant`** is a personalised assistant with `defaultReadScope: user`, which injects the user's memory automatically on every turn, and is configured to use the `MemorySearchTool` at every scope.
-- **`agent-bot`** is an autonomous agent, and is configured with `defaultReadScope: agent`, which injects the agent's memory across sessions on every turn.
+- **`agent-bot`** is an agent from a separate domain on the same store, configured with `defaultReadScope: agent`, which injects the agent's own memory across sessions on every turn; in Part 2 it acts as the isolation control.
 
-> The key question we'll be answering is, "who's memory is it?". 
+> The key question we'll be answering is, "whose memory is it?". 
 
 For this we will test different rules as follows:
 
