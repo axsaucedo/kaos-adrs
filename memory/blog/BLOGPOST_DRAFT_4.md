@@ -287,7 +287,7 @@ This ruled out SaaS-only options like Pinecone for the first iteration, as well 
 
 One interesting caveat that I ran into, was learning that some database engines apply scope filters after the retrieval step, which means that in some cases a query expecting a number of results may return less than expected. This is a known consideration on [pgvector as it post-filters by default](https://dev.to/franckpachot/no-pre-filtering-in-pgvector-means-reduced-ann-recall-1aa1), and it is why engines like [Qdrant filter inside the index traversal](https://qdrant.tech/documentation/manage-data/multitenancy/). 
 
-To mitigate this, I validated the pre-filtering behaviour on both Chroma and pgvector before committing to the design, for which both passed; Mem0's FAISS path post-filters, which is why I decided to go for Chroma instead for the local path.
+To mitigate this, I validated the pre-filtering behaviour on both Chroma and pgvector before committing to the design, for which both passed. Mem0's FAISS path post-filters, which is why I decided to go for Chroma instead for the local path.
 
 ```mermaid
 flowchart LR
