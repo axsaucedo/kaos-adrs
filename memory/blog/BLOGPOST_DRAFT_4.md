@@ -390,9 +390,9 @@ Now that we have all the major pieces threaded together, we can now dive into a 
 
 ## Worked Example: An Agent That Remembers
 
-Let's build one small system and use it to watch each memory mechanism work in turn: the short-term window folding into a medium-term summary, facts recalled by meaning across sessions, scopes isolating and aggregating data, and the memory tools bounded by what each agent is entitled to reach. Everything below is a real run on a secured KAOS cluster with a real model. The messages and the outputs are shown in full, and the only elision in the JSON responses is record metadata (ids, hashes, and timestamps), omitted for readability.
+Let's now put all the theory we introduced into practice with one hands on example, and watch each memory mechanism work together.
 
-The system is a small support desk backed by one `MemoryStore` and three agents, each chosen to test a different property:
+We will deploy three agents to test different properties of memory:
 
 ```mermaid
 graph TB
@@ -414,7 +414,7 @@ graph TB
 - **`assistant-teamonly`** is identical but *not* entitled to the `agent` read level, which tests the tool-permission boundary in Part 3.
 - **`unrelated-bot`** is a different-domain agent on the same store, the isolation control in Part 2.
 
-The access rules are declared, not implicit. This is the flow the example proves, where green is allowed and red is denied:
+The key question we'll be answering is, "who's memory is it?". For this we will test different rules as follows:
 
 ```mermaid
 graph LR
@@ -435,13 +435,15 @@ graph LR
 
 ### Setup
 
-One override-friendly sample applies all of it, in the same pattern as the other KAOS samples:
+Everything the example needs is bundled as a single sample. We will deploy it with a single command, then walk through each object and create it step by step.
 
 ```bash
 kaos samples deploy 7-memory-agent -n support-demo
 ```
 
-It creates the `ModelAPI`, the `MemoryStore` (`support-memory`), and the three agents. The store carries a deliberately small conversational budget so compaction is easy to trigger, set where the fold actually happens, which is the store's own write path:
+This creates the `ModelAPI`, the `MemoryStore` (`support-memory`), and the three agents. 
+
+The MemoryStore carries a deliberately small conversational budget so compaction is easy to trigger, set where the fold actually happens, which is the store's own write path:
 
 ```yaml
 # excerpt: the MemoryStore compaction knobs
@@ -473,7 +475,7 @@ USER_SUB=9dfcf3f2-7ec0-485c-bf2d-3f469874592e
 
 The admin-side `kaos memory` commands used to inspect the store need no token, since they run inside the cluster boundary at the same trust level as `kubectl`.
 
-The sample runs as-is on a secured cluster with no bespoke network or policy edits, given the standard identity prerequisites: the agents registered with the identity provider, an `AccessGrant` binding the user's group to the assistants, and a model provider the `ModelAPI` can reach. On a cluster without user identity the same turns run without the `--user` flag, with the agents' home `scope` set to `session` or `agent` instead, since a `user` home scope refuses to operate without a verified principal.
+The sample runs as-is on a secured cluster with no bespoke network or policy edits, given the standard identity prerequisites: the agents registered with the identity provider, an `AccessGrant` binding the user's group to the assistants, and a model provider the `ModelAPI` can reach. On a cluster without user identity the same turns run without the `--user` flag. The `user` scope used in this example is what makes the verified login necessary here.
 
 ### Part 1: The Three Tiers in One Conversation
 
