@@ -48,7 +48,7 @@ graph LR
 One override-friendly sample applies all of it, in the same pattern as the other KAOS samples:
 
 ```bash
-kaos samples deploy memory -n support-demo
+kaos samples deploy 7-memory-agent -n support-demo
 ```
 
 It creates the `ModelAPI`, the `MemoryStore` (`support-memory`), and the three agents. The store carries a deliberately small conversational budget so compaction is easy to trigger, set where the fold actually happens, which is the store's own write path:
