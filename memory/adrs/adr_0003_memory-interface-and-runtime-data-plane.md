@@ -5,6 +5,7 @@
 - **Component.** 3 of 5 ([adr_high_level_components](./adr_high_level_components.md))
 - **Depends on.** [ADR 0001](./adr_0001_memory-model-and-lifecycle-operations.md), [ADR 0002](./adr_0002_memory-implementation-mem0-and-pydantic-ai-integration.md), [KAOS-R1](../research/KAOS-R1-memory-features-and-limitations.md), [KAOS-R11](../research/KAOS-R11-short-term-memory-storage.md)
 - **Constrains.** ADR 0004 (deployment topology and control plane), ADR 0005 (multi-tenancy and grouping).
+- **Revised by.** [ADR 0006](./adr_0006_posture-derived-scope-enforcement.md) removes the scope level from the write portion of the operation contract; writes carry attribution identities only.
 
 ## Context
 
