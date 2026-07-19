@@ -5,6 +5,7 @@
 - **Component.** 5 of 5 ([adr_high_level_components](./adr_high_level_components.md))
 - **Depends on.** [ADR 0001](./adr_0001_memory-model-and-lifecycle-operations.md), [ADR 0002](./adr_0002_memory-implementation-mem0-and-pydantic-ai-integration.md), [ADR 0003](./adr_0003_memory-interface-and-runtime-data-plane.md), [ADR 0004](./adr_0004_deployment-topology-and-control-plane.md), [KAOS-R1](../research/KAOS-R1-memory-features-and-limitations.md), [KAOS-R7](../research/KAOS-R7-target-picture.md)
 - **Constrains.** None; this is the final component and cross-cuts the data and control planes.
+- **Revised by.** [ADR 0006](./adr_0006_posture-derived-scope-enforcement.md) removes the Agent-level `scope` field; identity requirements derive from cluster security posture and the Agent memory block configures reads only.
 
 ## Context
 
