@@ -459,6 +459,7 @@ kaos samples deploy 7-memory-agent -n support-demo
 
 This creates the `ModelAPI`, the `MemoryStore` (`support-memory`), and the three agents. 
 
+[TODO: this memory store shoudl be part of the memory store kaos cli]
 The MemoryStore carries a deliberately small conversational budget so compaction is easy to trigger, set where the fold actually happens, which is the store's own write path:
 
 ```yaml
@@ -476,26 +477,25 @@ spec:
 
 Every time that an agent writes memory it stores the metadata of the user, agent, session and group; we are using a cluster that runs with authentication, which means users acts through a verified token. 
 
-Specifically for KAOS we can fetch the tokens :
+**Log Users In**
+
+Specifically for KAOS we can fetch the tokens by doing a login directly:
 
 ```bash
 kaos auth login alice
 # logged in as alice: sub=9dfcf3f2-7ec0-485c-bf2d-3f469874592e, groups=[researchers]
 
-# the sample's AccessGrant binds the user's group to the two assistants,
-# which is what lets each agent reach the store on the user's behalf
+kaos auth login bob
+# logged in as bob: sub=[TODO: add a sub token], groups=[researchers]
 ```
-
-The admin-side `kaos memory` commands used to inspect the store need no token, since they run inside the cluster boundary at the same trust level as `kubectl`.
-
-The sample runs as-is on a secured cluster with no bespoke network or policy edits, given the standard identity prerequisites: the agents registered with the identity provider, an `AccessGrant` binding the user's group to the assistants, and a model provider the `ModelAPI` can reach. On a cluster without user identity the same turns run without the `--user` flag, and a read configuration referencing `user` is rejected at deploy time rather than failing mid-conversation.
-
-_Interim note: the transcripts below are from the capture that predates this recast of the agents; identifiers and level lists inside the outputs reflect the earlier configuration and will be refreshed by a re-capture._
 
 ### Part 1: The Three Tiers in One Conversation
 
-One conversation, sized to cross the 64-token budget on purpose, a single incident across three turns in session `ticket-42`:
+We will follow one incident flow, where we expect to run three requests, and we should see a compaction triggered, which will capture the medium- and long-term memory that we can use for the queries.
 
+First we send an initial request to the `session-assistant` on a `ticket-42` which we assume contains descriptions related to an issue:
+
+[TODO: Break down command in multi line, with each --param in a new line, as currently overflows]
 ```bash
 kaos agent invoke session-assistant --user alice --session ticket-42 -n support-demo \
   -m "Ticket 42: checkout returns 500 for EU customers since the 3pm deploy"
@@ -512,8 +512,9 @@ Would you like me to start by searching the recent deployment logs and error mes
 related to this issue?
 ```
 
-The second turn narrows the incident:
+The second message helps us "narrow the incident":
 
+[TODO: Break down command in multi line, with each --param in a new line, as currently overflows]
 ```bash
 kaos agent invoke session-assistant --user alice --session ticket-42 -n support-demo \
   -m "The 500s are only on the payments call, and only for EUR currency"
@@ -536,6 +537,7 @@ payment or EUR currency processing?
 
 The third turn closes the incident:
 
+[TODO: Break down command in multi line, with each --param in a new line, as currently overflows]
 ```bash
 kaos agent invoke session-assistant --user alice --session ticket-42 -n support-demo \
   -m "Rolling back the payments service cleared it; root cause is a missing EUR rate key"
@@ -558,8 +560,11 @@ If you want, I can help draft a checklist or plan to prevent this kind of issue 
 deploys. Would you like that?
 ```
 
-Each turn is persisted to the central store after the run. Now inspect what the store holds for that session:
+Each conversation turn is persisted to the central store after the run, and the conversation should have carried out multiple medium-term compaction actions, as well as long-term extraction actions in the memory.
 
+Now inspect what the store holds for that session:
+
+[TODO: Break down command in multi line, with each --param in a new line, as currently overflows]
 ```bash
 kaos memory recall --scope session --session ticket-42 -n support-demo --all --short-term --json
 ```
@@ -578,10 +583,15 @@ kaos memory recall --scope session --session ticket-42 -n support-demo --all --s
 }
 ```
 
-Three mechanisms in one response. The **window is bounded**, holding only the last turn. The earlier turns were not truncated but **folded into the medium-term summary**, a real rolling summary the model wrote in the background. And the conversation has already become **atomic long-term facts**. Both the fold and the extraction ran off the response path, so the conversation never blocked on them.
+We can see that the three memory tiers are present in one response. 
 
-Those facts are recalled by meaning, not by matching the original words:
+* The short-term **window is bounded**, holding only the last conversation turn. 
+* The medium-term summary contains the previous context once the window reached the token limit.
+* The long-term facts have also been captured from the steps in the conversation.
 
+Those long-term facts are recalled by meaning, not by matching the original words:
+
+[TODO: Break down command in multi line, with each --param in a new line, as currently overflows]
 ```bash
 kaos memory recall --scope user --user alice -n support-demo --query 'EUR checkout' --json
 ```
@@ -602,8 +612,11 @@ Note the owner key is the user's verified identity, since the service partitions
 
 Every record above was written with full attribution: the agent, the verified user, the session, and the store's group. One write, readable at different levels and isolated at others.
 
+[TODO: this section could benefit from another graph to visualise what we're doing]
+
 **Per user, across agents.** Alice raises a second ticket with the `user-assistant`, then reads her `user` scope:
 
+[TODO: Break down command in multi line, with each --param in a new line, as currently overflows]
 ```bash
 kaos agent invoke user-assistant --user alice --session ticket-99 -n support-demo \
   -m "Ticket 99: Alice's SSO login loops on the staging tenant"
@@ -615,6 +628,9 @@ started, any error messages seen, or steps already tried? This will help in
 troubleshooting the issue.
 ```
 
+[TODO: are more context on the recall piece]
+
+[TODO: Break down command in multi line, with each --param in a new line, as currently overflows...I will stop repeating these, just make sure you do these for all the commands]
 ```bash
 kaos memory recall --scope user --user alice -n support-demo --all --json
 ```
@@ -665,6 +681,8 @@ kaos memory recall --scope group -n support-demo --all --json
 
 Parts 1 and 2 were the operator's view of the store. Part 3 is the *model's* view: what the agent may decide to recall on its own, and the boundary it cannot cross.
 
+[TODO: this section could benefit from another graph to visualise what we're doing]
+
 The automatic baseline recalls and persists on every turn with no model involvement. On top of that, `tools: read` gives the model a `search_memory` tool, and `readScopes` decides which levels that tool's `level` parameter may take. The two agents differ exactly there:
 
 ```bash
@@ -713,7 +731,7 @@ or "group" are allowed levels for search_memory.
 
 The `agent` level is not in this agent's schema, so the model has no way to express the call the prompt demanded. It stayed inside its vocabulary, reported that the requested level is unsupported, and no agent-level search ran. Because the level is fixed by the tool rather than supplied as a free argument, an injection cannot widen it.
 
-As a closing note, running this example end-to-end for the post was itself a test of the product, and a productive one. Building it surfaced a race in the CLI's port-forward startup that could silently swallow connection failures, a sample that set its small compaction budget on the wrong side of the write path, an identity-propagation bug that broke every agent's model call through a strict authentication gateway, and a generated network policy that blocked a store from reaching its own summarization model. Each was a real defect in shipped code, fixed once the example refused to run without it. Worked examples that genuinely run are a second test suite, with a different bias than the unit tests you wrote on purpose.
+[TODO: REMOVE this paragrph, we shoud not have thse type of internal things]As a closing note, running this example end-to-end for the post was itself a test of the product, and a productive one. Building it surfaced a race in the CLI's port-forward startup that could silently swallow connection failures, a sample that set its small compaction budget on the wrong side of the write path, an identity-propagation bug that broke every agent's model call through a strict authentication gateway, and a generated network policy that blocked a store from reaching its own summarization model. Each was a real defect in shipped code, fixed once the example refused to run without it. Worked examples that genuinely run are a second test suite, with a different bias than the unit tests you wrote on purpose.
 
 ## How You Can Integrate It In Your Agent From Scratch
 
