@@ -369,6 +369,13 @@ spec:
     embedding:
       modelAPI: my-modelapi
       model: text-embedding-3-small
+  shortTerm:
+    tokenBudget: 4096       # verbatim window bound
+  mediumTerm:
+    enabled: true           # fold overflow into a rolling summary
+  longTerm:
+    extraction:
+      concurrency: 4        # background extraction workers
 ```
 
 To provide the intuition on the one we landed on, here's what these mean:
@@ -377,7 +384,8 @@ To provide the intuition on the one we landed on, here's what these mean:
 * `storage.external.embeddingDims`: the vector dimensions of the embedding model.
 * `replicas`: defaults by mode, 1 for local (the volume is single-writer) and 2 for external (the service is stateless over Postgres, guarded by a disruption budget).
 * `models.summarization` / `models.embedding`: references to `ModelAPI` resources instead of provider keys, so the memory system's LLM calls go through the same gateway, quotas, and observability as every other component.
-* `extraction.concurrency`: the bound on background extraction workers.
+* `shortTerm` / `mediumTerm` / `longTerm`: one typed block per tier, with the cross-tier compaction invariant validated at apply time instead of pod startup.
+* `defaultReadScope`: the store-wide default read level for bound agents that set none; the final fallback is `session`.
 * `defaultFailureMode`: `soft` or `strict` write behaviour for bound agents, overridable per agent.
 
 These were some of the major design decisions worth highlighting - there were of course a much longer list of tradeoff decisions which are out of the scope of this post, as otherwise I'd never finish the blog post if we cover all of them. However to mention a few honorable mentions are: 
@@ -745,14 +753,17 @@ The part of the package I would call genuinely novel relative to the ecosystem i
 The core install gives you the `MemoryServiceClient` against a running MemoryStore service:
 
 ```python
-from kaos_memory import MemoryServiceClient, Scope
+from kaos_memory import Attribution, MemoryServiceClient, Scope
 
 client = MemoryServiceClient(endpoint="http://memorystore-shared-memory:8080")
-scope = Scope(level="group")
+scope = Scope(level="group")                        # reads select one level
+attribution = Attribution(                          # writes carry identities, no level
+    agent_client_id=agent_identity, session_id=session_id,
+)
 
 recalled = await client.recall(scope, query=user_message, include_short_term=True)
 response = await agent.run(recalled, user_message)
-await client.write(scope, turns=[("user", user_message), ("assistant", response)])
+await client.write(attribution, turns=[("user", user_message), ("assistant", response)])
 ```
 
 Recall degrades to empty context on failure instead of raising, writes honour the soft or strict failure mode, and every call emits the `kaos.memory.*` telemetry spans covered in the observability post.
@@ -761,16 +772,20 @@ If your agent runs on Pydantic AI, the `[pydantic-ai]` extra adds the helpers th
 
 ```python
 from kaos_memory.pydantic_ai import (
-    scope_from_deps, build_memory_toolset, reconstruct_message_history,
+    attribution_from_deps, scope_from_deps,
+    build_memory_toolset, reconstruct_message_history,
 )
 from kaos_memory.pydantic_ai.toolset import MemoryTools
 
-# derive the scope from the authenticated request context; by design
+# reads derive a scope from the authenticated request context; by design
 # there is no way for the model or a tool to pass a scope in
 scope = scope_from_deps(deps, level="group", agent_identity=agent_identity)
 
+# writes derive an attribution: the verified identities, no level
+attribution = attribution_from_deps(deps, agent_identity=agent_identity)
+
 # expose save_memory / search_memory to the model (the tools carry no scope argument)
-toolset = build_memory_toolset(MemoryTools.ALL, scope.level, agent_identity)
+toolset = build_memory_toolset(MemoryTools.ALL, read_scopes=[scope.level], agent_identity=agent_identity)
 
 # rebuild message history from the short-term turns plus the rolling summary,
 # so overflow is represented by summarization instead of truncation
