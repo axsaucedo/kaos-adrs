@@ -1,6 +1,6 @@
 ## Worked Example: A Support Assistant That Remembers
 
-Let's build one small system and use it to watch each memory mechanism work in turn: the short-term window folding into a medium-term summary, facts recalled by meaning across sessions, scopes isolating and aggregating data, and the memory tools bounded by what each agent is entitled to reach. Everything below is a real run on a secured KAOS cluster with a real model, and the outputs are verbatim.
+Let's build one small system and use it to watch each memory mechanism work in turn: the short-term window folding into a medium-term summary, facts recalled by meaning across sessions, scopes isolating and aggregating data, and the memory tools bounded by what each agent is entitled to reach. Everything below is a real run on a secured KAOS cluster with a real model, and the outputs are real, lightly trimmed for length.
 
 The system is a small support desk backed by one `MemoryStore` and three agents, each chosen to test a different property:
 
