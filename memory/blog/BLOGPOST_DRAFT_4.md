@@ -404,25 +404,27 @@ We will deploy three agents to test different properties of memory:
 
 ```mermaid
 graph TB
-  subgraph store["MemoryStore: support-memory (local, one PVC)"]
+  subgraph store["MemoryStore: support-memory (type: local)"]
     direction LR
     ST["short-term windows<br/>(per session)"]
     MT["medium-term summaries<br/>(per session)"]
     LT["long-term facts<br/>(Mem0 → vectors)"]
   end
-  A1["<b>user-assistant</b><br/>defaultReadScope: user · tools: read<br/>readScopes: session, agent, user, group"]
-  A2["<b>session-assistant</b><br/>read defaults (session) · tools: read"]
-  X["<b>agent-bot</b><br/>defaultReadScope: agent · no tools"]
-  A1 --> store
+  A2["<b>session-assistant</b><br/>scope: session"]
+  A1["<b>user-assistant</b><br/>scope: user"]
+  X["<b>agent-bot</b><br/>scope: agent"]
   A2 --> store
+  A1 --> store
   X --> store
 ```
 
-- **`user-assistant`** is the personalised assistant: `defaultReadScope: user` injects the user's memory automatically on every turn, and its search tool is entitled to every level.
-- **`session-assistant`** is a conversation-only assistant: the read defaults keep it on the current session, which tests the tool-permission boundary in Part 3.
-- **`agent-bot`** is a different-domain agent on the same store, the isolation control in Part 2.
+- **`session-assistant`** is a conversation-only assistant; the read defaults keep it limit memory to only the current session.
+- **`user-assistant`** is a personalised assistant with `defaultReadScope: user`, which injects the user's memory automatically on every turn, and is configured to use the `MemorySearchTool` at every scope.
+- **`agent-bot`** is an autonomous agent, and is configured with `defaultReadScope: agent`, which injects the agent's memory across sessions on every turn.
 
-The key question we'll be answering is, "who's memory is it?". For this we will test different rules as follows:
+> The key question we'll be answering is, "who's memory is it?". 
+
+For this we will test different rules as follows:
 
 ```mermaid
 graph LR
@@ -443,11 +445,17 @@ graph LR
 
 ### Setup
 
-Everything the example needs is bundled as a single sample. We will deploy it with a single command, then walk through each object and create it step by step.
+Everything the example needs is bundled as a single sample. First we can do a clean installation:
+
+[TODO: kaos cli install with auth]
+
+Now we can deploy the components covered above with a single command. We will walk through each object and create it step by step below too.
 
 ```bash
 kaos samples deploy 7-memory-agent -n support-demo
 ```
+
+[TODO: like the examples/authorization.md example, here we have the kaos cli commands that set up every component. That way we can also show the memorystore rigtht after the kaos cli. Make sure that every kaos cli is multi line with \ separting every line]
 
 This creates the `ModelAPI`, the `MemoryStore` (`support-memory`), and the three agents. 
 
@@ -466,14 +474,13 @@ spec:
     enabled: true          # fold overflow into a medium-term summary
 ```
 
-Every write carries the full attribution (user, agent, session, group); which identities must be present is decided by the cluster's security posture, not by the agents. This cluster runs user identity, so the platform requires a verified principal on every write, derives it from the authenticated request, and fails closed when it is absent. A user acts through a verified token, which the CLI obtains and caches with one login. Every conversation turn below then runs through the gateway as that user:
+Every time that an agent writes memory it stores the metadata of the user, agent, session and group; we are using a cluster that runs with authentication, which means users acts through a verified token. 
+
+Specifically for KAOS we can fetch the tokens :
 
 ```bash
 kaos auth login alice
 # logged in as alice: sub=9dfcf3f2-7ec0-485c-bf2d-3f469874592e, groups=[researchers]
-
-# the verified subject printed above is the owner key the store partitions by
-USER_SUB=9dfcf3f2-7ec0-485c-bf2d-3f469874592e
 
 # the sample's AccessGrant binds the user's group to the two assistants,
 # which is what lets each agent reach the store on the user's behalf
@@ -576,7 +583,7 @@ Three mechanisms in one response. The **window is bounded**, holding only the la
 Those facts are recalled by meaning, not by matching the original words:
 
 ```bash
-kaos memory recall --scope user --user "$USER_SUB" -n support-demo --query 'EUR checkout' --json
+kaos memory recall --scope user --user alice -n support-demo --query 'EUR checkout' --json
 ```
 ```json
 {
@@ -589,7 +596,7 @@ kaos memory recall --scope user --user "$USER_SUB" -n support-demo --query 'EUR 
 }
 ```
 
-Note the owner key here is the user's verified identity (`$USER_SUB`, the token's subject), not a display name, since the service partitions by the principal the identity provider verified rather than a string the caller typed.
+Note the owner key is the user's verified identity, since the service partitions by the principal the identity provider verified rather than a string the caller typed. The CLI makes that convenient without weakening it: `--user alice` resolves to the subject of her cached login (announced as `Resolved user 'alice' to principal '9dfcf3f2-...'`), and a name with no cached login passes through verbatim and matches nothing.
 
 ### Part 2: Scopes and the Data Partitions
 
@@ -609,7 +616,7 @@ troubleshooting the issue.
 ```
 
 ```bash
-kaos memory recall --scope user --user "$USER_SUB" -n support-demo --all --json
+kaos memory recall --scope user --user alice -n support-demo --all --json
 ```
 ```json
 {"facts": [
@@ -634,13 +641,13 @@ kaos memory recall --scope agent --agent agent-bot -n support-demo --all --json
 **Erasure is one operation.** Because every record carries Alice's principal, one `forget` reaches her contributions across both assistants and all her sessions:
 
 ```bash
-kaos memory forget --scope user --user "$USER_SUB" -n support-demo --yes
+kaos memory forget --scope user --user alice -n support-demo --yes
 ```
 ```json
 {"forgotten": true, "degraded": false}
 ```
 
-A follow-up `recall --scope user --user "$USER_SUB" --all` now returns `{"facts": []}`. A separate `group` contribution, written earlier by a team publisher and owned by the group and not by Alice, is untouched:
+A follow-up `recall --scope user --user alice --all` now returns `{"facts": []}`. A separate `group` contribution, written earlier by a team publisher and owned by the group and not by Alice, is untouched:
 
 ```bash
 kaos memory recall --scope group -n support-demo --all --json
