@@ -28,14 +28,14 @@ The access rules are declared, not implicit. This is the flow the example proves
 
 ```mermaid
 graph LR
-  alice(("Alice")) -->|writes via assistant| UA[("user: alice")]
-  bob(("Bob")) -->|writes via assistant| UB[("user: bob")]
+  alice(("Alice")) -->|"writes via assistant"| UA[("user: alice")]
+  bob(("Bob")) -->|"writes via assistant"| UB[("user: bob")]
   team["team facts"] --> G[("group")]
 
-  UA -->|✅ recall scope=user alice| ok1["Alice's facts"]
-  UA -->|❌ recall scope=user bob| deny1["blocked"]
-  G  -->|✅ recall scope=group| ok2["shared team facts"]
-  UA -->|❌ unrelated-bot recall| deny2["blocked"]
+  UA -->|"✅ recall scope user: alice"| ok1["Alice's facts"]
+  UA -->|"❌ recall scope user: bob"| deny1["blocked"]
+  G  -->|"✅ recall scope: group"| ok2["shared team facts"]
+  UA -->|"❌ unrelated-bot recall"| deny2["blocked"]
 
   classDef allow fill:#e6ffed,stroke:#2da44e;
   classDef deny fill:#ffebe9,stroke:#cf222e;
