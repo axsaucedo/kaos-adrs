@@ -259,13 +259,12 @@ Interestingly enough, when looking at how the managed platforms handle this, the
 * [Vertex Memory Bank](https://docs.cloud.google.com/agent-builder/agent-engine/memory-bank/overview): Provisions one Memory Bank per Agent Engine instance, and within it memories are partitioned by scope, with retrieval only returning memories whose scope exactly matches the request.
 * [Zep Cloud](https://www.getzep.com/platform/graphiti/): Each subject (a user, or a group via their group-graph API) gets its own isolated context graph, and the cloud platform is the control plane that manages millions of them.
 
-The mapping onto KAOS is direct, as the hard container plays the role of the `MemoryStore`, and the partitions inside it play the role of the scopes.
+Based on these tradeoffs, I went for one group per MemoryStore, which enforces this at the control plane. This meant that I don't have to build a full intra-store group management layer, and the data layer simply records the group as metadata on each record. 
 
-Based on these tradeoffs, I went for one group per MemoryStore. This is a control plane decision more than a storage one. Membership comes from the store binding, so there is no group management API to build, and the data layer simply records the group as metadata on each record. If finer grouping is ever needed, with several groups inside one store, the storage already supports it, and the actual work would be deciding who is allowed to join which group. The four scope levels are all supported via the same `MemoryStore`, backed by a multi-tenant database layer.
+The way it's designed to is set up to support finer grouping at the `MemoryStore` level by design, as we basically are storing everything under one global group per store.
 
-There are two interesting caveats that also become important when we consider access control in these memory choices:
+Now that we adopted these design choices, we realised that there were a few caveats that came up, which we had to accept / address:
 
-* **Post-retrieval filtering**: Some database engines apply scope filters after the retrieval step, which means that in some cases a query expecting a number of results may return less than expected. This is a known consideration on [pgvector as it post-filters by default](https://dev.to/franckpachot/no-pre-filtering-in-pgvector-means-reduced-ann-recall-1aa1), and it is why engines like [Qdrant filter inside the index traversal](https://qdrant.tech/documentation/manage-data/multitenancy/). **To mitigate this**, I validated the pre-filtering behaviour on both Chroma and pgvector before committing to the design.
 * **Security Attack Surfaces**: Interesting research such as [AgentPoison](https://arxiv.org/abs/2407.12784)  show the impact of poisoning memory (ie 0.1% poisoned memory yields over 80% attack success), as well as [MINJA](https://arxiv.org/abs/2503.03704) which shows that an attacker needs no write access at all, because if the agent writes its own memory from conversations then every user is a write path. **To mitigate this**, KAOS  derives the scope server-side from the authenticated agent identity, fail-closed, and never from model- or tool-supplied arguments.
 * **Right to Erasure**: Compliance requirements such as GDPR mean you must be able to answer "delete everything you know about this user" reliably, and in a multi-tier design the same information lives in several derived forms at once (raw turns, summaries, extracted facts, and their embeddings), so deleting from one tier is not enough. **To mitigate this**, KAOS implements `forget` as a single operation that fans out across all three tiers in one pass, deleting the short-term rows, the summaries, and the scope-filtered long-term facts. Note this is destruction, which is different from supersession, where facts are merely marked invalid but kept for history.
 
@@ -275,14 +274,20 @@ Now that we have sorted the tiers and the access scopes, we can move forward to 
 
 Now that we have all the separate pieces, it's required make a decision on how do we stitch them together; as part of this, I needed to go through several architectural design choices. We'll go through a few of these in this section.
 
+**Decision 1: Choosing the Storage**
+
 The first design decision was, which data store should we go for? Should we go for FAISS? Chroma? pgvector? Milvus? Pinecone? 
 
 The answer did not need to be a single store, because the requirements differ between a local development loop and a production fleet. 
 
-* ***For development** the priority is zero external dependencies, so the store should be embeddable in the service container. 
+* **For development** the priority is zero external dependencies, so the store should be embeddable in the service container. 
 * **For production** the priorities are durability, horizontal scaling, and reusing infrastructure you already operate. 
 
 This ruled out SaaS-only options like Pinecone for the first iteration, as well as library-only indexes with no persistence or filtering (eg FAISS), or also dedicated clusters that would add heavy new infrastructure (Milvus, Weaviate). For this we landed on two storage modes with the same service code on top of both:
+
+One interesting caveat that I ran into, was learning that some database engines apply scope filters after the retrieval step, which means that in some cases a query expecting a number of results may return less than expected. This is a known consideration on [pgvector as it post-filters by default](https://dev.to/franckpachot/no-pre-filtering-in-pgvector-means-reduced-ann-recall-1aa1), and it is why engines like [Qdrant filter inside the index traversal](https://qdrant.tech/documentation/manage-data/multitenancy/). 
+
+To mitigate this, I validated the pre-filtering behaviour on both Chroma and pgvector before committing to the design, for which both passed; Mem0's FAISS path post-filters, which is why I decided to go for Chroma instead for the local path.
 
 ```mermaid
 flowchart LR
@@ -301,6 +306,8 @@ flowchart LR
   MS --> prod
 ```
 
+**Decision 2: Designing the Data Plane**
+
 The second design decision was where, and how, the memory layer runs. Should it run **inside every agent** as a library? As a **side-car** next to every pod? Or as a **central service component**?
 
 Integrating the Mem0 Python SDK directly in the agent service looks attractive at first, but the challenges compound with the number of agents. Namely as LLM calls for fact-extraction/summarization land on the serving process, every agent replica opens its own datastore connections, every agent image carries the engine and its dependencies, and replicas of the same agent silently diverge in what they remember. 
@@ -311,9 +318,9 @@ The "how" mattered as much as the "where", however. Had the requirement been lon
 
 The requirements went beyond what any single engine exposes though: we needed a unified layer for short-, medium- and long-term memory where we could interact with it as one integrated contract, server-side scope enforcement, telemetry on every operation, as well as scoped access control. 
 
-For this we had to introduce a new layer through the `kaos-memory` Python packagem which provides both, the runtime thin client and the the `MemoryStore` service.
+For this we had to introduce a new layer through the `kaos-memory` Python package, which provides both the runtime client and the `MemoryStore` service. We will cover the package in more detail in the integration section below.
 
-We will cover the package in more detail in the integration section below. Here's the visual overview:
+Here's the visual overview of how it all fits together in the data plane:
 
 ```mermaid
 flowchart TB
@@ -337,6 +344,7 @@ flowchart TB
     BG --> EMB
 ```
 
+**Decision 3: Designing the Custom Resource**
 
 The third design decision involved designing the architectural abstraction of "Memory" as an infrastructure component in Kubernetes. In this case it meant codifying the `MemoryStore` resources into a specification that brings together all the points that we covered thus far. We settled on the following:
 
@@ -410,14 +418,14 @@ The access rules are declared, not implicit. This is the flow the example proves
 
 ```mermaid
 graph LR
-  alice(("Alice")) -->|writes via assistant| UA[("user: alice")]
-  bob(("Bob")) -->|writes via assistant| UB[("user: bob")]
+  alice(("Alice")) -->|"writes via assistant"| UA[("user: alice")]
+  bob(("Bob")) -->|"writes via assistant"| UB[("user: bob")]
   team["team facts"] --> G[("group")]
 
-  UA -->|✅ recall scope=user alice| ok1["Alice's facts"]
-  UA -->|❌ recall scope=user bob| deny1["blocked"]
-  G  -->|✅ recall scope=group| ok2["shared team facts"]
-  UA -->|❌ unrelated-bot recall| deny2["blocked"]
+  UA -->|"✅ recall scope user: alice"| ok1["Alice's facts"]
+  UA -->|"❌ recall scope user: bob"| deny1["blocked"]
+  G  -->|"✅ recall scope: group"| ok2["shared team facts"]
+  UA -->|"❌ unrelated-bot recall"| deny2["blocked"]
 
   classDef allow fill:#e6ffed,stroke:#2da44e;
   classDef deny fill:#ffebe9,stroke:#cf222e;
