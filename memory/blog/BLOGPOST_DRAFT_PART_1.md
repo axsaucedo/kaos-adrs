@@ -8,21 +8,21 @@ LLMs are stateless by design, and without added memory logic every session start
 
 A number of dedicated memory layers have emerged (and continue emerging almost daily) to tackle this, each with different approaches and tradeoffs. Which one should you adopt?
 
-Recently I spent some time extending the Kubernetes Agent Orchestration System (KAOS) to support multi-tiered memory persistence (aka short-, medium- and long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into an agentic system, so I thought it would be useful to compile all the learnings, design choices and examples. 
+Recently I spent some time extending the Kubernetes Agent Orchestration System (KAOS) to support multi-tiered memory persistence (aka short-, medium- and long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into an agentic system, so I thought it would be useful to compile all the learnings, design choices and examples into this 4-part series. 
 
 Hopefully this post is useful for anyone looking to do this on their own project. My objective:
 
 > Let's make the memory layer BORING, so that the agents can continue to be the fun part.
 
-This post includes the research findings from exploring ~38 tools, including tools like [Mem0](https://github.com/mem0ai/mem0), [Zep/Graphiti](https://github.com/getzep/graphiti), [Letta (MemGPT)](https://www.letta.com/), [Cognee](https://github.com/topoteretes/cognee), [Memobase](https://github.com/memodb-io/memobase), [Redis Agent Memory Server](https://github.com/redis/agent-memory-server), as well as native implementations in [OpenAI's products](https://openai.com/index/memory-and-new-controls-for-chatgpt/), [Claude](https://claude.com/blog/memory), [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview), [CrewAI](https://docs.crewai.com/introduction), and [Google ADK](https://google.github.io/adk-docs/), among many others.
+This first part includes the research findings from exploring ~30 tools, together with the taxonomy and the baseline implementations that motivate needing them, including tools like [Mem0](https://github.com/mem0ai/mem0), [Zep/Graphiti](https://github.com/getzep/graphiti), [Letta (MemGPT)](https://www.letta.com/), [Cognee](https://github.com/topoteretes/cognee), [Memobase](https://github.com/memodb-io/memobase), [Redis Agent Memory Server](https://github.com/redis/agent-memory-server), as well as native implementations in [OpenAI's products](https://openai.com/index/memory-and-new-controls-for-chatgpt/), [Claude](https://claude.com/blog/memory), [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview), [CrewAI](https://docs.crewai.com/introduction), and [Google ADK](https://google.github.io/adk-docs/), among many others.
 
-I also share the learnings and best practices that came out of navigating through a large number of architecture tradeoffs, and getting my hands dirty on the implementation that now ships as a distributed, highly available, and scalable `MemoryStore` resource that any agent can bind to. 
+Throughout the series, I also share the learnings and best practices that came out of navigating through a large number of architecture tradeoffs, and getting my hands dirty on the implementation that now ships as a distributed, highly available, and scalable `MemoryStore` resource that any agent can bind to. 
 
-As with my previous posts on [observability for agentic systems](https://hackernoon.com/production-observability-for-multi-agent-ai-with-kaos-otel-signoz) and [autonomous always-on agentic patterns](https://hackernoon.com/autonomous-agentic-systems-a-practical-guide-to-always-on-agents), I will use KAOS as the concrete implementation example, but the goal is to provide practical intuition for the primitives (tiers, scopes, folding, degradation), so that it applies whether you use KAOS, Mem0 directly, LangGraph, CrewAI, or a memory layer you wrote yourself.
+As with my previous posts on [observability for agentic systems](https://hackernoon.com/production-observability-for-multi-agent-ai-with-kaos-otel-signoz) and [autonomous always-on agentic patterns](https://hackernoon.com/autonomous-agentic-systems-a-practical-guide-to-always-on-agents), I will use KAOS as the concrete implementation example (concretely from Part 2, hands-on in Part 4), but the goal is to provide practical intuition for the primitives (tiers, scopes, folding, degradation), so that it applies whether you use KAOS, Mem0 directly, LangGraph, CrewAI, or a memory layer you wrote yourself.
 
 This post is the first of a 4-part series, which we plan to release weekly over the next couple of weeks:
 
-* **Part 1 (this post): What agent memory is and what to build on.** The taxonomy, the baseline implementations everyone starts with, and the engine landscape from surveying ~38 tools.
+* **Part 1 (this post): What agent memory is and what to build on.** The taxonomy, the baseline implementations everyone starts with, and the engine landscape from surveying ~30 tools.
 * **Part 2: Tiers and scopes for multi-tenant agents.** The three-tier design and the answer to whose memory it is (coming soon...).
 * **Part 3: Memory as infrastructure.** The Kubernetes `MemoryStore` resource, its deployment topology, and how to integrate it in your own agent (coming soon...).
 * **Part 4: Agent memory in action.** A worked example that runs end to end on a secured cluster, with real outputs (coming soon...).
@@ -37,7 +37,7 @@ This post is the first of a 4-part series, which we plan to release weekly over 
 
 To be more precise we can look at Princeton University's paper on [Cognitive Architectures for Language Agents (CoALA)](https://arxiv.org/abs/2309.02427) to provide a more precise definition for "Memory" in agentic systems. We can define "Memory" as the component that holds the short-, medium- and long-term information an agent carries across turns and sessions to inform its reasoning.
 
-This research paper quoted also provides a useful taxonomy for "memory types" that we will use to reason about the latter sections. This includes the memory types for episodic, semantic, procedural and temporal memory. 
+This research paper quoted also provides a useful taxonomy for "memory types" that we will use to reason throughout the series, and especially in the tier design of part 2. This includes the memory types for episodic, semantic, procedural and temporal memory. 
 
 These memory types are also mentioned in the Berkeley paper that released [MemGPT](https://arxiv.org/abs/2310.08560), as well as how the Stanford paper on large-scale LLM simulations [Generative Agents: Interactive Simulacra of Human Behavior](https://arxiv.org/abs/2304.03442) structured their memory event stream.
 
@@ -45,11 +45,11 @@ The formal definition of these memory types (+ a few examples) is outlined as fo
 
 | Memory type          | What it holds                                  | Example                                                     |
 | -------------------- | ---------------------------------------------- | ----------------------------------------------------------- |
-| Short-term (working) | verbatim recent turns of the live conversation | "the user just said port 8080"                              |
-| Episodic             | records of specific past events                | "on Tuesday the deploy failed twice"                        |
-| Semantic             | distilled, durable facts                       | "the user prefers blue-green deploys"                       |
-| Procedural           | learned skills and how-tos                     | "here is how we roll back this service"                     |
-| Temporal             | facts with validity intervals                  | "Joe *was* in a relationship until March, but not anymore." |
+| Short-term (working) | Verbatim recent turns of the live conversation | "The user just said port 8080"                              |
+| Episodic             | Records of specific past events                | "On Tuesday the deploy failed twice"                        |
+| Semantic             | Distilled, durable facts                       | "The user prefers blue-green deploys"                       |
+| Procedural           | Learned skills and how-tos                     | "Here is how we roll back this service"                     |
+| Temporal             | Facts with validity intervals                  | "Joe *was* in a relationship until March, but not anymore." |
 
 In practice what I found out however is that most frameworks only implement a small number of these, namely **short-term** is always present, **episodic and semantic** are bundled (the only difference is whether time is preserved), **procedural** tends to be present mainly in coding agents (eg creating skills, commands, extensions), and **temporal** tends to be replaced with "forgetting memory" functionality instead, or embedded with episodic/semantic.
 
@@ -190,13 +190,17 @@ For Mem0, this meant working on the bridge to close some of the gaps, particular
 * Bundle up the kubernetes packaging to ensure high availability and scalability as a distributed service.
 * Bridge the short- and medium-term memory with a native integration with the Pydantic AI server that we have built as part of KAOS.
 
-Based on these initial decisions we were able to proceed with the architectural choices at the end-to-end agent level.
+Each of these gaps becomes a design decision in parts 2 and 3.
 
-## Conclusion of Part 1
+Based on these initial decisions we were able to proceed to the architecture of the memory system itself, which is exactly where part 2 picks up.
 
-This first part covered the ground you need before writing any memory code: a working taxonomy that separates memory from the context window and the session transcript, the baseline implementations and the measured reasons they stop scaling, and a survey of the engine landscape that ends in a concrete position, since adopting a memory engine and owning the contract around it beats both building from scratch and inheriting a framework's opinions.
+## Closing Thoughts for Part 1
 
-In part 2 we take that position and design the memory system itself: the three tiers that separate conversational continuity from learned knowledge, and the scope model that answers the title's question of whose memory it is when several agents serve several users. Stay tuned, part 2 lands next week.
+This first part covered the ground you need before writing any memory code with a working taxonomy that separates memory from the context window and the session transcript. We also reviewed the baseline implementations and the understood some of the limitations. This included the survey of the memory engine landscape, and the thinking process that went into selecting the memory framework to build upon. 
+
+However this is only the beginning as choosing the memory framework is only 40% of the work, we still need to build the remaining 60% to ensure we can integrate it in a coherent and scalable way for our distributed agent system use-case.
+
+In part 2 we take that position and design the memory system itself. This includes the three tiers that separate "memory tiers", and the scope model that answers the title’s question of "whose memory is it?". Stay tuned, part 2 
 
 **The series:**
 
