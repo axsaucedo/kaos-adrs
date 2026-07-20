@@ -579,11 +579,11 @@ We will follow one incident flow, where we expect to run three requests, and we 
 
 First we send an initial request to the `session-assistant` on a `ticket-42` which we assume contains descriptions related to an issue:
 
+[TODO: for all commands, move the -n namespace as ]
 ```bash
-kaos agent invoke session-assistant \
+kaos agent invoke session-assistant -n support-demo \
   --user alice \
   --session ticket-42 \
-  -n support-demo \
   -m "Ticket 42: checkout returns 500 for EU customers since the 3pm deploy"
 ```
 ```
