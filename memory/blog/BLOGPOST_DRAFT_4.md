@@ -18,6 +18,7 @@ This post includes the research findings from exploring ~38 tools, including too
 
 I also share the learnings and best practices that came out of navigating through a large number of architecture tradeoffs, and getting my hands dirty on the implementation that now ships as a distributed, highly available, and scalable `MemoryStore` resource that any agent can bind to. 
 
+[TODO: add links to the hackernoon correct links]
 As with my previous posts on [observability for agentic systems](https://hackernoon.com/production-observability-for-multi-agent-ai-with-kaos-otel-signoz) and [autonomous always-on agentic patterns](https://hackernoon.com/), I will use KAOS as the concrete implementation example, but the goal is to provide practical intuition for the primitives (tiers, scopes, folding, degradation), so that it applies whether you use KAOS, Mem0 directly, LangGraph, CrewAI, or a memory layer you wrote yourself.
 
 ## A Working Taxonomy of Agent Memory
@@ -443,17 +444,49 @@ graph LR
   class deny1,deny2 deny;
 ```
 
-### Setup
+### Setting up the Example: One Command
 
 First we do a clean installation with authentication enabled, since the example partitions memory by verified user identity:
 
 ```bash
 kaos system install \
-  --gateway-strict \
   --authz-enabled \
   --user-auth keycloak \
   --agent-auth keycloak \
   --wait
+```
+
+Here we are installing a cluster with user/agent identity & authorization, which we will be able to use for the access control examples of the memory components.
+
+This includes setting up and configuring user and agent auth with keycloak, as well as authorization based access control for the memory itself. You can read more about this in the security KAOS documentation[TODO: add link].
+
+```mermaid
+flowchart TB
+  U["Users"]
+  GW["Gateway Mesh"]
+  UAuth["User Identity Service<br>(Keycloak, OIDC, etc)"]
+  AAuth["Agent Identity Service<br>(ServiceAcct, OIDC, etc)"]
+  Authz["KAOS Authz Service<br>(User+Agent Resource Access)"]
+  MS["MemoryStore<br>(Memory Management)"]
+  KAOS["KAOS Resources<br>(Agents, MCPs, Models)"]
+  OP["⠀<br><b>KAOS Operator</b><br><br>(Syncs Identity<br> Tokens & Authorization<br> Graphs)<br>⠀"]
+
+  subgraph mem["Memory Components"]
+    MS
+  end
+
+  subgraph req["Request path"]
+    U --> GW
+    GW --> KAOS
+  end
+
+  subgraph auth["Auth & Identity Providers"]
+    UAuth ~~~ AAuth
+    Authz
+  end
+
+  req <--> auth
+  req <--> mem
 ```
 
 Everything the example needs is also bundled as a single sample, so one command deploys the whole cast:
@@ -462,6 +495,8 @@ Everything the example needs is also bundled as a single sample, so one command 
 kaos samples deploy 7-memory-agent \
   -n support-demo
 ```
+
+### Setting up the Example: Breaking it Up
 
 To see the shape of each object, the same setup can be built component by component. The model endpoint and the store first:
 
