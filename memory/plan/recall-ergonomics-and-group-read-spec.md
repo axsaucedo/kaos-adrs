@@ -1,13 +1,13 @@
 # Working spec: recall ergonomics and read-scope model (DRAFT)
 
-Status: decided in discussion, not yet implemented. Implementation explicitly on hold; do not start executors on this until approved. The Codex brief for the ergonomics half exists at `kaos/tmp/brief-recall-ergonomics.md` and must be updated to match part B before running. Related learnings: [explicit read-scope levels and enforcement](../impl/learnings/explicit-read-scope-levels-and-enforcement.md), [multi-tenancy isolation](../impl/learnings/multi-tenancy-isolation-dsn-and-rls.md), [scoping v2](../impl/learnings/memory-v2-scoping-attribution-and-oidc.md).
+Status: decided in discussion. Related learnings: [explicit read-scope levels and enforcement](../impl/learnings/explicit-read-scope-levels-and-enforcement.md), [multi-tenancy isolation](../impl/learnings/multi-tenancy-isolation-dsn-and-rls.md), [scoping v2](../impl/learnings/memory-v2-scoping-attribution-and-oidc.md).
 
-## Part A — recall ergonomics (decided earlier)
+## Part A — recall ergonomics
 
-1. Response keys become self-describing and flat: `facts` -> `long_term_facts`; `medium_term.summary` -> `medium_term_summary` (string); `short_term.recent` -> `short_term_window` (list of [role, content]). `block` and `degraded` keep their names. A tier's key is present only when requested.
+1. Response is nested one object per tier, each carrying its content and its own metadata: `long_term.facts` (list; each fact keeps its `score` on recall), `long_term.block` (the assembled context string), `medium_term.summary` (string), `short_term.window` (list of [role, content]). `degraded` stays top-level. A tier's object is present only when that tier was requested.
 2. Tier selection through one option: `--include` accepting `a|all|s|short-term|m|medium-term|l|long-term`, repeatable and comma-splitting, defaulting to `all`. Wire: `include: [...]` list replaces `include_short_term`; the service fetches only requested tiers (short and medium share the conversational store, so selective fetch is two queries on one backend).
-3. Query optional: `--query` present means semantic recall (`/v1/recall`); absent means list (`/v1/list`). `--all` and `--short-term` flags are removed. `--query` without long-term in `--include` is an error.
-4. The automatic baseline recall in the runtime keeps requesting all tiers; agent behaviour unchanged.
+3. Query optional: `--long-term-query` / `-q` present means semantic recall (`/v1/recall`); absent means list (`/v1/list`). Passing it without long-term in `--include` is an error.
+4. No behavioural change to agents: the runtime's automatic per-turn recall keeps requesting all three tiers and building the same injected context, so the key nesting and `--include` are CLI/wire ergonomics only.
 
 ## Part B — read-scope model (decided in this discussion)
 
@@ -66,8 +66,8 @@ Part 2/4 of the blog reworks to bob writing through the agent (mutual isolation:
 
 ## Terminology note
 
-Two unrelated "groups" existed and must never be conflated: identity groups (token `groups` claim, AccessGrant entry authorization) and the memory store (formerly the `group` scope, now `store`).
+Two "groups" must never be conflated: identity groups (token `groups` claim, AccessGrant entry authorization) and the memory store (the `store` read scope).
 
-## Migration surface (for the eventual brief)
+## Surface touched (for the brief)
 
-Breaking `v1alpha1` change, same class as ADR 0006. Touches: `ScopeLevel` semantics (`agent` redefined, `user_scoping_required` removed, `group`->`store`), the Agent CRD (`readScopes` list -> `maxReadScope`), the MemoryStore CRD (`maxReadScope`), the service (session-principal predicate, admin-plane level gating, `store` rename), the runtime and `search_memory` enum, the admin CLI (`--scope store`, optional `--session`+`--user`), plus Part A's response-key and `--include` changes. Docs, sample, and the worked example follow.
+`ScopeLevel` (`agent` bound to the verified context, `user_scoping_required` removed, `store` replaces `group`), the Agent CRD (`maxReadScope` string in place of the `readScopes` list), the MemoryStore CRD (`maxReadScope`), the service (session-principal predicate, admin-plane level gating, `store`), the runtime and `search_memory` enum, the admin CLI (`--scope store`, optional `--session`+`--user`, and Part A's nested keys, `--include`, `--long-term-query`). Docs, sample, and the worked example follow.
