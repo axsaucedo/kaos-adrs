@@ -26,7 +26,7 @@ session  ⊂  agent  ⊂  user
 | `user` | the current verified user across all agents on the store | current user across agents | rejected at reconcile (no user identity) |
 
 - `agent` narrows to `{agent, user}` when user identity is on because the verified context includes the user; it is the pool only when there is no user identity to bind to. Same word, one documented meaning, no env-driven surprise.
-- `user` stays in the vocabulary always; configuring it on an identity-less cluster is rejected at reconcile with a clear posture message (extends today's existing check). Loud failure, not silent no-op.
+- `user` stays in the vocabulary always; an Agent configuring it on an identity-less cluster is rejected at its own reconcile with a clear posture message (extends today's existing check). Loud failure, not silent no-op. The posture check lives on the reader only: a MemoryStore's `maxReadScope` is a ceiling that grants permission and performs no reads, so a store declaring `user` without user identity is accepted and Ready; the ceiling is inert until an Agent claims it, and that claim is where the rejection fires. A store must never fail, and must never take its bound agents down, because of an unclaimed ceiling (an over-broad store-side check did exactly that on the identityless e2e cluster).
 - Cross-user levels (`agent`-as-pool-across-users, and the whole-store view) are NOT data-plane levels; see B4.
 
 ### B2. Session reads bind to the principal (gap fix)
