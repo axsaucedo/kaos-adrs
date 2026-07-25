@@ -147,7 +147,7 @@ To provide the intuition on the one we landed on, here's what these mean:
 * `replicas`: defaults by mode, 1 for local (the volume is single-writer) and 2 for external (the service is stateless over Postgres, guarded by a disruption budget).
 * `models.summarization` / `models.embedding`: references to `ModelAPI` resources instead of provider keys, so the memory system's LLM calls go through the same gateway, quotas, and observability as every other component.
 * `shortTerm` / `mediumTerm` / `longTerm`: one typed block per tier, with the cross-tier compaction invariant validated at apply time instead of pod startup.
-* `defaultReadScope`: the store-wide default read level for bound agents that set none; the final fallback is `session`.
+* `maxReadScope`: the store owner's ceiling on how far any bound agent may read, defaulting to `agent`; raising it to `user` is what permits cross-agent recall on this store, and an agent's own `maxReadScope` may never exceed it. This is the store's half of the scope model from Part 2.
 * `defaultFailureMode`: `soft` or `strict` write behaviour for bound agents, overridable per agent.
 
 These were some of the major design decisions worth highlighting - there were of course a much longer list of tradeoff decisions which are out of the scope of this post, as otherwise I'd never finish the blog post if we cover all of them. However to mention a few honorable mentions are: 
@@ -206,17 +206,20 @@ The core install gives you the `MemoryServiceClient` against a running MemorySto
 from kaos_memory import Attribution, MemoryServiceClient, Scope
 
 client = MemoryServiceClient(endpoint="http://memorystore-shared-memory:8080")
-scope = Scope(level="group")                        # reads select one level
+scope = Scope(level="user")                         # reads pick one radius: session, agent, or user
 attribution = Attribution(                          # writes carry identities, no level
     agent_client_id=agent_identity, session_id=session_id,
 )
 
-recalled = await client.recall(scope, query=user_message, include_short_term=True)
+recalled = await client.recall(
+    scope, query=user_message,
+    include=["short_term", "medium_term", "long_term"],  # select tiers per call
+)
 response = await agent.run(recalled, user_message)
 await client.write(attribution, turns=[("user", user_message), ("assistant", response)])
 ```
 
-Recall degrades to empty context on failure instead of raising, writes honour the soft or strict failure mode, and every call emits the `kaos.memory.*` telemetry spans covered in the observability post.
+The scope level is one of the concentric radii from Part 2 (`session`, `agent`, `user`), and the response nests one object per requested tier (`short_term.window`, `medium_term.summary`, `long_term.facts`) so a caller only receives, and only pays for, the tiers it asked for. The fourth level, `store`, exists in the vocabulary but the service refuses it on any request arriving through an agent, since whole-store reads belong to the admin plane. Recall degrades to empty context on failure instead of raising, writes honour the soft or strict failure mode, and every call emits the `kaos.memory.*` telemetry spans covered in the observability post.
 
 If your agent runs on Pydantic AI, the `[pydantic-ai]` extra adds the helpers that wire the pieces from this post together: server-side scope derivation, the explicit memory tools, and full-fidelity history replay.
 
@@ -229,20 +232,23 @@ from kaos_memory.pydantic_ai.toolset import MemoryTools
 
 # reads derive a scope from the authenticated request context; by design
 # there is no way for the model or a tool to pass a scope in
-scope = scope_from_deps(deps, level="group", agent_identity=agent_identity)
+scope = scope_from_deps(deps, level="user", agent_identity=agent_identity)
 
 # writes derive an attribution: the verified identities, no level
 attribution = attribution_from_deps(deps, agent_identity=agent_identity)
 
-# expose save_memory / search_memory to the model (the tools carry no scope argument)
+# expose save_memory / search_memory to the model (the tools carry no scope argument;
+# search offers every level up to the agent's maxReadScope ceiling)
 toolset = build_memory_toolset(MemoryTools.ALL, read_scopes=[scope.level], agent_identity=agent_identity)
 
 # rebuild message history from the short-term turns plus the rolling summary,
 # so overflow is represented by summarization instead of truncation
-history = reconstruct_message_history(recalled.short_term.recent, recalled.medium_term.summary)
+history = reconstruct_message_history(recalled.short_term.window, recalled.medium_term.summary)
 
 result = await agent.run(user_message, message_history=history, toolsets=[toolset])
 ```
+
+On KAOS the operator wires all of this automatically: the agent's `maxReadScope` ceiling from the CRD is expanded into the list of levels the toolset receives, and the level used for automatic per-turn recall comes from the agent's configuration, never from the request.
 
 ## When NOT to Add Long-Term Memory
 
