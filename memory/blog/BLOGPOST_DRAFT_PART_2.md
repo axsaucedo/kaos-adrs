@@ -1,19 +1,27 @@
-# Whose Memory Is It? Tiers and Scopes for Multi-Tenant Agents (Part 2)
+# Whose Memory Is It? Building Multi-Tenant, Multi-Tier Memory for AI Agents (Part 2)
 
 _This is a 4-part series on how agents remember: building short-, medium- and long-term memory that scales across users, agents, and kubernetes clusters._
 
 ---
 
-In Part 1 we built the foundation: a working taxonomy of agent memory, the naive implementations everyone starts with, and the survey of ~30 memory engines that ended with the decision to adopt Mem0 as a library behind our own interface, together with the list of gaps (observability, tenant isolation, kubernetes packaging, framework bridging) that become our integration work.
+Two users talk to the same agent, backed by the same memory store. Alice mentions her API keys rotate on Fridays. The next day bob asks the agent what it knows about deployment schedules. Whether alice's fact can appear in that answer is the whole multi-tenancy problem in one exchange, and it is decided by the scope model long before the model sees a prompt.
 
-This part is where we design the memory system itself. First the three tiers that separate the verbatim conversation window, the rolling narrative digest, and the extracted long-term facts. Then the scope model that answers the question in the series title: whose memory is it, who is allowed to recall it, and how that is enforced so that neither the model nor a compromised prompt can widen it.
+Recently I spent some time extending the Kubernetes Agent Orchestration System (KAOS) to support multi-tiered memory persistence (aka short-, medium- and long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into a multi-tenant system, so I thought it would be useful to compile the learnings, design choices and examples into this series. This second part covers the design core: the three memory tiers and the scope model, drawing on the research across ~30 memory tools and frameworks from Part 1 and on the implementation that now ships as the `MemoryStore` resource in KAOS. The objective throughout the series:
+
+> Let's make the memory layer BORING, so that the agents can continue to be the fun part.
+
+In [Part 1](link-when-published) we surveyed ~30 memory engines, built a working taxonomy, and landed on adopting [Mem0](https://github.com/mem0ai/mem0) as a library behind our own interface, together with the list of gaps (observability, tenant isolation, kubernetes packaging, framework bridging) that become our integration work.
+
+This part is in two halves. The first half designs the **three memory tiers**: a verbatim short-term window bounded by tokens, a medium-term rolling narrative digest, and extracted long-term facts, each with its own store, lifecycle, and injection path. The second half answers the title question with the **scope model**: three concentric read levels (`session`, `agent`, `user`) bound to verified identity, a `maxReadScope` ceiling agreed between agent and store, and enforcement that keeps the model, or a compromised prompt, from widening any of it. The part closes with five lessons on tier and scope design that carry beyond KAOS.
+
+As with my previous posts on [observability for agentic systems](https://hackernoon.com/production-observability-for-multi-agent-ai-with-kaos-otel-signoz) and [autonomous always-on agentic patterns](https://hackernoon.com/autonomous-agentic-systems-a-practical-guide-to-always-on-agents), I use KAOS as the concrete implementation example, but the goal is to provide practical intuition for the primitives (tiers, scopes, folding, degradation), so that it applies whether you use KAOS, Mem0 directly, LangGraph, CrewAI, or a memory layer you wrote yourself.
 
 The series:
 
-* **Part 1: What agent memory is and what to build on.**
-* **Part 2 (this post): Tiers and scopes for multi-tenant agents.**
-* **Part 3: Memory as infrastructure.** (coming soon...)
-* **Part 4: Agent memory in action.** (coming soon...)
+* **Part 1: What agent memory is and what to build on.** The taxonomy, the baseline implementations everyone starts with, and the engine landscape from surveying ~30 tools.
+* **Part 2 (this post): Tiers and scopes for multi-tenant agents.** The three-tier design and the answer to whose memory it is.
+* **Part 3: Memory as infrastructure.** The Kubernetes `MemoryStore` resource, its deployment topology, and how to integrate it in your own agent (coming soon...).
+* **Part 4: Agent memory in action.** A worked example that runs end to end on a secured cluster, with real outputs (coming soon...).
 
 ## Designing our Memory Architecture: The Three Tiers
 
@@ -167,7 +175,7 @@ A model on paper is not a system. In part 3 we make this design exist as infrast
 
 **The series:**
 
-* Part 1: What agent memory is and what to build on.
-* Part 2 (this post): Tiers and scopes for multi-tenant agents.
-* Part 3: Memory as infrastructure (coming soon...).
-* Part 4: Agent memory in action (coming soon...).
+* **Part 1: What agent memory is and what to build on.** The taxonomy, the baseline implementations everyone starts with, and the engine landscape from surveying ~30 tools.
+* **Part 2 (this post): Tiers and scopes for multi-tenant agents.** The three-tier design and the answer to whose memory it is.
+* **Part 3: Memory as infrastructure.** The Kubernetes `MemoryStore` resource, its deployment topology, and how to integrate it in your own agent (coming soon...).
+* **Part 4: Agent memory in action.** A worked example that runs end to end on a secured cluster, with real outputs (coming soon...).
