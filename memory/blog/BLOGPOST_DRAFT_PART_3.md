@@ -4,16 +4,33 @@ _This is a 4-part series on how agents remember: building short-, medium- and lo
 
 ---
 
-In Part 1 we surveyed the memory engine landscape and adopted Mem0 as a library behind our own interface. In Part 2 we designed the memory model on top of it: three tiers (a verbatim short-term window, a rolling medium-term digest, and extracted long-term facts) and a scope model that derives "whose memory is it?" from verified identity, fail-closed.
+It is 2am and the database behind your agents' memory has just gone down. Thirty agents across the cluster are mid-conversation. Do they crash, hang on retries, or carry on with a shorter memory until the store comes back? The answer says a lot about whether memory in your platform is a feature bolted onto each agent, or a piece of infrastructure with its own contract.
 
-A design is only useful once it runs, and this part is about making memory exist as infrastructure. We go through the deployment topology decision (a central memory service per store rather than an engine embedded in every agent), the `MemoryStore` kubernetes resource and its storage profiles, and the degradation contract that treats memory as augmentation so that a store outage degrades an agent instead of taking it down. We then close the loop for readers not on KAOS by converting the naive snippet from Part 1 into a production-shaped integration you can build into your own agent, and finish with the cases where you should not add long-term memory at all.
+> This captures why the memory layer deserves the same treatment as any other infrastructure component: a resource, a topology, and a failure contract.
 
-The series:
+Recently I spent some time extending the [Kubernetes Agent Orchestration System (KAOS)](https://github.com/axsaucedo/agentic-kubernetes-operator) to support multi-tiered memory persistence (aka short-, medium- and long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into a multi-tenant system, so I thought it would be useful to compile the learnings, design choices and examples into this series.
 
-* **Part 1: What agent memory is and what to build on.**
-* **Part 2: Tiers and scopes for multi-tenant agents.**
-* **Part 3 (this post): Memory as infrastructure.**
-* **Part 4: Agent memory in action.** (coming soon...)
+This is Part 3 of the series, and here we make the memory design run as infrastructure. It follows [Part 1](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/), where we surveyed ~30 memory engines and adopted [Mem0](https://github.com/mem0ai/mem0) as a library behind our own interface, and [Part 2](link-when-published), where we designed the three memory tiers (a verbatim short-term window, a rolling medium-term summary, and extracted long-term facts) and the scope model that derives "whose memory is it?" from verified identity.
+
+The objective throughout the series is:
+
+> Let's make the memory layer BORING, so that the agents can continue to be the fun part.
+
+This part consists of two sections:
+
+1. **Memory as infrastructure**: The three architecture decisions behind the `MemoryStore` Kubernetes resource, covering the storage profiles, the deployment topology, and the resource specification itself.
+2. **Integrating it in your own agent**: Converting the naive skeleton from Part 1 into a production-shaped integration, either from scratch or through the `kaos-memory` package.
+
+Finally we wrap up with the cases where you should not add long-term memory at all, and the lessons that carry beyond KAOS.
+
+Here's a refresher on this 4-part series on Multi-Tiered / Multi-Tenant Agent Memory:
+
+* **[Part 1: What agent memory is and what to build on.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/)** The taxonomy, the baseline implementations everyone starts with, and the engine landscape from surveying ~30 tools.
+* **[Part 2: Tiers and scopes for multi-tenant agents.](link-when-published)** The three-tier design and the answer to whose memory it is.
+* **Part 3 (this post): Memory as infrastructure.** The Kubernetes `MemoryStore` resource, its deployment topology, and how to integrate it in your own agent.
+* **Part 4: Agent memory in action.** A worked example that runs end to end on a secured cluster, with real outputs (coming soon...).
+
+Let's get started.
 
 ## Kubernetes Enters the Picture: Memory as Infrastructure
 
