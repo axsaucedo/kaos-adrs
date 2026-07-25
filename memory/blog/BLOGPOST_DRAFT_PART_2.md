@@ -4,19 +4,27 @@ _This is a 4-part series on how agents remember: building short-, medium- and lo
 
 ---
 
-Two users talk to the same agent, backed by the same memory store. Alice mentions her API keys rotate on Fridays. The next day bob asks the agent what it knows about deployment schedules. Whether alice's fact can appear in that answer is the whole multi-tenancy problem in one exchange, and it is decided by the scope model long before the model sees a prompt.
+Alice and bob are talking to the same agents. Alice interacts with various agents for infra management. Bob interacts with various agents for app development. Both are able to leverage learnings from the last month. But how far should this go? Should Alice be able to recall memories from Bob's interactions? Should User allow a single agent to recall memories from across agents? 
 
-Recently I spent some time extending the Kubernetes Agent Orchestration System (KAOS) to support multi-tiered memory persistence (aka short-, medium- and long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into a multi-tenant system, so I thought it would be useful to compile the learnings, design choices and examples into this series. This second part covers the design core: the three memory tiers and the scope model, drawing on the research across ~30 memory tools and frameworks from Part 1 and on the implementation that now ships as the `MemoryStore` resource in KAOS. The objective throughout the series:
+> This captures the design choices required in multi-tenency for agentic memory management
+
+Recently I spent some time extending the [Kubernetes Agent Orchestration System (KAOS)](TODO Add link) to support multi-tiered memory persistence (aka short-, medium- and long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into a multi-tenant system, so I thought it would be useful to compile the learnings, design choices and examples into this series. 
+
+This is Part 2 of the series, and here I go through some of the design choices made for 3-tier multi-tenant memory. This follows [Part 1](link-when-published) we surveyed ~30 memory engines, built a working taxonomy, and landed on adopting [Mem0](https://github.com/mem0ai/mem0) as a library behind our
+
+The objective throughout the series is:
 
 > Let's make the memory layer BORING, so that the agents can continue to be the fun part.
 
-In [Part 1](link-when-published) we surveyed ~30 memory engines, built a working taxonomy, and landed on adopting [Mem0](https://github.com/mem0ai/mem0) as a library behind our own interface, together with the list of gaps (observability, tenant isolation, kubernetes packaging, framework bridging) that become our integration work.
+This part is consists in two sections: 
+1. **Three memory tiers**: Defining the memory adopted, which includes a short-term window memory, a medium-term rolling summary, and long-term semantic "facts".
+2. **Scope model**: A hierarchical multi-tenant read model scope, that spans across `session > agent > user`, defined by a verified identity and a `maxReadScope` ceiling
 
-This part is in two halves. The first half designs the **three memory tiers**: a verbatim short-term window bounded by tokens, a medium-term rolling narrative digest, and extracted long-term facts, each with its own store, lifecycle, and injection path. The second half answers the title question with the **scope model**: three concentric read levels (`session`, `agent`, `user`) bound to verified identity, a `maxReadScope` ceiling agreed between agent and store, and enforcement that keeps the model, or a compromised prompt, from widening any of it. The part closes with five lessons on tier and scope design that carry beyond KAOS.
+Finally we wrap up with five hard lessons we learned about tier and scope design that carry beyond KAOS.
 
 As with my previous posts on [observability for agentic systems](https://hackernoon.com/production-observability-for-multi-agent-ai-with-kaos-otel-signoz) and [autonomous always-on agentic patterns](https://hackernoon.com/autonomous-agentic-systems-a-practical-guide-to-always-on-agents), I use KAOS as the concrete implementation example, but the goal is to provide practical intuition for the primitives (tiers, scopes, folding, degradation), so that it applies whether you use KAOS, Mem0 directly, LangGraph, CrewAI, or a memory layer you wrote yourself.
 
-The series:
+A refresher on this 4-part series on Multi-Tiered / Multi-Tenant Agent Memory:
 
 * **Part 1: What agent memory is and what to build on.** The taxonomy, the baseline implementations everyone starts with, and the engine landscape from surveying ~30 tools.
 * **Part 2 (this post): Tiers and scopes for multi-tenant agents.** The three-tier design and the answer to whose memory it is.
@@ -25,7 +33,7 @@ The series:
 
 ## Designing our Memory Architecture: The Three Tiers
 
-As we now locked the decision to go forward with Mem0 as the memory library, we can move to the broader design architecture for the distributed memory tiers in KAOS.
+As we now locked the decision to go forward with Mem0 as the memory library in [Part 1](TODO ADD LINK), we can move to the broader design architecture for the distributed memory tiers.
 
 Based on the requirements, we needed to support three tiers: a short-term window, a medium-term summary, and long-term "facts". These are intuitively used as follows:
 
@@ -37,12 +45,13 @@ Based on the requirements, we needed to support three tiers: a short-term window
 
 Defining these tiers allow us to formalise the following design decisions:
 
-* Long-term memory functionality is enabled via Mem0; short- and medium-term memory are custom; These three tiers should cohesively integrate as a single interoperable unit.
-* Medium- and long-term extraction **is lossy**. There's definitely some interesting approaches where [we could enable provenance](https://arxiv.org/abs/2605.04897), however I decided to keep this out of scope at least for now.
-* Medium- and long-term extraction are always **off the write path**; when compaction threshold is crossed, as opposed to in every insert, which is also how [Mem0's own platform behaves](https://docs.mem0.ai/core-concepts/memory-operations), processing memory additions in the background and returning a pending event to poll.
-* The medium-term summary stays **out of the vector store**: Mem0 wants atomic, individually revisable facts, whereas a summary is a narrative whose whole value is its continuity, so it is stored as a plain relational row and injected verbatim, and only the raw evicted turns are handed to Mem0 for extraction.
+* Long-term memory functionality is enabled via Mem0; short- and medium-term memory are build custom.
+* These three tiers should cohesively integrate as a single interoperable unit.
+* Medium- and long-term extraction **is lossy**; [we could enable provenance](https://arxiv.org/abs/2605.04897), however this adds significant complexity so I decided to keep this out of scope for now.
+* Medium- and long-term extraction are always **off the write path**; it triggers when compaction threshold is crossed as opposed to in every insert, which is also how [Mem0's own platform behaves](https://docs.mem0.ai/core-concepts/memory-operations).
+* The medium-term summary stays **out of the vector store**: Mem0 wants atomic, individually revisable facts, whereas a summary is a narrative whose whole value is its continuity.
 * Underneath all three tiers, the **raw turns are the source of truth** and everything else (summaries, facts, embeddings) is a recomputable projection, which is also what makes lossy extraction and fire-and-forget background processing acceptable.
-* Temporal (bi-temporal validity) and procedural (aka skill persistence) memory are deliberately **deferred** in its explicit form; but achievable through the long-term memory.
+* [TODO ADD LINKS TO THESE TWO POINTS] Temporal (bi-temporal validity) and procedural (aka skill persistence) memory are deliberately **deferred** in its explicit form; but achievable through the long-term memory.
 
  These definitions also allow us to design the singel coherent service that offers the short-, medium- and long-term memory tiers; the **"MemoryStore Service"**.
 
@@ -64,13 +73,21 @@ graph LR
 ```
 
 
-We will cover more on the `MemoryStore` service in the kubernetes section below, but before we do that, we need to talk about another important (+ tricky) topic; access scopes.
+We will cover more on the `MemoryStore` service in the [TODO: there's no more "kubernetes" section below; this should reference part 3]kubernetes section. Before we arrive to the next Part however, we need to talk about another important (+ tricky) topic: 
 
-## Scopes: Whose Memory Is It Anyway?
+> **Access Scopes**: or **who** should be able to remember **what**?
+
+## Access Scopes: Whose Memory Is It Anyway?
 
 Every memory operation in a multi-tenant fleet needs an answer to "whose memory is it?". And the answer has to come from the design of the system components. 
 
-The write path is where the answer starts. A single conversation is authored by an agent, on behalf of a user, inside a session, on one store, so the service records all of that attribution on every stored record as provenance. Writes are therefore compound and invariant, while a read resolves to a single scope level and is a matter of policy. That separation is what lets one write be recalled at several levels later without being duplicated, because the same fact an agent stored for Alice carries her `user_id`, the agent identity, and the session at once, so recalls at different levels each find it through a different owner key.
+We first have to start on the **write path** before we can define a solution for the **read path access**. The key thing to remember is that: 
+
+> A single conversation is authored by an agent, on behalf of a user (or autonomous agent), inside a session, on one memory store. 
+
+This means the service records all of these as metadata provennace for every memory input stored. Writes are therefore compound and invariant, while a read resolves to a single scope level and is a matter of policy. 
+
+That separation is what lets one write be recalled at several levels later without being duplicated, because the same fact an agent stored for Alice carries her `user_id`, the agent identity, and the session at once, so recalls at different levels each find it through a different owner key.
 
 ```mermaid
 graph LR
