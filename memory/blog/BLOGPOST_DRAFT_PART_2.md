@@ -203,9 +203,19 @@ Sharing topology can be a deployment choice instead of an authorization system, 
 
 ## Closing Thoughts for Part 2
 
-We opened with Alice and Bob talking to the same agents, and with the question of how far their memories should reach. We can now answer it precisely. Should Alice recall memories from Bob's interactions? Never through an agent, because every recall is bound to the verified identity on the request. Should a single agent reach across a user's other agents? Only when the user level sits within its `maxReadScope` ceiling, which both the agent and the store owner have to allow. Everything wider than that belongs to the cluster admin, behind Kubernetes RBAC.
+We opened Part 2 with Alice and Bob talking to the same agents, and with the question of how should their memories be available and accessable. After this initial design, we can now answer it precisely. 
 
-That is the conceptual core of the series: three tiers that decide what an agent remembers, and a scope model that decides who it remembers it for. In Part 3 we turn this design into running infrastructure with the `MemoryStore` Kubernetes resource, the topology decision behind it, and the degradation contract that keeps a memory outage from taking an agent down, together with how you can integrate the same pattern in your own agent from scratch.
+Should Alice recall memories from Bob's interactions? Never through an agent, because every recall is bound to the verified identity on the request. 
+
+Should a single agent reach across a user's other agents? Only when the user level sits within its `maxReadScope` ceiling, which both the agent and the store owner have to allow. 
+
+Everything wider than that belongs to the cluster admin, behind Kubernetes RBAC.
+
+That is the conceptual core of the series: three tiers that decide what an agent remembers, and a scope model that decides who it remembers it for. 
+
+In Part 3 we turn this design into running infrastructure with the `MemoryStore` Kubernetes resource, the topology decision behind it, and the degradation contract that keeps a memory outage from taking an agent down, together with how you can integrate the same pattern in your own agent from scratch. 
+
+Stay tuned for next week!
 
 **The series:**
 
