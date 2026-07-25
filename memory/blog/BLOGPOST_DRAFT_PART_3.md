@@ -34,7 +34,7 @@ Let's get started.
 
 ## Kubernetes Enters the Picture: Memory as Infrastructure
 
-Now that we have all the separate pieces, it's required make a decision on how do we stitch them together; as part of this, I needed to go through several architectural design choices. We'll go through a few of these in this section.
+Now that we have all the separate pieces, we need to decide how to stitch them together, and this involved several architectural design choices. We'll go through the three biggest ones in this section.
 
 **Decision 1: Choosing the Storage**
 
@@ -50,6 +50,8 @@ This ruled out SaaS-only options like Pinecone for the first iteration, as well 
 One interesting caveat that I ran into, was learning that some database engines apply scope filters after the retrieval step, which means that in some cases a query expecting a number of results may return less than expected. This is a known consideration on [pgvector as it post-filters by default](https://dev.to/franckpachot/no-pre-filtering-in-pgvector-means-reduced-ann-recall-1aa1), and it is why engines like [Qdrant filter inside the index traversal](https://qdrant.tech/documentation/manage-data/multitenancy/). 
 
 To mitigate this, I validated the pre-filtering behaviour on both Chroma and pgvector before committing to the design, for which both passed. Mem0's FAISS path post-filters, which is why I decided to go for Chroma instead for the local path.
+
+One more property of the storage boundary is worth stating explicitly: isolation **between** stores is a connection decision. Two `MemoryStore` resources pointing at the same DSN share the same underlying tables, and only the scope filtering from Part 2 separates their data. When a tenant needs physical isolation, you give it its own store with its own DSN, which is the "store is the group" lesson from Part 2 applied at the infrastructure layer. Within a shared database, the service applies scope-key filtering on every query and ships Postgres row-level security as hardening behind it.
 
 ```mermaid
 flowchart LR
@@ -160,7 +162,7 @@ Now that we have all the major pieces threaded together, we can now dive into a 
 
 ## How You Can Integrate It In Your Agent From Scratch
 
-Let's take look at the snippet that we shared at the beginning of this post which showed a framework-agnostic skeleton for memory. We can then see how we convert this into a production level integration for any agent, enabling for the tiered memory that we saw:
+Let's take a look at the framework-agnostic skeleton for memory that we introduced back in Part 1. We can then see how to convert it into a production level integration for any agent, enabling the tiered memory that we saw:
 
 ```python
 async def run_with_memory(session_id, user_message, memory, agent):
@@ -256,7 +258,7 @@ Like autonomy, memory has become a checkbox feature, and the temptation is to sw
 
 - users or goals persist across sessions and personalization compounds,
 - a fleet of agents benefits from shared operational knowledge,
-- agents run [always-on autonomous loops](https://hackernoon.com/), the biggest memory producers and consumers, since nobody is there to repeat the context to them,
+- agents run [always-on autonomous loops](https://hackernoon.com/autonomous-agentic-systems-a-practical-guide-to-always-on-agents), the biggest memory producers and consumers, since nobody is there to repeat the context to them,
 - the same facts keep being re-established at the start of every session.
 
 It is a poor fit when:
@@ -273,19 +275,23 @@ One caution applies even when memory *is* the right call, which is that remember
 
 Here are the patterns from this part that I would carry into any agentic memory system.
 
-### 8. Adopt the engine and own the contract
+### 6. Adopt the engine and own the contract
 
 Wrap the memory engine behind your own interface, and adopt it for the right reason, which is latency and token cost at scale, since raw accuracy can actually favour full-context baselines. Every gap in the engine you select becomes your integration layer, so choose the gaps you know how to fill.
 
+### 7. Memory is augmentation, never a hard dependency
+
+Recall should degrade instead of raise, so that a memory outage produces an agent with a shorter memory instead of an agent that is down. If an outage of the memory path would be treated as an outage of the agent, the design needs revisiting before it scales.
+
 ## Closing Thoughts for Part 3
 
-This part made the memory model operational: a central `MemoryStore` service per store with the engine embedded as a library, storage profiles for the dev-to-production path, posture projected by the operator, and a degradation contract that keeps memory an augmentation rather than a dependency. We also walked the same shape as a from-scratch integration, so the pattern applies whether or not KAOS is your platform.
+This part made the memory model operational: a central `MemoryStore` service per store with the engine embedded as a library, storage profiles for the dev-to-production path, a scope ceiling carried by the store itself, and a degradation contract that keeps memory an augmentation rather than a dependency. We also walked the same shape as a from-scratch integration, so the pattern applies whether or not KAOS is your platform.
 
 What remains is proof. In part 4 we run the whole system end to end on a secured cluster: two users, three agents with different read entitlements, every tier and scope boundary exercised with real captured outputs, plus the operational lessons that close the series. Stay tuned.
 
 **The series:**
 
-* Part 1: What agent memory is and what to build on.
-* Part 2: Tiers and scopes for multi-tenant agents.
-* Part 3 (this post): Memory as infrastructure.
-* Part 4: Agent memory in action (coming soon...).
+* **[Part 1: What agent memory is and what to build on.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/)** The taxonomy, the baseline implementations everyone starts with, and the engine landscape from surveying ~30 tools.
+* **[Part 2: Tiers and scopes for multi-tenant agents.](link-when-published)** The three-tier design and the answer to whose memory it is.
+* **Part 3 (this post): Memory as infrastructure.** The Kubernetes `MemoryStore` resource, its deployment topology, and how to integrate it in your own agent.
+* **Part 4: Agent memory in action.** A worked example that runs end to end on a secured cluster, with real outputs (coming soon...).
