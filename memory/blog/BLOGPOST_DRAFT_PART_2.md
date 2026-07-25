@@ -64,10 +64,24 @@ Every memory operation in a multi-tenant fleet needs an answer to "whose memory 
 
 The write path is where the answer starts. A single conversation is authored by an agent, on behalf of a user, inside a session, on one store, so the service records all of that attribution on every stored record as provenance. Writes are therefore compound and invariant, while a read resolves to a single scope level and is a matter of policy. That separation is what lets one write be recalled at several levels later without being duplicated, because the same fact an agent stored for Alice carries her `user_id`, the agent identity, and the session at once, so recalls at different levels each find it through a different owner key.
 
+```mermaid
+graph LR
+  W["one stored fact<br/>agent_id + user_id + session_id"]
+  W -->|"session read"| S["found: same conversation"]
+  W -->|"agent read"| A["found: same agent x alice"]
+  W -->|"user read"| U["found: alice on any agent"]
+```
+
 For reads, KAOS uses three concentric levels, where each wider level contains the previous one:
 
-```
-session  <  agent  <  user
+```mermaid
+graph LR
+  subgraph user["user: the verified user across all agents"]
+    subgraph agent["agent: this agent x this user"]
+      session["session: the current conversation"]
+    end
+  end
+  store["store: whole-store view<br/>(operators only, part 4)"]
 ```
 
 The level chooses the radius of the view; the identity always comes from the gateway-verified request headers, never from the request body or the model. This gives each level one documented meaning under each security posture:
@@ -82,7 +96,20 @@ Two properties of this table are worth pausing on. First, every level is princip
 
 One more view exists, and it is deliberately absent from the table. The whole-store view (`store`: everything every agent and user wrote to the store) is for operators: inspection and erasure across the entire store. The memory service refuses it on any request arriving through an agent, so no grant, tool, or prompt can reach it; the only path to it is the cluster-operator one that Kubernetes RBAC already gates. A terminology note that saved us real confusion: identity groups (the `groups` claim in a token, used for authorization grants) and the memory store are different things, which is why the whole-store scope is named `store` and never "group".
 
+```mermaid
+graph LR
+  M["model / prompt"] --> G["gateway + agent identity"] -->|"store level: refused"| SVC["memory service"]
+  OP["operator (kubectl port-forward,<br/>gated by RBAC)"] -->|"store level: allowed"| SVC
+```
+
 Because the read levels are totally ordered, an agent's entitlement does not need to be a list of allowed levels; it collapses to a single maximum, `maxReadScope`. The automatic baseline recall runs at that effective ceiling, and the `search_memory` tool's `level` enum becomes every level up to and including it, so an unentitled level is not something the model can even express, which is the fail-closed rule from earlier applied to the read path. The `MemoryStore` carries its own `maxReadScope` ceiling (default `agent`), and an agent may not claim above its store's, so cross-agent `user` reads exist only where the store owner deliberately raised the ceiling.
+
+```mermaid
+graph LR
+  MS["MemoryStore<br/>maxReadScope: user"] --> A["Agent<br/>maxReadScope: agent<br/>(must not exceed store)"]
+  A --> T["search_memory level enum:<br/>[session, agent]"]
+  A --> R["automatic recall at: agent"]
+```
 
 Who must be identified is not something an agent declares; it follows from the cluster's security posture. When the cluster runs user authentication, every write must carry a verified principal, and the store rejects one that arrives without it; when agent authentication is on, a stable agent identity is required the same way. Agents can neither opt out of these requirements nor demand more than the cluster provides, which removes a whole class of misconfiguration: an agent claiming `maxReadScope: user` on a cluster with no user identity is rejected at its own deploy time instead of failing at runtime. The rejection lives on the reader only, since a store's ceiling grants permission and performs no reads, so a store declaring `user` on such a cluster stays healthy and its ceiling simply remains unclaimed. Autonomous agents need no exception, because a self-initiated iteration runs with the agent's own identity as its principal, satisfying the same requirements uniformly, so a loop's memory stays private to the loop.
 
