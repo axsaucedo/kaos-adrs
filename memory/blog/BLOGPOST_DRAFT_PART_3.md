@@ -285,9 +285,9 @@ Recall should degrade instead of raise, so that a memory outage produces an agen
 
 ## Closing Thoughts for Part 3
 
-This part made the memory model operational: a central `MemoryStore` service per store with the engine embedded as a library, storage profiles for the dev-to-production path, a scope ceiling carried by the store itself, and a degradation contract that keeps memory an augmentation rather than a dependency. We also walked the same shape as a from-scratch integration, so the pattern applies whether or not KAOS is your platform.
+We opened at 2am with the memory database down and thirty agents mid-conversation. We can now answer what happens: nothing dramatic. Recall degrades to the conversational tiers, the `degraded` flag surfaces on every response, writes honour their soft or strict contract, and the agents keep serving with a shorter memory until the store comes back. That outcome is not luck, it is the sum of this part's decisions: a central `MemoryStore` service with the engine embedded as a library, storage profiles for the dev-to-production path, a scope ceiling carried by the store itself, and memory treated as augmentation throughout.
 
-What remains is proof. In part 4 we run the whole system end to end on a secured cluster: two users, three agents with different read entitlements, every tier and scope boundary exercised with real captured outputs, plus the operational lessons that close the series. Stay tuned.
+What remains is proof. In Part 4 we run the whole system end to end on a secured cluster: two users, three agents with different read entitlements, every tier and scope boundary exercised with real captured outputs, plus the operational lessons that close the series.
 
 **The series:**
 
