@@ -1,4 +1,4 @@
-# Memory as Infrastructure: A MemoryStore for Kubernetes Agents (Part 3)
+# Whose Memory Is It? Building Multi-Tenant, Multi-Tier Memory for AI Agents (Part 3)
 
 _This is a 4-part series on how agents remember: building short-, medium- and long-term memory that scales across users, agents, and kubernetes clusters._
 
