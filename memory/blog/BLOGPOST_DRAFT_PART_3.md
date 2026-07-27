@@ -4,7 +4,7 @@ _This is a 4-part series on how agents remember: building short-, medium- and lo
 
 ---
 
-It is 2am and the database behind your agents' memory has just gone down. Thirty agents across the cluster are mid-conversation. Do they crash, hang on retries, or carry on with a shorter memory until the store comes back? The answer says a lot about whether memory in your platform is a feature bolted onto each agent, or a piece of infrastructure with its own contract.
+It is 2am and the agent memory DB just crashed. Your users were in the middle of work with their agents. How should this be reconciled? Do they crash, or carry on with a shorter memory until the store comes back? The answer says a lot about whether memory in your platform is a feature bolted onto each agent, or a piece of infrastructure with its own contract.
 
 > This captures why the memory layer deserves the same treatment as any other infrastructure component: a resource, a topology, and a failure contract.
 
