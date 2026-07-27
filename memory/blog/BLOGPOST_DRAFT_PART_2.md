@@ -4,11 +4,13 @@ _This is a 4-part series on how agents remember: building short-, medium- and lo
 
 ---
 
-Alice and bob are talking to the same agents. Alice interacts with various agents for infra management. Bob interacts with various agents for app development. Both are able to build on learnings from the last month. But how far should this go? Should Alice be able to recall memories from Bob's interactions? Should a user allow a single agent to recall memories from across their agents? 
+Yesterday, Bob shared sensitive personal information with his agent. Today, Alice asked the same agent a question, and Bob's private details came back in her answer. This security nightmare is a real problem that keeps AI engineers up at night. 
+
+A few years back, OpenAI caught a bug that [let ChatGPT users see other users' chat metadata](https://openai.com/index/march-20-chatgpt-outage/). Once you introduce persistent agent memory, a bug of this kind can end up handing over everything a user ever shared. How do we make sure that the boundaries between agent memory are safe? And, what should these boundaries be?
 
 > This captures the design choices required in multi-tenancy for agentic memory management
 
-Recently I spent some time extending the [Kubernetes Agent Orchestration System (KAOS)](https://github.com/axsaucedo/agentic-kubernetes-operator) to support multi-tiered memory persistence (aka short-, medium- and long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into a multi-tenant system, so I thought it would be useful to compile the learnings, design choices and examples into this series. 
+Recently I spent some time extending the [K8s Agent OS (KAOS)](https://github.com/axsaucedo/agentic-kubernetes-operator) to support multi-tiered memory persistence (aka short-, medium- and long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into a multi-tenant system, so I thought it would be useful to compile the learnings, design choices and examples into this series. 
 
 This is Part 2 of the series, and here I go through some of the design choices made for 3-tier multi-tenant memory. This follows [Part 1](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/), where we surveyed ~30 memory engines, built a working taxonomy, and landed on adopting [Mem0](https://github.com/mem0ai/mem0) as a library behind our own interface, together with the list of gaps (observability, tenant isolation, kubernetes packaging, framework bridging) that become our integration work.
 
