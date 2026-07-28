@@ -10,7 +10,7 @@ It is 2am and the agent memory DB just crashed. Your users were in the middle of
 
 Recently I spent some time extending the [Kubernetes Agent Orchestration System (KAOS)](https://github.com/axsaucedo/agentic-kubernetes-operator) to support multi-tiered memory persistence (aka short-, medium- and long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into a multi-tenant system, so I thought it would be useful to compile the learnings, design choices and examples into this series.
 
-This is Part 3 of the series, and here we make the memory design run as infrastructure. It follows [Part 1](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/), where we surveyed ~30 memory engines and adopted [Mem0](https://github.com/mem0ai/mem0) as a library behind our own interface, and [Part 2](link-when-published), where we designed the three memory tiers (a verbatim short-term window, a rolling medium-term summary, and extracted long-term facts) and the scope model that derives "whose memory is it?" from verified identity.
+This is Part 3 of the series, and here we make the memory design run as infrastructure. It follows [Part 1](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/), where we surveyed ~30 memory engines and adopted [Mem0](https://github.com/mem0ai/mem0) as a library behind our own interface, and [Part 2](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-qx9uf/), where we designed the three memory tiers (a verbatim short-term window, a rolling medium-term summary, and extracted long-term facts) and the scope model that derives "whose memory is it?" from verified identity.
 
 The objective throughout the series is:
 
@@ -26,7 +26,7 @@ Finally we wrap up with the cases where you should not add long-term memory at a
 Here's a refresher on this 4-part series on Multi-Tiered / Multi-Tenant Agent Memory:
 
 * **[Part 1: What agent memory is and what to build on.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/)** The taxonomy, the baseline implementations everyone starts with, and the engine landscape from surveying ~30 tools.
-* **[Part 2: Tiers and scopes for multi-tenant agents.](link-when-published)** The three-tier design and the answer to whose memory it is.
+* **[Part 2: Tiers and scopes for multi-tenant agents.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-qx9uf/)** The three-tier design and the answer to whose memory it is.
 * **Part 3 (this post): Memory as infrastructure.** The Kubernetes `MemoryStore` resource, its deployment topology, and how to integrate it in your own agent.
 * **Part 4: Agent memory in action.** A worked example that runs end to end on a secured cluster, with real outputs (coming soon...).
 
@@ -292,6 +292,6 @@ What remains is proof. In Part 4 we run the whole system end to end on a secured
 **The series:**
 
 * **[Part 1: What agent memory is and what to build on.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/)** The taxonomy, the baseline implementations everyone starts with, and the engine landscape from surveying ~30 tools.
-* **[Part 2: Tiers and scopes for multi-tenant agents.](link-when-published)** The three-tier design and the answer to whose memory it is.
+* **[Part 2: Tiers and scopes for multi-tenant agents.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-qx9uf/)** The three-tier design and the answer to whose memory it is.
 * **Part 3 (this post): Memory as infrastructure.** The Kubernetes `MemoryStore` resource, its deployment topology, and how to integrate it in your own agent.
 * **Part 4: Agent memory in action.** A worked example that runs end to end on a secured cluster, with real outputs (coming soon...).
