@@ -4,23 +4,22 @@ _This is a 4-part series on how agents remember: building short-, medium- and lo
 
 ---
 
-Yesterday, Bob shared sensitive personal information with his agent. Today, Alice asked the same agent a question, and Bob's private details came back in her answer. This security nightmare is a real problem that keeps AI engineers up at night. 
+Yesterday, Bob shared sensitive personal information with his agent. Today, Alice asked the same agent a question, and Bob's private details came back in her answer. This may seem like a made up example, but this type of data leakage is more common than I'd like. 
 
 A few years back, OpenAI caught a bug that [let ChatGPT users see other users' chat metadata](https://openai.com/index/march-20-chatgpt-outage/). Once you introduce persistent agent memory, a bug of this kind can end up handing over everything a user ever shared. How do we make sure that the boundaries between agent memory are safe? And, what should these boundaries be?
 
-> This captures the design choices required in multi-tenancy for agentic memory management
+> This captures the important design choices required in multi-tenancy for agentic memory management.
 
 Recently I spent some time extending the [K8s Agent OS (KAOS)](https://github.com/axsaucedo/agentic-kubernetes-operator) to support multi-tiered memory persistence (aka short-, medium- and long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into a multi-tenant system, so I thought it would be useful to compile the learnings, design choices and examples into this series. 
 
-This is Part 2 of the series, and here I go through some of the design choices made for 3-tier multi-tenant memory. This follows [Part 1](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/), where we surveyed ~30 memory engines, built a working taxonomy, and landed on adopting [Mem0](https://github.com/mem0ai/mem0) as a library behind our own interface, together with the list of gaps (observability, tenant isolation, kubernetes packaging, framework bridging) that become our integration work.
+This is Part 2 of the 4-part series on multi-tenant agentic memory. In [Part 1](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/) I shared learnings from surveying ~30 memory engines, building a working taxonomy, and adopting [Mem0](https://github.com/mem0ai/mem0) as a library behind our own interface. In this Part 2, I go through the architectural choices and tradeoffs across two main design decisions:
 
-The objective throughout the series is:
-
-> Let's make the memory layer BORING, so that the agents can continue to be the fun part.
-
-This part consists of two sections: 
 1. **Three memory tiers**: Defining the memory adopted, which includes a short-term window memory, a medium-term rolling summary, and long-term semantic "facts".
 2. **Scope model**: A hierarchical multi-tenant read model scope, that spans across `session > agent > user`, defined by a verified identity and a `maxReadScope` ceiling
+
+The objective throughout the series is still the same:
+
+> Let's make the memory layer BORING, so that the agents can continue to be the fun part.
 
 Finally we wrap up with five hard lessons we learned about tier and scope design that carry beyond KAOS.
 
@@ -35,11 +34,11 @@ Here's a refresher on this 4-part series on Multi-Tiered / Multi-Tenant Agent Me
 
 Let's get started.
 
-## Designing our Memory Architecture: The Three Tiers
+# Designing our Memory Architecture: The Three Tiers
 
-As a reminder, the taxonomy defined in [Part 1](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/) consisted of five memory types: short-term (working), episodic, semantic, procedural and temporal.
+As a reminder, the taxonomy defined in [Part 1](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/) consisted of **five memory types**: 1) short-term (working), 2) episodic, 3) semantic, 4) procedural and 5) temporal.
 
-However when aligning with our requirements, I settled with a simplified **three tier model**: a short-term **window**, a medium-term **summary**, and long-term **"facts"**. These are intuitively defined as follows:
+However when surveying the ecosystem it was clear that in industry it is more commonly implemented as a **three tier model**: a short-term **window**, a medium-term **summary**, and long-term **“facts”**. These are intuitively defined as follows:
 
 | Tier        | What it holds                                                                     | When it updates                                      | Backing                      |
 | ----------- | --------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------- |
@@ -47,14 +46,15 @@ However when aligning with our requirements, I settled with a simplified **three
 | Medium-term | Rolling summary per session, versioned so past summaries stay accessible          | On compaction, when the window hits its token budget | Relational rows, append-only |
 | Long-term   | Atomic facts extracted from context window, keyed by scope, recalled semantically | In the background, after compaction                  | Mem0 into the vector store   |
 
-Now that these tiers are defined, it was possible to also formalise the following design decisions:
+As I was defining these 3-tiers, I also realised that this came with a few design choices that also needed more formalised definition, which I believe are useful to share here:
 
-* Long-term memory functionality is enabled via Mem0; short- and medium-term memory are built custom.
-* These three tiers should cohesively integrate as a single interoperable unit.
+* Long-term memory functionality is enabled via Mem0 (we already knew this).
+- Short- and medium-term memory do not need an external 3rd party library for implementation.
+- These three tiers should cohesively integrate as a single interoperable interface.
 * Medium- and long-term extraction **is lossy**; [we could enable provenance](https://arxiv.org/abs/2605.04897), however this adds significant complexity so I decided to keep this out of scope for now.
-* Medium- and long-term extraction are always **off the write path**; it triggers when compaction threshold is crossed as opposed to in every insert, which is also how [Mem0's own platform behaves](https://docs.mem0.ai/core-concepts/memory-operations).
-* The medium-term summary stays **out of the vector store**: Mem0 wants atomic, individually revisable facts, whereas a summary is a narrative whose whole value is its continuity.
-* Underneath all three tiers, the **raw turns are the source of truth** and everything else (summaries, facts, embeddings) is a recomputable projection, which is also what makes lossy extraction and fire-and-forget background processing acceptable.
+* Medium- and long-term extraction are always **off the write path**; these trigger when compaction threshold is crossed, instead of on every insert, which is also how [Mem0's own platform behaves](https://docs.mem0.ai/core-concepts/memory-operations).
+* The medium-term summary stays **out of the vector store**: Mem0 is built with atomic, individually revisable facts, whereas a summary is a narrative whose whole value is its continuity.
+* Underneath all three tiers, the **raw conversations are the source of truth** and everything else (summaries, facts, embeddings) are a recomputable projection, which is also what makes lossy extraction and fire-and-forget background processing acceptable.
 * [Temporal](https://arxiv.org/abs/2501.13956) (bi-temporal validity) and [procedural](https://arxiv.org/abs/2309.02427) (aka skill persistence) memory are deliberately **deferred** in their explicit form, but achievable through the long-term memory.
 
 These definitions also allow us to design the single coherent service that offers the short-, medium- and long-term memory tiers; the **"MemoryStore Service"**.
@@ -81,7 +81,7 @@ I will cover more on the `MemoryStore` service in Part 3 where we actually desig
 
 > **Access Scopes**: or **who** should be able to remember **what**?
 
-## Access Scopes: Whose Memory Is It Anyway?
+# Access Scopes: Whose Memory Is It Anyway?
 
 Every memory operation in a multi-tenant system needs an answer to "whose memory is it?". And the answer has to come from the design of the system components. 
 
@@ -179,41 +179,35 @@ Now finally once I adopted these design choices, I realised that there were a fe
 
 Now that we have sorted the tiers and the access scopes, let's distil the lessons from this part before we make it all run as infrastructure in part 3.
 
-## Lessons for Production Agentic Memory
+# Lessons for Production Agentic Memory
 
 Here are the patterns from this part that I would carry into any agentic memory system.
 
-### 1. Separate conversational continuity from learned knowledge
+## 1. Separate conversational continuity from learned knowledge
 
 Same-session verbatim windows and cross-session distilled facts are different memory tiers with different stores, lifecycles, and failure modes. Conflating them for any reason would add more complexity than simplification.
 
-### 2. Raw conversations are the source of truth
+## 2. Raw conversations are the source of truth
 
 Summaries, facts, and embeddings are lossy, but recomputable. Keep the verbatim record durable and you can survive both a lost extraction and a change of mind about your extraction strategy.
 
-### 3. Keep rolling summaries out of the vector store
+## 3. Keep rolling summaries out of the vector store
 
 We use long-term memory stores for atomic facts, whereas the medium-term memory is built with a rolling summary that provides continuity. Summaries and windows can be stored relationally and deterministically.
 
-### 4. The control plane should enforce the memory scope
+## 4. The control plane should enforce the memory scope
 
 Derive scope server-side from authenticated identity. When the model is allowed to search, bound the levels it can reach with a `maxReadScope` ceiling. Treat what comes back as untrusted data with provenance, since memory poisoning and cross-session injection are demonstrated attacks with published success rates.
 
-### 5. The store is the group (and vice-versa)
+## 5. The store is the group (and vice-versa)
 
 Sharing topology can be a deployment choice instead of an authorization system, with scope filtering within a store and physical isolation by deploying a store per tenant. This may seem restrictive, but it's the model that most production platforms (+ cloud providers) follow.
 
-## Closing Thoughts for Part 2
+# Closing Thoughts for Part 2
 
-We opened Part 2 with Alice and Bob talking to the same agents, and with the question of how should their memories be available and accessable. After this initial design, we can now answer it precisely. 
+We opened Part 2 with Bob's private details surfacing in Alice's answer. If we run that same scenario against this design, Bob's write is attributed to Bob's verified identity, Alice's recall is bound to hers. There is no level Alice can request that reaches into his rows. The leak requires a code path that does not exist, and that property comes from the platform, since the agent/model was never given a say in the matter.
 
-Should Alice recall memories from Bob's interactions? Never through an agent, because every recall is bound to the verified identity on the request. 
-
-Should a single agent reach across a user's other agents? Only when the user level sits within its `maxReadScope` ceiling, which both the agent and the store owner have to allow. 
-
-Everything wider than that belongs to the cluster admin, behind Kubernetes RBAC.
-
-That is the conceptual core of the series: three tiers that decide what an agent remembers, and a scope model that decides who it remembers it for. 
+That is the conceptual core of the series: three tiers that decide what an agent remembers, and a scope model that decides who it remembers it for.
 
 In Part 3 we turn this design into running infrastructure with the `MemoryStore` Kubernetes resource, the topology decision behind it, and the degradation contract that keeps a memory outage from taking an agent down, together with how you can integrate the same pattern in your own agent from scratch. 
 
