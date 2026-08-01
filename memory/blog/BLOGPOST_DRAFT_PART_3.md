@@ -4,7 +4,7 @@ _This is a 4-part series on how agents remember: building short-, medium- and lo
 
 ---
 
-It is 2am and the memory database just crashed. Thirty agents are mid-conversation across your cluster. What happens next was decided long before tonight: which storage the memory layer runs on, whether it runs inside each agent or as a service they share, what the resource declares about its tiers and scopes, and what everyone agreed happens when a dependency disappears. This part is about making those decisions deliberately, and then probing them failure by failure.
+It is 2am and the memory database just crashed. Thirty agents are mid-conversation across your cluster. The impact your users feel depends entirely on earlier design choices: Which storage does the memory layer sit on? Does it run inside each agent or as a service they share? What does the resource declare about replicas and availability? And what did everyone agree happens when a dependency disappears? In this post we design multi-tenant memory as native Kubernetes infrastructure, then probe that design failure by failure.
 
 > This captures why the memory layer deserves the same treatment as any other infrastructure component: a resource, a topology, and a failure contract.
 
@@ -20,7 +20,7 @@ This part consists of three sections:
 
 1. **Memory as infrastructure**: The three architecture decisions behind the `MemoryStore` Kubernetes resource, covering the storage profiles, the deployment topology, and the resource specification itself.
 2. **Standing it up on a cluster**: The installation with identity enabled, how auth is wired into the memory path, and the CLI that renders the resources.
-3. **The failure contract**: What actually happens when a service replica dies or bounces mid-compaction, a database node goes down, the whole memory path disappears, or the auth service does.
+3. **The failure contract**: What actually happens when a database node dies, a service replica bounces mid-compaction, the whole memory path disappears, or the auth service goes down.
 
 Finally we wrap up with the cases where you should not add long-term memory at all, and the lessons that carry beyond KAOS. The hands-on walkthrough of integrating the same pattern in your own agent now lives in Part 4, next to the running example.
 
@@ -210,6 +210,7 @@ With identity in place, the CLI renders the resources from the design section. T
 
 ```bash
 $ kaos modelapi create my-modelapi --mode proxy
+[TODO: Remove the modelAPI as thisis not relevant for this section]
 
 $ kaos memorystore create shared-memory \
   --modelapi my-modelapi \
