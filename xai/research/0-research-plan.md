@@ -83,11 +83,18 @@ Spikes are small runnable harnesses that prove a load-bearing assumption before 
 
 ## ChatGPT deep-research candidates
 
-The host has ChatGPT deep-research access and can run these externally and copy the results back for integration. Best suited are the fast-moving academic surveys and the regulatory detail, where breadth of current sources matters more than repo-grounded verification: **stage 10** (causal attribution methods), **stage 11** (probe/latent-monitor science), and **stage 13** (EU AI Act evidence requirements). Stages 9, 12, and the spikes are better done here because they depend on reading exact schemas, headers, and engine internals against running code. When deep-research output is imported, it lands as the named stage document with its sources cited inline, and any claim that a spike can check is flagged for validation rather than taken as settled.
+The host has ChatGPT deep-research access and can run stages **10–13** externally, in parallel, and copy the results back for integration — these four are the fast-moving academic surveys plus the regulatory and standards detail, where breadth of current sourcing matters more than repo-grounded verification. Each has a self-contained, copy-paste prompt (project context included, so it is a single paste into ChatGPT) under [`deep-research-prompts/`](./deep-research-prompts/):
+
+- **Stage 10** — causal attribution methods: [`deep-research-prompts/10-causal-attribution.md`](./deep-research-prompts/10-causal-attribution.md) → save result as `10-causal-attribution-methods.md`.
+- **Stage 11** — probe/latent-monitor science: [`deep-research-prompts/11-probe-latent-monitors.md`](./deep-research-prompts/11-probe-latent-monitors.md) → save result as `11-probe-and-latent-monitor-science.md`.
+- **Stage 12** — OTel propagation & transport: [`deep-research-prompts/12-otel-propagation-transport.md`](./deep-research-prompts/12-otel-propagation-transport.md) → save result as `12-otel-propagation-and-transport.md`. (Partly empirical — a few claims still get confirmed by spike S3 against running code; the prompt says so and asks the model to flag them.)
+- **Stage 13** — EU AI Act evidence requirements: [`deep-research-prompts/13-eu-ai-act-evidence.md`](./deep-research-prompts/13-eu-ai-act-evidence.md) → save result as `13-regulatory-evidence-requirements.md`.
+
+Each prompt asks for inline primary-source citations, maturity/cost/licensing per item, and an explicit flag on any claim a runnable spike could verify — so imported output lands as the named stage document with sources intact and validation targets marked, not taken as settled. Stages **9, 14, 15** stay in-house: they depend on reading exact schemas, testing real export paths, and watching the market against running code, not on a literature sweep.
 
 ## Sequencing
 
-The intended order of execution, each step gating the next: migrate stages 1–6; write stages 7–8 (the novel C4/C5 core, highest-value to capture while fresh); run spike S3 early (it is the riskiest assumption and reshapes stage 7's claims if it fails); carry out stages 9–12 alongside spikes S1/S2/S4/S5 (schema and attribution are what the first ADRs need); fold in stages 13–15 and spike S6; then move to `adrs/` for the A, B, and F decisions, and only then to `plan/` and `impl/`. Deep-research stages (10, 11, 13) can proceed in parallel externally since they do not block the early spikes.
+The intended order of execution, each step gating the next: migrate stages 1–6; write stages 7–8 (the novel C4/C5 core, highest-value to capture while fresh); run spike S3 early (it is the riskiest assumption and reshapes stage 7's claims if it fails); carry out stages 9–12 alongside spikes S1/S2/S4/S5 (schema and attribution are what the first ADRs need); fold in stages 13–15 and spike S6; then move to `adrs/` for the A, B, and F decisions, and only then to `plan/` and `impl/`. Deep-research stages (10–13) can proceed in parallel externally since they do not block the early spikes.
 
 ## Open questions carried into the ADR phase
 
