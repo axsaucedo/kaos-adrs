@@ -6,7 +6,7 @@ _This is a 4-part series on how agents remember: building short-, medium- and lo
 
 Over the first three parts we built the full picture: Part 1 established the taxonomy and the engine selection, Part 2 designed the three tiers and the scope model that answers "whose memory is it?", and Part 3 made it run as infrastructure with the `MemoryStore` kubernetes resource and its degradation contract.
 
-This final part is the proof. We run the whole system end to end on a secured cluster: one command to set it up, two logged-in users, and three agents with different read entitlements. We watch each tier do its job inside a single conversation, verify the scope boundaries between users and agents with real captured outputs, and probe the model's permission boundary directly with a prompt injection that fails. We close with the operational lessons and the series conclusion.
+This final part is the proof. We run the whole system end to end on a secured cluster: one command to set it up, two logged-in users, and three agents with different read entitlements. We watch each tier do its job inside a single conversation, verify the scope boundaries between users and agents with real captured outputs, and probe the model's permission boundary directly with a prompt injection that fails. We then show how to integrate the same pattern in your own agent, from scratch or through the `kaos-memory` package, and close with the operational lessons and the series conclusion.
 
 The series:
 
@@ -64,50 +64,7 @@ graph LR
 
 ### Setting up the Example: One Command
 
-First we do a clean installation with authentication enabled, since the example partitions memory by verified user identity:
-
-```bash
-$ kaos system install \
-  --authz-enabled \
-  --user-auth keycloak \
-  --agent-auth keycloak \
-  --wait
-```
-
-Here we are installing a cluster with user/agent identity & authorization, which we will be able to use for the access control examples of the memory components.
-
-This includes setting up and configuring user and agent auth with keycloak, as well as authorization based access control for the memory itself. You can read more about this in the [KAOS security documentation](https://axsaucedo.github.io/kaos/latest/security/overview.html).
-
-```mermaid
-flowchart TB
-  U["Users"]
-  GW["Gateway Mesh"]
-  UAuth["User Identity Service<br>(Keycloak, OIDC, etc)"]
-  AAuth["Agent Identity Service<br>(ServiceAcct, OIDC, etc)"]
-  Authz["KAOS Authz Service<br>(User+Agent Resource Access)"]
-  MS["MemoryStore<br>(Memory Management)"]
-  KAOS["KAOS Resources<br>(Agents, MCPs, Models)"]
-  OP["⠀<br><b>KAOS Operator</b><br><br>(Syncs Identity<br> Tokens & Authorization<br> Graphs)<br>⠀"]
-
-  subgraph mem["Memory Components"]
-    MS
-  end
-
-  subgraph req["Request path"]
-    U --> GW
-    GW --> KAOS
-  end
-
-  subgraph auth["Auth & Identity Providers"]
-    UAuth ~~~ AAuth
-    Authz
-  end
-
-  req <--> auth
-  req <--> mem
-```
-
-Everything the example needs is also bundled as a single sample, so one command deploys the whole cast:
+The example runs on the identity-enabled cluster we installed in Part 3 (`kaos system install --authz-enabled --user-auth keycloak --agent-auth keycloak`), since it partitions memory by verified user identity; Part 3 also covers how the auth wiring reaches the memory path. Everything the example needs is bundled as a single sample, so one command deploys the whole cast:
 
 ```bash
 $ kaos samples deploy 7-memory-agent -n support-demo
@@ -497,6 +454,98 @@ call is invalid due to the wrong level parameter.
 ```
 
 The `agent` level is not in this agent's schema, so the model has no way to express the call the prompt demanded. It stayed inside its vocabulary, reported that the requested level is unsupported, and no agent-level search ran. Because the level is fixed by the tool rather than supplied as a free argument, an injection cannot widen it.
+
+## Integrate It in Your Own Agent
+
+Let's take a look at the framework-agnostic skeleton for memory that we introduced back in Part 1. We can then see how to convert it into a production level integration for any agent, enabling the tiered memory that we saw:
+
+```python
+async def run_with_memory(session_id, user_message, memory, agent):
+    # 1. RECALL: assemble the memory block (never let this fail the turn)
+    try:
+        window = await memory.window(session_id, token_budget=4000)
+        medium_term_summary = await memory.medium_term_summary(session_id)
+        facts = await memory.search(scope=memory.scope, query=user_message, top_k=5)
+    except MemoryError:
+        window, digest, facts = await memory.window_only(session_id), None, []
+
+    context = build_memory_block(digest, facts)   # structured block, injected once
+
+    # 2. RUN
+    response = await agent.run(context, window, user_message)
+
+    # 3. PERSIST: append is cheap and synchronous; distillation is not
+    await memory.append(session_id, user_message, response)
+
+    # 4. FOLD + EXTRACT: always off the response path
+    if await memory.over_budget(session_id):
+        background(memory.fold_and_extract, session_id)
+
+    return response
+```
+
+The skeleton shows the load-bearing choices: recall wrapped so failure degrades instead of raising, the digest and facts injected as one structured block instead of fake conversation turns, the cheap verbatim append on the hot path, and the expensive fold-and-extract pushed to the background the moment the token budget trips.
+
+What it deliberately does not show, and what you must add before this becomes a production dependency: server-side scope enforcement, the erasure fan-out across tiers, the soft/strict write contract, OpenTelemetry on every operation, and a service boundary so a fleet shares one memory instead of one process hoarding it.
+
+Alternatively, you can adopt the packaged version of exactly this design: the `kaos-memory` package from Part 3's design section. It is pip-installable and deliberately layered behind extras. The core carries the wire contract and the `MemoryServiceClient`, `[service]` adds Mem0, the vector store, and the FastAPI service, and `[pydantic-ai]` adds the runtime adapters, server-side scope derivation, and the memory toolset:
+
+```bash
+pip install kaos-memory                  # wire contract + MemoryServiceClient
+pip install "kaos-memory[pydantic-ai]"   # + runtime adapters and the memory toolset
+```
+
+The part of the package I would call genuinely novel relative to the ecosystem is that **medium-term memory is a first-class tier**. The two-tier (working plus long-term) split is the industry norm, and the rolling, versioned session summary that keeps continuity across compaction is a concept the surveyed engines do not ship. The package owns the short- and medium-term tiers relationally, wraps Mem0 for the long-term tier, and exposes all three behind the single recall, write, and forget contract used throughout this post.
+
+The core install gives you the `MemoryServiceClient` against a running MemoryStore service:
+
+```python
+from kaos_memory import Attribution, MemoryServiceClient, Scope
+
+client = MemoryServiceClient(endpoint="http://memorystore-shared-memory:8080")
+scope = Scope(level="user")                         # reads pick one radius: session, agent, or user
+attribution = Attribution(                          # writes carry identities, no level
+    agent_client_id=agent_identity, session_id=session_id,
+)
+
+recalled = await client.recall(
+    scope, query=user_message,
+    include=["short_term", "medium_term", "long_term"],  # select tiers per call
+)
+response = await agent.run(recalled, user_message)
+await client.write(attribution, turns=[("user", user_message), ("assistant", response)])
+```
+
+The scope level is one of the concentric radii from Part 2 (`session`, `agent`, `user`), and the response nests one object per requested tier (`short_term.window`, `medium_term.summary`, `long_term.facts`) so a caller only receives, and only pays for, the tiers it asked for. The fourth level, `store`, exists in the vocabulary but the service refuses it on any request arriving through an agent, since whole-store reads belong to the admin plane. Recall degrades to empty context on failure instead of raising, writes honour the soft or strict failure mode, and every call emits the `kaos.memory.*` telemetry spans covered in the observability post.
+
+If your agent runs on Pydantic AI, the `[pydantic-ai]` extra adds the helpers that wire the pieces from this post together: server-side scope derivation, the explicit memory tools, and full-fidelity history replay.
+
+```python
+from kaos_memory.pydantic_ai import (
+    attribution_from_deps, scope_from_deps,
+    build_memory_toolset, reconstruct_message_history,
+)
+from kaos_memory.pydantic_ai.toolset import MemoryTools
+
+# reads derive a scope from the authenticated request context; by design
+# there is no way for the model or a tool to pass a scope in
+scope = scope_from_deps(deps, level="user", agent_identity=agent_identity)
+
+# writes derive an attribution: the verified identities, no level
+attribution = attribution_from_deps(deps, agent_identity=agent_identity)
+
+# expose save_memory / search_memory to the model (the tools carry no scope argument;
+# search offers every level up to the agent's maxReadScope ceiling)
+toolset = build_memory_toolset(MemoryTools.ALL, read_scopes=[scope.level], agent_identity=agent_identity)
+
+# rebuild message history from the short-term turns plus the rolling summary,
+# so overflow is represented by summarization instead of truncation
+history = reconstruct_message_history(recalled.short_term.window, recalled.medium_term.summary)
+
+result = await agent.run(user_message, message_history=history, toolsets=[toolset])
+```
+
+On KAOS the operator wires all of this automatically: the agent's `maxReadScope` ceiling from the CRD is expanded into the list of levels the toolset receives, and the level used for automatic per-turn recall comes from the agent's configuration, never from the request.
 
 ## Lessons for Production Agentic Memory
 
