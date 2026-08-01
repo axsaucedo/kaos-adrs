@@ -22,7 +22,7 @@ This part consists of three sections:
 2. **Standing it up on a cluster**: The installation with identity enabled, how auth is wired into the memory path, and the CLI that renders the resources.
 3. **The failure contract**: What actually happens when a database node dies, a service replica bounces mid-compaction, the whole memory path disappears, or the auth service goes down.
 
-Finally we wrap up with the cases where you should not add long-term memory at all, and the lessons that carry beyond KAOS. The hands-on walkthrough of integrating the same pattern in your own agent now lives in Part 4, next to the running example.
+Finally we wrap up with the lessons that carry beyond KAOS. The hands-on walkthrough of integrating the same pattern in your own agent, together with the discussion of when long-term memory is worth adding at all, now lives in Part 4, next to the running example.
 
 Here's a refresher on this 4-part series on Multi-Tiered / Multi-Tenant Agent Memory:
 
@@ -175,31 +175,27 @@ $ kaos system install \
 
 This sets up and configures user and agent auth with keycloak, as well as authorization based access control for the memory itself. You can read more about this in the [KAOS security documentation](https://axsaucedo.github.io/kaos/latest/security/overview.html).
 
-[TODO: Let's reduce the size of the auth below, let's just call it User / Agent Identity (Keycloak) for one block and the other is the Kaos Authz Service with an arrow going both sides. And then on the memory components we are missing the databse.] 
-
 ```mermaid
 flowchart TB
   U["Users"]
   GW["Gateway Mesh"]
-  UAuth["User Identity Service<br>(Keycloak, OIDC, etc)"]
-  AAuth["Agent Identity Service<br>(ServiceAcct, OIDC, etc)"]
-  Authz["KAOS Authz Service<br>(User+Agent Resource Access)"]
+  ID["User / Agent Identity<br>(Keycloak)"]
+  Authz["KAOS Authz Service"]
   MS["MemoryStore<br>(Memory Management)"]
+  DB[("Postgres + pgvector")]
   KAOS["KAOS Resources<br>(Agents, MCPs, Models)"]
-  OP["⠀<br><b>KAOS Operator</b><br><br>(Syncs Identity<br> Tokens & Authorization<br> Graphs)<br>⠀"]
-
-  subgraph mem["Memory Components"]
-    MS
-  end
 
   subgraph req["Request path"]
     U --> GW
     GW --> KAOS
   end
 
-  subgraph auth["Auth & Identity Providers"]
-    UAuth ~~~ AAuth
-    Authz
+  subgraph auth["Auth & Identity"]
+    ID <--> Authz
+  end
+
+  subgraph mem["Memory Components"]
+    MS --> DB
   end
 
   req <--> auth
@@ -211,9 +207,6 @@ The wiring matters for what comes later in this part, so it is worth tracing onc
 With identity in place, the CLI renders the resources from the design section. The store first, referencing the `ModelAPI` its background workers will use for summarization and embeddings:
 
 ```bash
-$ kaos modelapi create my-modelapi --mode proxy
-[TODO: Remove the modelAPI as thisis not relevant for this section]
-
 $ kaos memorystore create shared-memory \
   --modelapi my-modelapi \
   --summarization-model gpt-4o-mini \
@@ -234,35 +227,99 @@ These commands render exactly the `MemoryStore` specification from Decision 3 pl
 
 ## The Failure Contract
 
-A failure contract that has never been probed is a hope. So instead of asserting that "memory degrades gracefully", let's take the setup we just stood up and walk through five failure scenarios in increasing blast radius, stating in each case what the system actually does, including the places where the honest answer is a trade-off rather than a guarantee.
-
-[TODO: Add one graph for eachof the failure modes]
+A failure contract that has never been probed is a hope. So instead of asserting that "memory degrades gracefully", let's take the setup we just stood up and play out one bad night on the cluster, five incidents in increasing blast radius. Each one uses the same topology diagram with the failing piece marked in red, the impacted pieces in amber, and the parts that keep working in green, stating in each case what the system actually does, including the places where the honest answer is a trade-off rather than a guarantee.
 
 **Failure 1: One service replica goes down**
 
-In external mode the `MemoryStore` service defaults to two replicas and is deliberately stateless: the deployment mounts no volumes, and even the engine's internal change-history log is placed on an ephemeral per-replica path so that Postgres remains the only shared state. A `PodDisruptionBudget` with `minAvailable: 1` guards voluntary evictions, and the readiness probe (which pings both the relational tier and the vector collection) pulls an unhealthy replica out of the Service endpoints without killing it. Losing one replica therefore loses nothing: the surviving replica keeps serving from the same database.
+23:47. A routine node pool upgrade evicts one of the two `MemoryStore` replicas.
+
+```mermaid
+flowchart LR
+  A["Agents"] --> R1["replica A"]
+  A -.-> R2["replica B<br/>evicted"]
+  R1 --> PG[("Postgres + pgvector")]
+  classDef down fill:#ffebe9,stroke:#cf222e;
+  classDef ok fill:#e6ffed,stroke:#2da44e;
+  class R2 down;
+  class A,R1,PG ok;
+```
+
+Nothing pages. In external mode the service defaults to two replicas and is deliberately stateless: the deployment mounts no volumes, and even the engine's internal change-history log is placed on an ephemeral per-replica path so that Postgres remains the only shared state. A `PodDisruptionBudget` with `minAvailable: 1` guards exactly this kind of voluntary eviction, and the readiness probe (which pings both the relational tier and the vector collection) pulls an unhealthy replica out of the Service endpoints without killing it. The surviving replica keeps serving from the same database, and nothing is lost.
 
 The local mode is the stated exception. Its PersistentVolume is single-writer, so it runs one replica by design and a replica loss is an outage until the pod reschedules. That is an acceptable contract for a development profile and a wrong one for production, which is what the storage profiles from Decision 1 encode.
 
 **Failure 2: Replicas bounce mid-compaction**
 
-Compaction is where a bounce could corrupt state, since folding the short-term overflow into the medium-term summary spans a summarization call and several table mutations. The service serializes each fold with a Postgres advisory lock keyed on the scope, and runs it as one transaction: read the pending rows, produce the new digest as an append-only version, prune old versions, delete the folded rows, commit. A replica dying mid-fold rolls the transaction back, the rows stay marked pending, and the advisory lock is session-level so Postgres releases it the moment the dead replica's connection drops. Re-running the fold is idempotent, so nothing double-folds and no summary version is ever half-written.
+00:12. The upgrade rolls on and bounces the replica that was mid-fold, halfway through compacting a session's overflow into its medium-term summary.
+
+```mermaid
+flowchart LR
+  R1["replica A<br/>killed mid-fold<br/>(held the fold lock)"] -.-> PG[("Postgres<br/>transaction rolls back<br/>rows stay marked pending<br/>lock auto-released")]
+  R2["replica B"] --> PG
+  classDef down fill:#ffebe9,stroke:#cf222e;
+  classDef ok fill:#e6ffed,stroke:#2da44e;
+  class R1 down;
+  class R2,PG ok;
+```
+
+Compaction is where a bounce could corrupt state, since the fold spans a summarization call and several table mutations. The service serializes each fold with a Postgres advisory lock keyed on the scope, and runs it as one transaction: read the pending rows, produce the new digest as an append-only version, prune old versions, delete the folded rows, commit. The killed replica's transaction rolls back, the rows stay marked pending, and the advisory lock is session-level so Postgres releases it the moment the dead connection drops. Re-running the fold is idempotent, so nothing double-folds and no summary version is ever half-written.
 
 There is one honest gap: nothing actively sweeps for orphaned pending rows, they fold when the next write to that scope triggers compaction again. And long-term extraction keeps the "no durable queue" trade-off from the design section: the evicted turns are handed to an in-process background worker, so a replica death in that window can lose one batch of extracted facts. With the medium-term tier enabled the same turns still fold into the durable digest, so the conversational record survives even when a fact batch does not.
 
 **Failure 3: A database node goes down**
 
-The DSN is bring-your-own through `connectionSecretRef`, and the operator deliberately does nothing about Postgres availability: no provisioning, no failover management. Your database's HA story (managed Postgres, Patroni, CloudNativePG) stays your database's HA story, which is the point of reusing infrastructure you already operate rather than shipping a bespoke one.
+02:00. The database node itself dies. This is the page from the opening, and it goes to whoever owns Postgres.
+
+```mermaid
+flowchart LR
+  A["Agents"] --> R1["replica A<br/>NotReady (readiness 503)"]
+  A --> R2["replica B<br/>NotReady (readiness 503)"]
+  R1 -.-> PG[("Postgres node down<br/>window: UNLOGGED, lost on crash<br/>digests + facts: durable")]
+  R2 -.-> PG
+  classDef down fill:#ffebe9,stroke:#cf222e;
+  classDef warn fill:#fff8c5,stroke:#d4a72c;
+  classDef ok fill:#e6ffed,stroke:#2da44e;
+  class PG down;
+  class R1,R2 warn;
+  class A ok;
+```
+
+The DSN is bring-your-own through `connectionSecretRef`, and the operator deliberately does nothing about Postgres availability: no provisioning, no failover management. Your database's HA story (managed Postgres, Patroni, CloudNativePG) stays your database's HA story, which is the point of reusing infrastructure you already operate rather than shipping a bespoke one. Both service replicas flip NotReady and drain from the endpoints until the database returns.
 
 What the memory layer contributes is bounded state loss on either side of the failover. The medium-term summaries and the long-term facts live in regular logged tables and survive a crash. The short-term window is the deliberate trade-off: it is an `UNLOGGED` table, which keeps the hottest per-turn path at RAM speed at the cost of being truncated by a Postgres crash recovery. After a hard failover the agents come back with their durable digests and facts intact, minus the verbatim window of in-flight conversations, which is the tier designed to be cheapest to lose.
 
 **Failure 4: The whole memory path is unreachable**
 
-This is the 2am scenario in full, and the answer is enforced at both ends of the wire. On the service side, a recall that can only lose the long-term tier degrades within the response: the conversational tiers return and the `degraded` flag is set. On the client side, any failure at all (timeout, connection refused, an error status) is caught and returned as an empty recall marked `degraded`, with a 5 second recall timeout so a hanging store cannot stall the turn. The agent runtime then proceeds: message history falls back to the runtime's own event log, the memory block is simply absent, and the user gets an answer from an agent with a shorter memory.
+02:01. From the agents' side of the wire it does not matter why: the memory path is simply gone, and thirty conversations are mid-turn.
+
+```mermaid
+flowchart LR
+  U["Users"] --> A["Agents<br/>still serving"]
+  A -. "recall: empty, degraded=true<br/>write: soft logs and continues" .-> MS["memory path<br/>unreachable"]
+  classDef down fill:#ffebe9,stroke:#cf222e;
+  classDef ok fill:#e6ffed,stroke:#2da44e;
+  class MS down;
+  class U,A ok;
+```
+
+The answer is enforced at both ends of the wire. On the service side, a recall that can only lose the long-term tier degrades within the response: the conversational tiers return and the `degraded` flag is set. On the client side, any failure at all (timeout, connection refused, an error status) is caught and returned as an empty recall marked `degraded`, with a 5 second recall timeout so a hanging store cannot stall the turn. The agent runtime then proceeds: message history falls back to the runtime's own event log, the memory block is simply absent, and the user gets an answer from an agent with a shorter memory.
 
 Writes follow the soft or strict contract from the resource: `soft` (the default) logs the failure and moves on, `strict` fails the turn, which is the right choice only for agents whose writes are the product. Erasure is the deliberate exception to all this softness: a `forget` that cannot clear the durable tiers surfaces as an error, because a deletion you cannot confirm must never look like a success.
 
 **Failure 5: The auth service goes down**
+
+02:40. To complete the night, the node running Keycloak goes down with the issuer on it.
+
+```mermaid
+flowchart LR
+  KC["Keycloak<br/>issuer down"]
+  L["New logins,<br/>token refresh"] -.-> KC
+  U["Users with valid tokens"] --> GW["Gateway<br/>cached JWKS"] --> A["Agents"] --> MS["MemoryStore"]
+  classDef down fill:#ffebe9,stroke:#cf222e;
+  classDef ok fill:#e6ffed,stroke:#2da44e;
+  class KC,L down;
+  class U,GW,A,MS ok;
+```
 
 The wiring section showed that identity is verified at the gateway and the policy engine, and this is where that pays off: both verify tokens offline. The gateway checks user JWTs against a cached JWKS, the policy engine checks them against signing keys the operator projects into the policy on a short poll interval, and when the issuer is unreachable the projector leaves the existing keys intact rather than blanking them. A user holding a valid, unexpired token keeps recalling and writing memory as if nothing happened.
 
@@ -270,28 +327,9 @@ What fails does so closed. New logins fail, since they need the issuer. Agents t
 
 Across the five scenarios the same shape repeats: state loss is bounded by tier durability, service loss is absorbed by stateless replicas, database loss is delegated to the database, and trust loss fails closed. That shape is the failure contract, and it is what lets memory stay an augmentation instead of becoming the dependency that takes the fleet down.
 
-## When NOT to Add Long-Term Memory
-
-Like autonomy, memory has become a checkbox feature, and the temptation is to switch it on for everything. It has a measurable break-even, as [a 2026 cost-performance analysis](https://arxiv.org/abs/2603.04814) finds long-context actually wins on raw recall for short interactions, with fact-based memory becoming cost-favorable only after roughly ten turns at 100K-token scale. Long-term memory earns its cost when:
-
-- users or goals persist across sessions and personalization compounds,
-- a fleet of agents benefits from shared operational knowledge,
-- agents run [always-on autonomous loops](https://hackernoon.com/autonomous-agentic-systems-a-practical-guide-to-always-on-agents), the biggest memory producers and consumers, since nobody is there to repeat the context to them,
-- the same facts keep being re-established at the start of every session.
-
-It is a poor fit when:
-
-- interactions are genuinely single-shot, where session history already covers it,
-- you cannot yet answer the erasure question, since memory without deletion is a liability and not a feature,
-- tenancy boundaries are unclear, where every memory becomes a potential leak vector,
-- you cannot afford the extraction cost of additional LLM calls for every remembered conversation,
-- an outage of the memory path would be treated as an outage of the agent, in which case memory has become a hard dependency and the design should be revisited before scaling.
-
-One caution applies even when memory *is* the right call, which is that remembering and staying current are different problems. The newest agentic-memory evaluations find a distinctive failure mode where agents treat stale prior-session state as if it were still true instead of re-checking it ([Momento](https://arxiv.org/abs/2606.00832)), meaning a recalled fact is a hypothesis about the present state that may require re-validation.
-
 ## Lessons for Production Agentic Memory
 
-Here are the patterns from this part that I would carry into any agentic memory system.
+Here are the patterns from this part that I would carry into any agentic memory system, continuing the running list that Part 2 started with lessons one to five.
 
 ### 6. Adopt the engine and own the contract
 
@@ -300,6 +338,14 @@ Wrap the memory engine behind your own interface, and adopt it for the right rea
 ### 7. Memory is augmentation, never a hard dependency
 
 Recall should degrade instead of raise, so that a memory outage produces an agent with a shorter memory instead of an agent that is down. If an outage of the memory path would be treated as an outage of the agent, the design needs revisiting before it scales.
+
+### 8. Fail soft on state, fail closed on trust
+
+The two halves of the failure contract follow different philosophies, and both are deliberate. When state is unavailable the system degrades: recall comes back empty and flagged, writes log and continue. When trust cannot be established the system refuses: an unverifiable token is denied, and an agent that cannot mint its identity does not run. Confusing the two produces either a fleet that is down when it could serve, or one that serves what it should have refused.
+
+### 9. Probe the failure contract before your users do
+
+Every scenario in this part has an expected answer: kill a replica and nothing is lost, bounce it mid-fold and the transaction rolls back, take the database down and the agents keep answering with shorter memory. Walking through them, or scripting them chaos-style, turns "memory degrades gracefully" from a README claim into behaviour you have observed, and any deviation becomes a bug in the contract rather than a surprise at 2am.
 
 ## Closing Thoughts for Part 3
 
