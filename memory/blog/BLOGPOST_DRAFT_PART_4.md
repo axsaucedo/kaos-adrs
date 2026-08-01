@@ -6,7 +6,7 @@ _This is a 4-part series on how agents remember: building short-, medium- and lo
 
 Over the first three parts we built the full picture: Part 1 established the taxonomy and the engine selection, Part 2 designed the three tiers and the scope model that answers "whose memory is it?", and Part 3 made it run as infrastructure with the `MemoryStore` kubernetes resource and its degradation contract.
 
-This final part is the proof. We run the whole system end to end on a secured cluster: one command to set it up, two logged-in users, and three agents with different read entitlements. We watch each tier do its job inside a single conversation, verify the scope boundaries between users and agents with real captured outputs, and probe the model's permission boundary directly with a prompt injection that fails. We then show how to integrate the same pattern in your own agent, from scratch or through the `kaos-memory` package, and close with the operational lessons and the series conclusion.
+This final part is the proof. We run the whole system end to end on a secured cluster: one command to set it up, two logged-in users, and three agents with different read entitlements. We watch each tier do its job inside a single conversation, verify the scope boundaries between users and agents with real captured outputs, and probe the model's permission boundary directly with a prompt injection that fails. We then show how to integrate the same pattern in your own agent, from scratch or through the `kaos-memory` package, cover when long-term memory is worth adding at all, and close with the operational lessons and the series conclusion.
 
 The series:
 
@@ -547,23 +547,38 @@ result = await agent.run(user_message, message_history=history, toolsets=[toolse
 
 On KAOS the operator wires all of this automatically: the agent's `maxReadScope` ceiling from the CRD is expanded into the list of levels the toolset receives, and the level used for automatic per-turn recall comes from the agent's configuration, never from the request.
 
+## When NOT to Add Long-Term Memory
+
+Like autonomy, memory has become a checkbox feature, and the temptation is to switch it on for everything. It has a measurable break-even, as [a 2026 cost-performance analysis](https://arxiv.org/abs/2603.04814) finds long-context actually wins on raw recall for short interactions, with fact-based memory becoming cost-favorable only after roughly ten turns at 100K-token scale. Long-term memory earns its cost when:
+
+- users or goals persist across sessions and personalization compounds,
+- a fleet of agents benefits from shared operational knowledge,
+- agents run [always-on autonomous loops](https://hackernoon.com/autonomous-agentic-systems-a-practical-guide-to-always-on-agents), the biggest memory producers and consumers, since nobody is there to repeat the context to them,
+- the same facts keep being re-established at the start of every session.
+
+It is a poor fit when:
+
+- interactions are genuinely single-shot, where session history already covers it,
+- you cannot yet answer the erasure question, since memory without deletion is a liability and not a feature,
+- tenancy boundaries are unclear, where every memory becomes a potential leak vector,
+- you cannot afford the extraction cost of additional LLM calls for every remembered conversation,
+- an outage of the memory path would be treated as an outage of the agent, in which case memory has become a hard dependency and the design should be revisited before scaling.
+
+One caution applies even when memory *is* the right call, which is that remembering and staying current are different problems. The newest agentic-memory evaluations find a distinctive failure mode where agents treat stale prior-session state as if it were still true instead of re-checking it ([Momento](https://arxiv.org/abs/2606.00832)), meaning a recalled fact is a hypothesis about the present state that may require re-validation.
+
 ## Lessons for Production Agentic Memory
 
-Here are the patterns from this part that I would carry into any agentic memory system.
+Here are the patterns from this part that I would carry into any agentic memory system, closing the running list built across Parts 2 and 3.
 
-### 1. Memory is augmentation
-
-Design the outage path first, so that recall degrades to the short-term window, writes retry in the background, and a memory outage never takes a serving agent down.
-
-### 7. Keep extraction off the hot path
+### 10. Keep extraction off the hot path
 
 The user is already waiting on one LLM call, so never make them wait on the memory system's LLM too. Append synchronously and distil in the background.
 
-### 9. Budget memory in tokens
+### 11. Budget memory in tokens
 
 The context window is the real constraint and turns vary wildly in size, which makes turn counts a poor proxy. Token budgets belong to the same family of safety controls as the iteration and cost budgets from the autonomous post.
 
-### 10. Build erasure before you need it
+### 12. Build erasure before you need it
 
 "Forget everything about this user" must be one operation that fans out across every tier and every derived projection, and it is a different operation from temporal supersession, which preserves history. Retrofitting either across a live system is far harder than designing them in.
 
