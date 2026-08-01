@@ -175,6 +175,8 @@ $ kaos system install \
 
 This sets up and configures user and agent auth with keycloak, as well as authorization based access control for the memory itself. You can read more about this in the [KAOS security documentation](https://axsaucedo.github.io/kaos/latest/security/overview.html).
 
+[TODO: Let's reduce the size of the auth below, let's just call it User / Agent Identity (Keycloak) for one block and the other is the Kaos Authz Service with an arrow going both sides. And then on the memory components we are missing the databse.] 
+
 ```mermaid
 flowchart TB
   U["Users"]
@@ -233,6 +235,8 @@ These commands render exactly the `MemoryStore` specification from Decision 3 pl
 ## The Failure Contract
 
 A failure contract that has never been probed is a hope. So instead of asserting that "memory degrades gracefully", let's take the setup we just stood up and walk through five failure scenarios in increasing blast radius, stating in each case what the system actually does, including the places where the honest answer is a trade-off rather than a guarantee.
+
+[TODO: Add one graph for eachof the failure modes]
 
 **Failure 1: One service replica goes down**
 
@@ -299,9 +303,15 @@ Recall should degrade instead of raise, so that a memory outage produces an agen
 
 ## Closing Thoughts for Part 3
 
-We opened at 2am with the memory database down and thirty agents mid-conversation, and the failure section now gives the precise answer. Readiness drains the service replicas, every recall comes back empty and marked `degraded` at the client, writes honour their soft or strict contract, and the agents keep serving with a shorter memory. When the database fails over, the durable digests and facts are still there, minus the verbatim window of the conversations that were in flight. The page goes to whoever owns the database, the same as any other night, and the agents are not the incident.
+We opened at 2am with the memory database down and thirty agents mid-conversation, asking four questions. After this part, each has a precise answer.
 
-That outcome is the sum of this part's decisions: storage profiles for the dev-to-production path, a central stateless service instead of a library in every agent, a resource that declares the tiers and the scope ceiling, an identity wiring that verifies offline, and a failure contract probed scenario by scenario instead of assumed.
+Which storage does the memory layer sit on? A profile, not a single pick: embedded Chroma plus SQLite on a volume for development, and your own Postgres with pgvector for production, referenced through a secret so the database's availability story stays with the team that already operates it.
+
+Does memory run inside each agent or as a service they share? As a shared `MemoryStore` service, so the LLM extraction, the datastore connections, and what a fleet remembers stay consistent instead of diverging replica by replica.
+
+What does the resource declare about replicas and availability? Two stateless replicas by default in external mode, a disruption budget, and readiness that drains a failing replica instead of killing it, all rendered from a few lines of spec.
+
+And what did everyone agree happens when a dependency disappears? The failure contract: recall degrades to empty context and flags it, writes honour soft or strict, erasure refuses to fail silently, and identity verifies offline so an auth outage burns slowly instead of falling off a cliff. The agents keep serving with a shorter memory, and the 2am page goes to whoever owns the database, the same as any other night.
 
 What remains is proof. In Part 4 we run the whole system end to end on a secured cluster: two users, three agents with different read entitlements, every tier and scope boundary exercised with real captured outputs, plus how to integrate the same pattern in your own agent, from scratch or through the `kaos-memory` package, and the operational lessons that close the series.
 
