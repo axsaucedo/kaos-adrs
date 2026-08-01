@@ -2,9 +2,9 @@
 
 ## Outcome
 
-S5 established a zero-touch CPU llama.cpp observation ladder from decode cost through exact internal values. Linux uprobes recovered per-decode timing and batch identity, walked the ggml graph with a 100% semantic census, read the selected residual row at a validated post-compute boundary, reproduced every tested float and probe scalar bit-for-bit, adapted across a release, architecture, and quantization without tool code changes, and emitted the cost and parametric readings as bounded canonical evidence in one trace. The result supports a constrained product capability for pinned self-hosted CPU llama.cpp deployments where modifying the inference engine is undesirable; it is a complement to the S3/S4 in-process path, not a generic replacement.
+S5 established the final zero-touch llama.cpp observation ladder across CPU and GPU. On CPU, Linux uprobes recovered decode cost and batch identity, walked the ggml graph with a 100% semantic census, read the selected residual row at a validated post-compute boundary, reproduced every tested float and probe scalar bit-for-bit, adapted across a release, architecture, and quantization without tool code changes, and emitted bounded cost and parametric evidence in one trace. On GPU, CUPTI environment-variable injection recovered request-correlated kernel cost without an inference-engine patch, and eBPF still recovered host-resident graph structure, but exact activation values stopped at the CUDA device-memory boundary. The final ladder is therefore T0/T1 CPU cost plus CUPTI GPU cost zero-touch; T2 structure zero-touch on both CPU and GPU; T3 exact values zero-touch on CPU only, with GPU exact values requiring cooperation in the owning CUDA context. The result supports constrained product capabilities for pinned self-hosted llama.cpp deployments and remains complementary to the S3/S4 in-process path, not a generic replacement.
 
-The authoritative scope, pinning ladder, and verification loops are in the [S5 plan](../../plan/S5-ebpf-semantic-recovery.md). The capability boundary and deferred GPU questions follow the [engine introspection and eBPF research](../../research/8-support-engine-introspection-and-ebpf.md).
+The authoritative scope, pinning ladder, and verification loops are in the [S5 plan](../../plan/S5-ebpf-semantic-recovery.md). The capability boundary and the GPU questions resolved here follow the [engine introspection and eBPF research](../../research/8-support-engine-introspection-and-ebpf.md).
 
 ## Environment: Docker Desktop was not enough
 
@@ -96,15 +96,50 @@ The evidence spans contained no `gen_ai.usage.*`, activation row, logits, prompt
 
 The scratch in-process callback existed only as exact validation truth. The eBPF reader neither called nor consumed it, normal scheduling also matched exactly, and llama.cpp inference-engine source was not patched.
 
+## GPU tier: CUPTI cost and semantic-recovery ceiling
+
+The GPU tier reused llama.cpp `b10217` at commit `ddd4ec1428a6201e18975ea52b07c71e0f9aef26`, the official Qwen3 F16 model and probe pins above, and an unstripped x86_64 CUDA `RelWithDebInfo` build on an NVIDIA L4 with driver 595.71.05 and CUDA 13.2. The server offloaded all 29 layers and used CUDA model, KV, and compute buffers. llama.cpp source remained unchanged; the phase evidence remains in the gitignored `tmp/spikes/s5gpu/` spike directory rather than this documentation repository.
+
+### CUPTI zero-touch GPU cost
+
+A small shared library exported `InitializeInjection`, enabled CUPTI concurrent-kernel and memcpy Activity API records, and was loaded through `CUDA_INJECTION64_PATH`. This is environment-variable injection into an unmodified server binary, not an inference-engine source patch. CUPTI timestamps were calibrated to `CLOCK_MONOTONIC`; bpftrace uprobes supplied `llama_decode` entry and return timestamps, and the client supplied monotonic request boundaries.
+
+The three pinned greedy requests each produced six `llama_decode` calls, 2,658 kernels, and one observed kernel stream. Their summed GPU kernel times were 32.650 ms, 32.622 ms, and 32.736 ms. Per-decode activity was deterministic in this run: the prefill interval contained 533 kernels and each of the following five generation intervals contained 425, with kernel-time sequences of `5.793, 5.412, 5.364, 5.359, 5.360, 5.362` ms, `5.766, 5.415, 5.359, 5.361, 5.361, 5.360` ms, and `5.886, 5.413, 5.360, 5.358, 5.361, 5.358` ms. Baseline and injected output text matched exactly.
+
+Attribution confidence is high only for the measured shape: one PID, one active slot, sequential requests, and one kernel stream. The unmodified server exposes no request ID in CUPTI records, so time-plus-stream attribution becomes ambiguous with overlapping requests, multiple streams, continuous batching, or multiple GPUs. CUPTI correlation IDs identify CUDA launches rather than llama.cpp requests; shared work would need an explicit allocation model or a cooperative request marker.
+
+The CPU-vs-GPU accounting gap was material. CUPTI-injected `llama_decode` entry-to-return sums were 18.928 ms, 11.644 ms, and 14.556 ms per request, all below the corresponding 32.650 ms, 32.622 ms, and 32.736 ms GPU kernel sums because `llama_decode` returns after asynchronous submission. A uretprobe under CUDA therefore measures synchronous host submission, not completed GPU execution. In one baseline pass followed by one injected pass on a resident model, summed eBPF entry-to-return time increased 28.82%, client request wall time increased 5.08%, and llama.cpp-reported prompt-plus-generation time increased 5.54%. The approximately 5% end-to-end result is directional; it is not a steady-state support limit without alternating repetitions.
+
+### T2 survives CUDA, but graph position does not
+
+Fresh `pahole` output from the CUDA build reproduced the relevant b10217 layouts: `ggml_tensor` size 336 with `ne=16`, `nb=48`, `op=80`, `data=248`, `name=256`, and `buffer=8`; `ggml_cgraph` size 96 with `n_nodes=4` and `nodes=16`. A walker attached to `ggml_backend_graph_compute_async` enumerated every backend-scheduled graph node for one prefill and one decode call. Each decode exposed split graph sizes 1 and 985, totaling the server's logged 986 nodes, and the capture emitted all 1,972 expected node records without truncation or transport loss.
+
+`l_out-14` remained enumerable in host-resident metadata at node 524 of the 985-node split. Its shapes were `1024 x 5 x 1 x 1` during prefill and `1024 x 1 x 1 x 1` during decode. This proves that T2 semantic structure survives CUDA, but not that CPU graph maps are portable: CPU normal scheduling placed `l_out-14` at node 525 of a 526-node graph, while the CUDA server exposed backend-split graphs with different positions and cardinality. GPU maps must include backend schedule and graph-bound identity and fail closed when either changes.
+
+### T3 stops at CUDA device memory
+
+Exact zero-touch GPU value recovery failed for a precise mechanism, not an unresolved implementation bug. The full evidence chain was:
+
+1. The server offloaded 29/29 layers and placed `l_out-14` in the large accelerator split.
+2. `l_out-14->data` was `0x78a5ba000000`, inside a `78a5b9e00000-78a5ca000000 ---p` CUDA unified-virtual-address reservation rather than ordinary host or pinned-host tensor storage.
+3. A root `/proc/<pid>/mem` read at that address returned success and 16 zero bytes. Those zeros were not the activation: CPU page tables did not expose the device allocation. This is a fail-closed hazard because a device read can look superficially successful.
+4. The pinned llama.cpp CUDA source uses device allocation for ordinary CUDA buffers, defines pinned host memory as a distinct buffer type, and performs D2H through the backend `get_tensor` path with `cudaMemcpyAsync` and synchronization in the owning process and context.
+5. CUPTI observed six 607,744-byte D2H output/logit copies per request and prompt-cache KV traffic at later request transitions, but no D2H pattern staging `l_out-14`; the 4,096-byte copies present were H2D.
+6. CUDA IPC is cooperative: the allocation owner must export a memory handle before another process can import it. An unrelated CUDA context cannot make a raw UVA number readable.
+
+No valid activation row existed from which to compute the pinned index-order double probe scalar, and treating the `/proc` zeros as values would have created false evidence. The demonstrated ceiling is therefore host-resident T2 semantics plus CUPTI cost under zero-touch observation; exact device values require execution in the owning CUDA context at a scheduler-approved lifetime boundary.
+
+The minimum reliable assist is an opt-in target-tensor callback in the llama.cpp backend scheduler: select a name such as `l_out-14` through deployment configuration, synchronize at the approved post-compute boundary, use the existing backend tensor-get path to copy only the selected last-token f32 row, and expose either that bounded row or the final scalar. An environment variable alone does not provide this today; implementing the callback is engine cooperation. The proven S4 `cb_eval` path is the preferred production route because it already owns scheduler timing, backend-safe copying, request context, and lifecycle. A CUDA-aware in-process preload helper remains a separate unproven option rather than part of the S5 result.
+
 ## Verdict
 
-T4 is a viable but narrow xai capability: offer opt-in zero-touch internal signals for pinned self-hosted CPU llama.cpp on Linux when patching or replacing the server is undesirable, with signed allowlisted maps, exact build-ID checks, and fail-closed preflight gates. Keep it complementary to the S3/S4 in-process path and retain T0/T1 as the broad fallback. Do not advertise generic eBPF semantic recovery across arbitrary engines or accelerators.
+T4 is a viable but narrow xai capability on CPU: offer opt-in zero-touch exact internal signals for pinned self-hosted CPU llama.cpp on Linux when patching or replacing the server is undesirable, with signed allowlisted maps, exact build-ID checks, and fail-closed preflight gates. On GPU, offer two narrower zero-touch capabilities: CUPTI request-correlated kernel cost for supported sequential attribution shapes, and host-resident T2 graph structure with backend-specific maps. Do not advertise generic semantic recovery across arbitrary engines or accelerators, and do not describe GPU exact values as zero-touch.
 
-The result is more than a research trick because value recovery, cross-architecture mapping, release regeneration, quantization stability, and canonical trace export all passed without reader changes. It remains constrained by Linux privilege, binary/debug identity, verifier bounds, transport sizing, tensor lifetime, request correlation, and a narrow CPU evidence matrix.
+The CPU result is more than a research trick because value recovery, cross-architecture mapping, release regeneration, quantization stability, and canonical trace export all passed without reader changes. The GPU phase sharpened rather than extended that claim: cost and semantic structure survived, while exact values hit the owning-context boundary. The combined capability remains constrained by Linux privilege, binary/debug identity, verifier bounds, transport sizing, tensor lifetime, request correlation, backend-specific graph schedules, and narrow CPU and GPU evidence matrices.
 
-S4's cooperation path remains preferable when xai controls the deployment. Its proof exposed existing `cb_eval` plumbing through a 96-line llama-server plugin patch and gains scheduler-approved timing, request context, lifecycle ownership, backend-safe tensor copies, and a plausible Metal path. A small explicit ABI is less fragile than reverse-engineered process memory.
+S4's cooperation path remains preferable when xai controls the deployment and is required for exact GPU activation values. Its proof exposed existing `cb_eval` plumbing through a 96-line llama-server plugin patch and gains scheduler-approved timing, request context, lifecycle ownership, backend-safe tensor copies, and a plausible Metal path. A small explicit ABI is less fragile than reverse-engineered process memory and is the minimum reliable bridge across device memory.
 
-S5 is worth the fragility when the deployment is a pinned CPU llama.cpp appliance or fleet, rebuilding is prohibited or operationally undesirable, privileged observation is acceptable, and exact internal evidence has enough audit, forensic, diagnostic, or edge value to justify maintaining a small compatibility database. When those conditions do not hold, use S4 cooperation or report only T0/T1 cost.
+S5 is worth the fragility when the deployment is a pinned llama.cpp appliance or fleet, rebuilding is prohibited or operationally undesirable, privileged observation is acceptable, and cost or structural evidence has enough audit, forensic, diagnostic, or edge value to justify maintaining a compatibility database. Exact zero-touch values additionally require CPU-resident tensors. When those conditions do not hold, use S4 cooperation; when GPU cooperation is unavailable, report CUPTI cost and optionally T2 structure, never inferred device values.
 
 ## Hard constraints
 
@@ -115,13 +150,21 @@ S5 is worth the fragility when the deployment is a pinned CPU llama.cpp applianc
 - Perf-ring capacity and structured loss accounting are product requirements.
 - Tensor timing is role-specific; non-final-node buffer reuse remains unproven.
 - Per-float bpftrace output must be replaced by bounded structured chunks for production.
-- GPU, CUPTI, device values, fused kernel semantics, and bpftime remain entirely unproven.
-- The release evidence is one tag jump, the architecture evidence is Qwen3 plus Llama-3.2, and the runtime evidence is CPU in one process.
+- CUPTI environment-variable injection is zero-source-patch but not zero-overhead; the measured end-to-end delta was approximately 5% in one directional before/after sample.
+- Under CUDA, `llama_decode` uretprobe time measures host submission rather than completed GPU execution; GPU cost requires an activity timeline or equivalent completion signal.
+- CUPTI time-plus-stream attribution is proven only for sequential single-stream requests. Overlap, multiple streams, continuous batching, and multiple GPUs remain ambiguous without cooperative markers or an explicit allocation model.
+- GPU graph metadata remains host-readable, but backend splits change graph cardinality and node position. CPU maps are not portable to CUDA, and GPU maps must pin backend schedule and graph bounds.
+- A CUDA device UVA can appear as a `---p` process VMA and `/proc/<pid>/mem` can return zero bytes with success. Readers must classify buffer residency and reject such bytes rather than interpret them as activations.
+- Exact device values require the owning CUDA context, a cooperatively exported CUDA IPC handle, or an in-process backend-safe copy at a proven lifetime boundary. Unrelated D2H logits or KV traffic do not prove target-tensor staging.
+- Fused GPU kernel semantics and bpftime/PTX value observation remain unproven.
+- The release evidence is one tag jump, the architecture evidence is Qwen3 plus Llama-3.2, the exact-value runtime evidence is CPU in one process, and the GPU evidence is one Qwen3 F16 build on one NVIDIA L4.
 - Multi-sequence identity was proven at T1, but shared graph cost division remains an allocation model.
-- Steady-state probe overhead and real traceparent correlation remain open.
+- Steady-state CPU probe overhead, steady-state CUPTI overhead gates, and real traceparent correlation remain open.
 
 ## Deferred P5 and F ADR inputs
 
-P5 needs a CUDA host, CUPTI request-correlated timelines, a pinned kernel-variant map, a safe bounded bpftime injection experiment if permitted, GPU-memory lifetime validation, an exact GPU-aware oracle, multi-stream and multi-GPU tests, event-loss and overhead measurements, and another release/architecture/quantization brittleness matrix. CPU success must not be projected onto GPU.
+The completed GPU tier answered the first P5 questions: CUPTI injection recovered sequential single-stream request-correlated kernel timelines; T2 graph census survived CUDA with backend-specific splits; device-memory lifetime and residency inspection established that zero-touch T3 values are not reachable through eBPF or `/proc`; and directional overhead measured approximately 5% end to end. It also established the product routing rule that exact GPU values belong to the cooperative S4 `cb_eval` and backend-copy path rather than the S5 zero-touch claim.
 
-The F ADR must decide the initial support label, signed-map provenance and revocation, fail-closed fallback behavior, a wider release/architecture CI matrix, libbpf CO-RE chunk transport, eBPF privilege policy, serving-boundary trace correlation, continuous-batching allocation semantics, steady-state overhead limits, and the selection rule between S4 cooperation, S5 zero-touch, and T0/T1-only evidence.
+What remains deferred is a safe bounded bpftime/PTX experiment if permitted, concurrent and continuous-batching attribution, multi-stream and multi-GPU correlation, a CUDA-aware in-context preload helper assessment, steady-state alternating overhead gates, event-loss stress tests, a pinned kernel-variant map if kernel semantics are ever claimed, and a wider GPU release/architecture/quantization matrix. An exact GPU-aware oracle remains necessary only for a future cooperative or in-context value path; it is not a missing validation step for the demonstrated negative ceiling.
+
+The F ADR must decide separate support labels for CPU exact values, GPU CUPTI cost, and GPU T2 structure; signed-map provenance and revocation; fail-closed fallback behavior; a wider release/architecture CI matrix; libbpf CO-RE chunk transport; eBPF and CUPTI privilege/injection policy; serving-boundary trace correlation; continuous-batching allocation semantics; steady-state CPU and CUPTI overhead limits; rejection rules for CUDA UVA reads; and the selection rule between S4 cooperation, S5 zero-touch, CUPTI cost, and T0/T1-only evidence.
