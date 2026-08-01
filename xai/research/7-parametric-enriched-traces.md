@@ -8,6 +8,8 @@ Layers A and B explain agent behavior from the *outside* — from what went into
 
 This is Proposal F. It is strictly **additive**: the closed-API majority keeps the full value of A and B without it; F only lights up for the open-weights self-hosted segment.
 
+> **Post-research corrections (2026-08-01, from [stage 11](./11-probe-and-latent-monitor-science.md)):** the probe examples below are illustrative, and the imported probe-science research grades them: logit entropy/margin ship as raw telemetry (never named "confidence"); the first credible learned probe is a **Semantic Entropy Probe** (MIT recipe) and the second a **refusal-direction projection** (Apache-2.0, best causal-intervention evidence); **deception, honesty, truth, and sycophancy probes are research-only** (elicitation leakage, baseline shift, task dependence, adaptive evasion) and must not appear in a calibrated namespace. `STATED_VS_INTERNAL_MISMATCH` stands only as a *multi-channel mismatch detector* (stated confidence ∧ measured internal uncertainty ∧ replay instability), not as a "live CoT-unfaithfulness detector" or lie detector — the corrected framing supersedes the wording below wherever they differ.
+
 ## The evidence channels
 
 When inference is instrumented (mechanics and feasibility in [stage 8](./8-server-instrumentation-feasibility.md)), each generation step can carry, ordered by cost:
