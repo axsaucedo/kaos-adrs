@@ -4,7 +4,7 @@ _This is a 4-part series on how agents remember: building short-, medium- and lo
 
 ---
 
-It is 2am and the agent memory DB just crashed. Your users were in the middle of work with their agents. How should this be reconciled? Do they crash, or carry on with a shorter memory until the store comes back? The answer says a lot about whether memory in your platform is a feature bolted onto each agent, or a piece of infrastructure with its own contract.
+It is 2am and the memory database just crashed. Thirty agents are mid-conversation across your cluster. What happens next was decided long before tonight: which storage the memory layer runs on, whether it runs inside each agent or as a service they share, what the resource declares about its tiers and scopes, and what everyone agreed happens when a dependency disappears. This part is about making those decisions deliberately, and then probing them failure by failure.
 
 > This captures why the memory layer deserves the same treatment as any other infrastructure component: a resource, a topology, and a failure contract.
 
@@ -16,19 +16,20 @@ The objective throughout the series is:
 
 > Let's make the memory layer BORING, so that the agents can continue to be the fun part.
 
-This part consists of two sections:
+This part consists of three sections:
 
 1. **Memory as infrastructure**: The three architecture decisions behind the `MemoryStore` Kubernetes resource, covering the storage profiles, the deployment topology, and the resource specification itself.
-2. **Integrating it in your own agent**: Converting the naive skeleton from Part 1 into a production-shaped integration, either from scratch or through the `kaos-memory` package.
+2. **Standing it up on a cluster**: The installation with identity enabled, how auth is wired into the memory path, and the CLI that renders the resources.
+3. **The failure contract**: What actually happens when a service replica dies or bounces mid-compaction, a database node goes down, the whole memory path disappears, or the auth service does.
 
-Finally we wrap up with the cases where you should not add long-term memory at all, and the lessons that carry beyond KAOS.
+Finally we wrap up with the cases where you should not add long-term memory at all, and the lessons that carry beyond KAOS. The hands-on walkthrough of integrating the same pattern in your own agent now lives in Part 4, next to the running example.
 
 Here's a refresher on this 4-part series on Multi-Tiered / Multi-Tenant Agent Memory:
 
 * **[Part 1: What agent memory is and what to build on.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/)** The taxonomy, the baseline implementations everyone starts with, and the engine landscape from surveying ~30 tools.
 * **[Part 2: Tiers and scopes for multi-tenant agents.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-qx9uf/)** The three-tier design and the answer to whose memory it is.
-* **Part 3 (this post): Memory as infrastructure.** The Kubernetes `MemoryStore` resource, its deployment topology, and how to integrate it in your own agent.
-* **Part 4: Agent memory in action.** A worked example that runs end to end on a secured cluster, with real outputs (coming soon...).
+* **Part 3 (this post): Memory as infrastructure.** The Kubernetes `MemoryStore` resource, its deployment topology, and the failure contract probed scenario by scenario.
+* **Part 4: Agent memory in action.** A worked example that runs end to end on a secured cluster with real outputs, plus how to integrate the same pattern in your own agent (coming soon...).
 
 Let's get started.
 
@@ -82,7 +83,7 @@ The "how" mattered as much as the "where", however. Had the requirement been lon
 
 The requirements went beyond what any single engine exposes though: we needed a unified layer for short-, medium- and long-term memory where we could interact with it as one integrated contract, server-side scope enforcement, telemetry on every operation, as well as scoped access control. 
 
-For this we had to introduce a new layer through the `kaos-memory` Python package, which provides both the runtime client and the `MemoryStore` service. We will cover the package in more detail in the integration section below.
+For this we had to introduce a new layer through the `kaos-memory` Python package, which provides both the runtime client and the `MemoryStore` service. We will cover the package in more detail in Part 4, where it becomes the integration path for your own agent.
 
 Here's the visual overview of how it all fits together in the data plane:
 
@@ -158,99 +159,111 @@ These were some of the major design decisions worth highlighting - there were of
 * Serializing compaction through database locks so multiple service replicas can fold the same session without double-folds
 * Shipping without a durable extraction queue (for now), since the short-term tier is the recoverable source of truth and a queue is only worth building once needed
 
-Now that we have all the major pieces threaded together, we can now dive into a hands on example to show how it all works in practice.
+Now that we have the resources designed, we can stand them up on a real cluster and see what the declarations turn into.
 
-## How You Can Integrate It In Your Agent From Scratch
+## Standing It Up on a Cluster
 
-Let's take a look at the framework-agnostic skeleton for memory that we introduced back in Part 1. We can then see how to convert it into a production level integration for any agent, enabling the tiered memory that we saw:
-
-```python
-async def run_with_memory(session_id, user_message, memory, agent):
-    # 1. RECALL: assemble the memory block (never let this fail the turn)
-    try:
-        window = await memory.window(session_id, token_budget=4000)
-        medium_term_summary = await memory.medium_term_summary(session_id)
-        facts = await memory.search(scope=memory.scope, query=user_message, top_k=5)
-    except MemoryError:
-        window, digest, facts = await memory.window_only(session_id), None, []
-
-    context = build_memory_block(digest, facts)   # structured block, injected once
-
-    # 2. RUN
-    response = await agent.run(context, window, user_message)
-
-    # 3. PERSIST: append is cheap and synchronous; distillation is not
-    await memory.append(session_id, user_message, response)
-
-    # 4. FOLD + EXTRACT: always off the response path
-    if await memory.over_budget(session_id):
-        background(memory.fold_and_extract, session_id)
-
-    return response
-```
-
-The skeleton shows the load-bearing choices: recall wrapped so failure degrades instead of raising, the digest and facts injected as one structured block instead of fake conversation turns, the cheap verbatim append on the hot path, and the expensive fold-and-extract pushed to the background the moment the token budget trips.
-
-What it deliberately does not show, and what you must add before this becomes a production dependency: server-side scope enforcement, the erasure fan-out across tiers, the soft/strict write contract, OpenTelemetry on every operation, and a service boundary so a fleet shares one memory instead of one process hoarding it.
-
-Alternatively, you can adopt the packaged version of exactly this design: the `kaos-memory` package mentioned in the design section. It is pip-installable and deliberately layered behind extras. The core carries the wire contract and the `MemoryServiceClient`, `[service]` adds Mem0, the vector store, and the FastAPI service, and `[pydantic-ai]` adds the runtime adapters, server-side scope derivation, and the memory toolset:
+The design above assumed verified identity everywhere: scopes derive from it, attribution records it, and the store enforces it. That means the cluster itself has to provide identity before any of it works, so we install with authentication enabled:
 
 ```bash
-pip install kaos-memory                  # wire contract + MemoryServiceClient
-pip install "kaos-memory[pydantic-ai]"   # + runtime adapters and the memory toolset
+$ kaos system install \
+  --authz-enabled \
+  --user-auth keycloak \
+  --agent-auth keycloak \
+  --wait
 ```
 
-The part of the package I would call genuinely novel relative to the ecosystem is that **medium-term memory is a first-class tier**. The two-tier (working plus long-term) split is the industry norm, and the rolling, versioned session summary that keeps continuity across compaction is a concept the surveyed engines do not ship. The package owns the short- and medium-term tiers relationally, wraps Mem0 for the long-term tier, and exposes all three behind the single recall, write, and forget contract used throughout this post.
+This sets up and configures user and agent auth with keycloak, as well as authorization based access control for the memory itself. You can read more about this in the [KAOS security documentation](https://axsaucedo.github.io/kaos/latest/security/overview.html).
 
-The core install gives you the `MemoryServiceClient` against a running MemoryStore service:
+```mermaid
+flowchart TB
+  U["Users"]
+  GW["Gateway Mesh"]
+  UAuth["User Identity Service<br>(Keycloak, OIDC, etc)"]
+  AAuth["Agent Identity Service<br>(ServiceAcct, OIDC, etc)"]
+  Authz["KAOS Authz Service<br>(User+Agent Resource Access)"]
+  MS["MemoryStore<br>(Memory Management)"]
+  KAOS["KAOS Resources<br>(Agents, MCPs, Models)"]
+  OP["⠀<br><b>KAOS Operator</b><br><br>(Syncs Identity<br> Tokens & Authorization<br> Graphs)<br>⠀"]
 
-```python
-from kaos_memory import Attribution, MemoryServiceClient, Scope
+  subgraph mem["Memory Components"]
+    MS
+  end
 
-client = MemoryServiceClient(endpoint="http://memorystore-shared-memory:8080")
-scope = Scope(level="user")                         # reads pick one radius: session, agent, or user
-attribution = Attribution(                          # writes carry identities, no level
-    agent_client_id=agent_identity, session_id=session_id,
-)
+  subgraph req["Request path"]
+    U --> GW
+    GW --> KAOS
+  end
 
-recalled = await client.recall(
-    scope, query=user_message,
-    include=["short_term", "medium_term", "long_term"],  # select tiers per call
-)
-response = await agent.run(recalled, user_message)
-await client.write(attribution, turns=[("user", user_message), ("assistant", response)])
+  subgraph auth["Auth & Identity Providers"]
+    UAuth ~~~ AAuth
+    Authz
+  end
+
+  req <--> auth
+  req <--> mem
 ```
 
-The scope level is one of the concentric radii from Part 2 (`session`, `agent`, `user`), and the response nests one object per requested tier (`short_term.window`, `medium_term.summary`, `long_term.facts`) so a caller only receives, and only pays for, the tiers it asked for. The fourth level, `store`, exists in the vocabulary but the service refuses it on any request arriving through an agent, since whole-store reads belong to the admin plane. Recall degrades to empty context on failure instead of raising, writes honour the soft or strict failure mode, and every call emits the `kaos.memory.*` telemetry spans covered in the observability post.
+The wiring matters for what comes later in this part, so it is worth tracing once. A user's request enters through the gateway mesh, where the user token is verified against the identity service. The agent runtime receives the request with the verified identity attached, derives the read scope and the write attribution from it server-side, and calls the `MemoryStore` service. The store never talks to the auth provider itself: it trusts the identities that arrive on the request, and the operator keeps the authorization graph in sync. Each hop in that chain is a separate thing that can fail, which is exactly what the failure section probes.
 
-If your agent runs on Pydantic AI, the `[pydantic-ai]` extra adds the helpers that wire the pieces from this post together: server-side scope derivation, the explicit memory tools, and full-fidelity history replay.
+With identity in place, the CLI renders the resources from the design section. The store first, referencing the `ModelAPI` its background workers will use for summarization and embeddings:
 
-```python
-from kaos_memory.pydantic_ai import (
-    attribution_from_deps, scope_from_deps,
-    build_memory_toolset, reconstruct_message_history,
-)
-from kaos_memory.pydantic_ai.toolset import MemoryTools
+```bash
+$ kaos modelapi create my-modelapi --mode proxy
 
-# reads derive a scope from the authenticated request context; by design
-# there is no way for the model or a tool to pass a scope in
-scope = scope_from_deps(deps, level="user", agent_identity=agent_identity)
-
-# writes derive an attribution: the verified identities, no level
-attribution = attribution_from_deps(deps, agent_identity=agent_identity)
-
-# expose save_memory / search_memory to the model (the tools carry no scope argument;
-# search offers every level up to the agent's maxReadScope ceiling)
-toolset = build_memory_toolset(MemoryTools.ALL, read_scopes=[scope.level], agent_identity=agent_identity)
-
-# rebuild message history from the short-term turns plus the rolling summary,
-# so overflow is represented by summarization instead of truncation
-history = reconstruct_message_history(recalled.short_term.window, recalled.medium_term.summary)
-
-result = await agent.run(user_message, message_history=history, toolsets=[toolset])
+$ kaos memorystore create shared-memory \
+  --modelapi my-modelapi \
+  --summarization-model gpt-4o-mini \
+  --embedding-model text-embedding-3-small
 ```
 
-On KAOS the operator wires all of this automatically: the agent's `maxReadScope` ceiling from the CRD is expanded into the list of levels the toolset receives, and the level used for automatic per-turn recall comes from the agent's configuration, never from the request.
+Then an agent binds to it, with the read configuration from Part 2 carried on the agent resource:
+
+```bash
+$ kaos agent deploy assistant \
+  --modelapi my-modelapi \
+  --model gpt-4o-mini \
+  --memory-store shared-memory \
+  --memory-tools read
+```
+
+These commands render exactly the `MemoryStore` specification from Decision 3 plus the agent binding, and the operator does the rest: it deploys the service with the replica defaults for the storage mode, wires the DSN secret, projects the identity configuration, and expands the agent's scope ceiling into its runtime configuration. Part 4 exercises this setup end to end with real users; here we stay on the platform side, because now we get to break it.
+
+## The Failure Contract
+
+A failure contract that has never been probed is a hope. So instead of asserting that "memory degrades gracefully", let's take the setup we just stood up and walk through five failure scenarios in increasing blast radius, stating in each case what the system actually does, including the places where the honest answer is a trade-off rather than a guarantee.
+
+**Failure 1: One service replica goes down**
+
+In external mode the `MemoryStore` service defaults to two replicas and is deliberately stateless: the deployment mounts no volumes, and even the engine's internal change-history log is placed on an ephemeral per-replica path so that Postgres remains the only shared state. A `PodDisruptionBudget` with `minAvailable: 1` guards voluntary evictions, and the readiness probe (which pings both the relational tier and the vector collection) pulls an unhealthy replica out of the Service endpoints without killing it. Losing one replica therefore loses nothing: the surviving replica keeps serving from the same database.
+
+The local mode is the stated exception. Its PersistentVolume is single-writer, so it runs one replica by design and a replica loss is an outage until the pod reschedules. That is an acceptable contract for a development profile and a wrong one for production, which is what the storage profiles from Decision 1 encode.
+
+**Failure 2: Replicas bounce mid-compaction**
+
+Compaction is where a bounce could corrupt state, since folding the short-term overflow into the medium-term summary spans a summarization call and several table mutations. The service serializes each fold with a Postgres advisory lock keyed on the scope, and runs it as one transaction: read the pending rows, produce the new digest as an append-only version, prune old versions, delete the folded rows, commit. A replica dying mid-fold rolls the transaction back, the rows stay marked pending, and the advisory lock is session-level so Postgres releases it the moment the dead replica's connection drops. Re-running the fold is idempotent, so nothing double-folds and no summary version is ever half-written.
+
+There is one honest gap: nothing actively sweeps for orphaned pending rows, they fold when the next write to that scope triggers compaction again. And long-term extraction keeps the "no durable queue" trade-off from the design section: the evicted turns are handed to an in-process background worker, so a replica death in that window can lose one batch of extracted facts. With the medium-term tier enabled the same turns still fold into the durable digest, so the conversational record survives even when a fact batch does not.
+
+**Failure 3: A database node goes down**
+
+The DSN is bring-your-own through `connectionSecretRef`, and the operator deliberately does nothing about Postgres availability: no provisioning, no failover management. Your database's HA story (managed Postgres, Patroni, CloudNativePG) stays your database's HA story, which is the point of reusing infrastructure you already operate rather than shipping a bespoke one.
+
+What the memory layer contributes is bounded state loss on either side of the failover. The medium-term summaries and the long-term facts live in regular logged tables and survive a crash. The short-term window is the deliberate trade-off: it is an `UNLOGGED` table, which keeps the hottest per-turn path at RAM speed at the cost of being truncated by a Postgres crash recovery. After a hard failover the agents come back with their durable digests and facts intact, minus the verbatim window of in-flight conversations, which is the tier designed to be cheapest to lose.
+
+**Failure 4: The whole memory path is unreachable**
+
+This is the 2am scenario in full, and the answer is enforced at both ends of the wire. On the service side, a recall that can only lose the long-term tier degrades within the response: the conversational tiers return and the `degraded` flag is set. On the client side, any failure at all (timeout, connection refused, an error status) is caught and returned as an empty recall marked `degraded`, with a 5 second recall timeout so a hanging store cannot stall the turn. The agent runtime then proceeds: message history falls back to the runtime's own event log, the memory block is simply absent, and the user gets an answer from an agent with a shorter memory.
+
+Writes follow the soft or strict contract from the resource: `soft` (the default) logs the failure and moves on, `strict` fails the turn, which is the right choice only for agents whose writes are the product. Erasure is the deliberate exception to all this softness: a `forget` that cannot clear the durable tiers surfaces as an error, because a deletion you cannot confirm must never look like a success.
+
+**Failure 5: The auth service goes down**
+
+The wiring section showed that identity is verified at the gateway and the policy engine, and this is where that pays off: both verify tokens offline. The gateway checks user JWTs against a cached JWKS, the policy engine checks them against signing keys the operator projects into the policy on a short poll interval, and when the issuer is unreachable the projector leaves the existing keys intact rather than blanking them. A user holding a valid, unexpired token keeps recalling and writing memory as if nothing happened.
+
+What fails does so closed. New logins fail, since they need the issuer. Agents that mint their identity through client credentials serve from a cached token until it needs refreshing, then refuse to run with a stale or empty identity rather than degrade, and the policy engine denies whatever it cannot verify. Agents running on projected service account tokens are unaffected entirely, because the kubelet refreshes those against the Kubernetes API rather than the issuer. The store itself never talks to the auth provider: it requires the identities to be present and trusts what the gateway verified. The net effect is that an issuer outage is a slow burn rather than a cliff: sessions age out one by one, and every path that cannot verify refuses rather than guesses.
+
+Across the five scenarios the same shape repeats: state loss is bounded by tier durability, service loss is absorbed by stateless replicas, database loss is delegated to the database, and trust loss fails closed. That shape is the failure contract, and it is what lets memory stay an augmentation instead of becoming the dependency that takes the fleet down.
 
 ## When NOT to Add Long-Term Memory
 
@@ -285,13 +298,15 @@ Recall should degrade instead of raise, so that a memory outage produces an agen
 
 ## Closing Thoughts for Part 3
 
-We opened at 2am with the memory database down and thirty agents mid-conversation. We can now answer what happens: nothing dramatic. Recall degrades to the conversational tiers, the `degraded` flag surfaces on every response, writes honour their soft or strict contract, and the agents keep serving with a shorter memory until the store comes back. That outcome is not luck, it is the sum of this part's decisions: a central `MemoryStore` service with the engine embedded as a library, storage profiles for the dev-to-production path, a scope ceiling carried by the store itself, and memory treated as augmentation throughout.
+We opened at 2am with the memory database down and thirty agents mid-conversation, and the failure section now gives the precise answer. Readiness drains the service replicas, every recall comes back empty and marked `degraded` at the client, writes honour their soft or strict contract, and the agents keep serving with a shorter memory. When the database fails over, the durable digests and facts are still there, minus the verbatim window of the conversations that were in flight. The page goes to whoever owns the database, the same as any other night, and the agents are not the incident.
 
-What remains is proof. In Part 4 we run the whole system end to end on a secured cluster: two users, three agents with different read entitlements, every tier and scope boundary exercised with real captured outputs, plus the operational lessons that close the series.
+That outcome is the sum of this part's decisions: storage profiles for the dev-to-production path, a central stateless service instead of a library in every agent, a resource that declares the tiers and the scope ceiling, an identity wiring that verifies offline, and a failure contract probed scenario by scenario instead of assumed.
+
+What remains is proof. In Part 4 we run the whole system end to end on a secured cluster: two users, three agents with different read entitlements, every tier and scope boundary exercised with real captured outputs, plus how to integrate the same pattern in your own agent, from scratch or through the `kaos-memory` package, and the operational lessons that close the series.
 
 **The series:**
 
 * **[Part 1: What agent memory is and what to build on.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/)** The taxonomy, the baseline implementations everyone starts with, and the engine landscape from surveying ~30 tools.
 * **[Part 2: Tiers and scopes for multi-tenant agents.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-qx9uf/)** The three-tier design and the answer to whose memory it is.
-* **Part 3 (this post): Memory as infrastructure.** The Kubernetes `MemoryStore` resource, its deployment topology, and how to integrate it in your own agent.
-* **Part 4: Agent memory in action.** A worked example that runs end to end on a secured cluster, with real outputs (coming soon...).
+* **Part 3 (this post): Memory as infrastructure.** The Kubernetes `MemoryStore` resource, its deployment topology, and the failure contract probed scenario by scenario.
+* **Part 4: Agent memory in action.** A worked example that runs end to end on a secured cluster with real outputs, plus how to integrate the same pattern in your own agent (coming soon...).
