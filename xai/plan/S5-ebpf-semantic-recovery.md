@@ -1,0 +1,38 @@
+# Spike S5 — eBPF: cost channel + the semantic-recovery ceiling
+
+**Validates:** C5's cost channel *and* — expanded per direction 2026-08-01 — the reverse-engineering hypothesis: that because the open-weights world concentrates on a small number of architectures (Llama-family, Qwen, Gemma 2/3/4, DeepSeek, Mistral), a **version-pinned, per-architecture semantic map** could let zero-instrumentation eBPF recover *labeled* internal signals, not just timing. The research ([stage 8-support](../research/8-support-engine-introspection-and-ebpf.md)) says this is possible only as "a reverse-engineered, version-pinned activation patch" — this spike measures exactly where that ceiling sits and what each additional degree of pinning buys.
+**Research inputs:** stage 8-support (eBPF/bpftime/CUPTI boundary; "supported / conditionally / not-exactly / not-generically" cost-channel table), [stage 8](../research/8-server-instrumentation-feasibility.md) (layer-mismatch argument this spike stress-tests), S4's oracle artifact (ground truth).
+**Execution:** Codex sessions phase-by-phase, orchestrator-gated. Scratch under `ethical/xai/tmp/spikes/s5/`; reports `tmp/spikes/s5/PHASE<n>-REPORT.md`; learnings to `kaos-ai-docs/xai/impl/learnings/S5-ebpf-semantic-recovery.md`.
+**Environment:** eBPF requires Linux → privileged aarch64 container (or colima VM with kernel headers) running **CPU llama.cpp** — the ideal first substrate: tensors in host RAM, exported C symbols, and `ggml_tensor` structs that *carry a name field*, so the semantic-identity problem is at its easiest. The NVIDIA tiers (CUPTI per-kernel timelines, bpftime PTX injection) are specified as a deferred GPU phase. A key subtlety to resolve early: uprobes on a process inside the same container/VM require matching binary paths and debug symbols — build llama.cpp inside the Linux environment, unstripped, frame pointers on.
+
+## The intrusiveness/pinning ladder (the spike's central object)
+
+Each rung recovers more, requires more pinned knowledge, and breaks more easily. For each rung the spike records: what it recovers, what it must pin (binary version? struct layout? architecture? tensor names?), measured overhead, and what change breaks it (rebuild llama.cpp at a different commit and re-run — the **brittleness test** is part of the protocol).
+
+| Rung | Mechanism | Recovers | Must pin |
+|---|---|---|---|
+| T0 | Syscall/sched/uprobe timing on public API symbols (`llama_decode`, …) | per-decode latency, call counts, process cost — the classic cost channel | nothing beyond symbol names |
+| T1 | Uprobe arg reads on public API (`llama_batch` fields via `bpf_probe_read_user`) | sequence IDs, token counts, positions → **per-request** cost attribution | public struct layouts (versioned but stable-ish) |
+| T2 | Uprobe on ggml graph/compute entry; walk `ggml_tensor` structs; read the **`name` field** | which named tensors execute, shapes, op types — semantic *skeleton* with zero engine cooperation | `ggml_tensor` struct offsets per llama.cpp build |
+| T3 | **T2 + read `tensor->data` floats for the chosen residual node** | actual activation values → entropy/probe scalar computed externally | T2 + timing (read before buffer reuse) + fp layout |
+| T4 | Per-architecture semantic map (name→role tables for Llama/Qwen/Gemma…) packaged as data | T3 signals *labeled* by model role, across the supported-architecture matrix | one map per (architecture family × llama.cpp naming convention) |
+| T5 | GPU: CUPTI timelines; bpftime PTX injection on a known kernel | per-kernel cost; register/memory observation inside kernels | GPU host; kernel-variant-level pinning — **deferred phase** |
+
+The strategic question the ladder answers: **is T4 a product or a trap?** If T2/T3 survive minor version bumps with only map regeneration (cheap, automatable), the user's hypothesis holds — a small per-architecture map is maintainable, and "zero-instrumentation internal signals for local/edge llama.cpp deployments" is a real, unoccupied capability. If every llama.cpp commit breaks struct offsets, the research's skepticism stands and eBPF stays a cost channel.
+
+## Verification loops (source of truth)
+
+1. **The S4 oracle:** S4's P3 artifact logs `(decode_epoch, seq_id, tensor_name, data_ptr, first-8-floats, probe_scalar)` from *inside* the process via cb_eval. S5 runs the *same* pinned binary+model+prompts with eBPF attached and must reproduce: T1 → the seq/token accounting; T2 → the tensor-name execution sequence; T3 → the float values (exact match — same memory, same run) and the derived probe scalar. Disagreement is a bug in S5's probes, never a tolerance issue.
+2. **Cost-channel truth:** wall-clock and per-call timings cross-checked against in-process timers in the S4 harness; overhead of each tier measured as delta tokens/s with probes attached vs detached.
+3. **Brittleness protocol:** re-run T2/T3 against (a) a llama.cpp build one release newer, (b) a different architecture (Qwen vs Llama vs Gemma GGUF), (c) a different quantization. Record per rung: works unchanged / needs map regen / needs code change.
+4. **Continuous-batching honesty check:** with multi-sequence batches, demonstrate the stage-8-support claim that shared-kernel(/shared-graph) cost division is an allocation *model*, not an observation — implement equal-share and token-weighted allocation and show they disagree; document that the spike reports allocations as such.
+
+## Phases
+
+1. **P1 — Linux eBPF workbench + T0/T1 cost channel.** Privileged container/colima with bcc or libbpf + bpftrace; build unstripped CPU llama.cpp inside it; verify uprobe attachment; implement T0 timing and T1 per-sequence attribution; validate against in-process timers (verification 2) and emit the cost readings as stage-12-shaped OTel spans (the original S5 deliverable). Gate: per-request cost span, zero-touch, validated.
+2. **P2 — T2 semantic skeleton.** Locate ggml compute entry points; from uprobes, walk and read `ggml_tensor` name/shape/op via `bpf_probe_read_user` (offsets extracted from DWARF of the pinned build — script the extraction so re-pinning is automated); reproduce S4's tensor-name execution census externally. Gate: eBPF-observed name sequence == oracle's, same run.
+3. **P3 — T3 value recovery.** For the residual node S4 chose: read the float data at callback-equivalent timing; compute the probe scalar externally; exact-match against the oracle (verification 1). Then the **brittleness protocol** (verification 3) across version/architecture/quantization. Gate: values match; brittleness table complete — this is the ceiling measurement.
+4. **P4 — T4 assessment + verdict.** Generalize P2/P3's pinned knowledge into a data-driven per-architecture map (name→role, offsets→DWARF-derived); write the verdict: maintainable-product vs research-trick, with the measured regeneration cost per new release/architecture; wire recovered signals into a merged trace end-to-end alongside the cost channel. Gate: the written verdict with evidence — this feeds the F ADR directly.
+5. **P5 — GPU tier (deferred until CUDA box).** CUPTI per-kernel timeline correlated to requests via NVTX/engine IDs; bpftime PTX sub-spike on one known kernel demonstrating value observation and measuring what semantic recovery would additionally require on GPU. Runbook prepared; execution gated on hardware.
+
+**Fail-fast:** if P1 uprobes cannot attach reliably in the containerized kernel within the session budget, switch to a colima VM with full kernel access before burning time; if P3 values never match the oracle (timing/buffer-reuse races), report the race analysis and stop for steering — partial T2 success is still a valuable verdict. Phases self-limit at ~45 min wall-clock before reporting.
