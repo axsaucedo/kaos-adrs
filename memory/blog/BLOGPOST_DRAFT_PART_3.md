@@ -234,11 +234,11 @@ A failure contract that has never been probed is a hope. So instead of asserting
 23:47. A routine node pool upgrade evicts one of the two `MemoryStore` replicas.
 
 ```mermaid
-%%{init: {"themeVariables": {"edgeLabelBackground": "transparent"}}}%%
+%%{init: {"themeVariables": {"edgeLabelBackground": "#ffffff00"}}}%%
 flowchart LR
   U["Users"] --> A["Agents"]
   A -.->|"verify token"| AS["Auth Service"]
-  A -->|"keeps serving"| R1["MemoryStore<br/>replica A"]
+  A --> R1["MemoryStore<br/>replica A"]
   A -->|"evicted, drained<br/>from endpoints"| R2["MemoryStore<br/>replica B"]
   R1 --> PG[("Postgres + pgvector")]
   R2 --> PG
@@ -259,7 +259,7 @@ The local mode is the stated exception. Its PersistentVolume is single-writer, s
 00:12. The upgrade rolls on and bounces the replica that was mid-fold, halfway through compacting a session's overflow into its medium-term summary.
 
 ```mermaid
-%%{init: {"themeVariables": {"edgeLabelBackground": "transparent"}}}%%
+%%{init: {"themeVariables": {"edgeLabelBackground": "#ffffff00"}}}%%
 flowchart LR
   U["Users"] --> A["Agents"]
   A -.->|"verify token"| AS["Auth Service"]
@@ -284,7 +284,7 @@ There is one honest gap: nothing actively sweeps for orphaned pending rows, they
 02:00. The database node itself dies. This is the page from the opening, and it goes to whoever owns Postgres.
 
 ```mermaid
-%%{init: {"themeVariables": {"edgeLabelBackground": "transparent"}}}%%
+%%{init: {"themeVariables": {"edgeLabelBackground": "#ffffff00"}}}%%
 flowchart LR
   U["Users"] --> A["Agents"]
   A -.->|"verify token"| AS["Auth Service"]
@@ -310,9 +310,9 @@ What the memory layer contributes is bounded state loss on either side of the fa
 02:01. From the agents' side of the wire it does not matter why: the memory path is simply gone, and thirty conversations are mid-turn.
 
 ```mermaid
-%%{init: {"themeVariables": {"edgeLabelBackground": "transparent"}}}%%
+%%{init: {"themeVariables": {"edgeLabelBackground": "#ffffff00"}}}%%
 flowchart LR
-  U["Users"] -->|"still serving"| A["Agents"]
+  U["Users"] --> A["Agents"]
   A -.->|"verify token"| AS["Auth Service"]
   A -->|"recall: empty,<br/>degraded=true"| R1["MemoryStore<br/>replica A"]
   A -->|"write: soft,<br/>logs and continues"| R2["MemoryStore<br/>replica B"]
@@ -335,10 +335,10 @@ Writes follow the soft or strict contract from the resource: `soft` (the default
 02:40. To complete the night, the node running the auth service goes down with the identity issuer on it.
 
 ```mermaid
-%%{init: {"themeVariables": {"edgeLabelBackground": "transparent"}}}%%
+%%{init: {"themeVariables": {"edgeLabelBackground": "#ffffff00"}}}%%
 flowchart LR
   U["Users"] --> A["Agents"]
-  A -.->|"issuer down: cached JWKS keeps<br/>verifying valid tokens; new logins<br/>and token refresh fail closed"| AS["Auth Service"]
+  A -.->|"cached keys verify,<br/>new logins fail closed"| AS["Auth Service"]
   A --> R1["MemoryStore<br/>replica A"]
   A --> R2["MemoryStore<br/>replica B"]
   R1 --> PG[("Postgres + pgvector")]
