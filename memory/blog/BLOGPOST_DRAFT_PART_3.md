@@ -247,7 +247,7 @@ flowchart LR
   classDef ok fill:#e6ffed,stroke:#2da44e;
   class R2 down;
   class U,GW,KC,A,R1,PG ok;
-  linkStyle 4 stroke:#cf222e;
+  linkStyle 4 stroke:#cf222e
 ```
 
 Nothing pages. In external mode the service defaults to two replicas and is deliberately stateless: the deployment mounts no volumes, and even the engine's internal change-history log is placed on an ephemeral per-replica path so that Postgres remains the only shared state. A `PodDisruptionBudget` with `minAvailable: 1` guards exactly this kind of voluntary eviction, and the readiness probe (which pings both the relational tier and the vector collection) pulls an unhealthy replica out of the Service endpoints without killing it. The surviving replica keeps serving from the same database, and nothing is lost.
@@ -272,7 +272,7 @@ flowchart LR
   classDef ok fill:#e6ffed,stroke:#2da44e;
   class R1 down;
   class U,GW,KC,A,R2,PG ok;
-  linkStyle 5 stroke:#cf222e;
+  linkStyle 5 stroke:#cf222e
 ```
 
 Compaction is where a bounce could corrupt state, since the fold spans a summarization call and several table mutations. The service serializes each fold with a Postgres advisory lock keyed on the scope, and runs it as one transaction: read the pending rows, produce the new digest as an append-only version, prune old versions, delete the folded rows, commit. The killed replica's transaction rolls back, the rows stay marked pending, and the advisory lock is session-level so Postgres releases it the moment the dead connection drops. Re-running the fold is idempotent, so nothing double-folds and no summary version is ever half-written.
@@ -298,7 +298,7 @@ flowchart LR
   class PG down;
   class R1,R2 warn;
   class U,GW,KC,A ok;
-  linkStyle 5,6 stroke:#cf222e;
+  linkStyle 5,6 stroke:#cf222e
 ```
 
 The DSN is bring-your-own through `connectionSecretRef`, and the operator deliberately does nothing about Postgres availability: no provisioning, no failover management. Your database's HA story (managed Postgres, Patroni, CloudNativePG) stays your database's HA story, which is the point of reusing infrastructure you already operate rather than shipping a bespoke one. Both service replicas flip NotReady and drain from the endpoints until the database returns.
@@ -323,7 +323,7 @@ flowchart LR
   classDef ok fill:#e6ffed,stroke:#2da44e;
   class R1,R2,PG down;
   class U,GW,KC,A ok;
-  linkStyle 3,4 stroke:#cf222e;
+  linkStyle 3,4 stroke:#cf222e
 ```
 
 The answer is enforced at both ends of the wire. On the service side, a recall that can only lose the long-term tier degrades within the response: the conversational tiers return and the `degraded` flag is set. On the client side, any failure at all (timeout, connection refused, an error status) is caught and returned as an empty recall marked `degraded`, with a 5 second recall timeout so a hanging store cannot stall the turn. The agent runtime then proceeds: message history falls back to the runtime's own event log, the memory block is simply absent, and the user gets an answer from an agent with a shorter memory.
@@ -348,7 +348,7 @@ flowchart LR
   classDef ok fill:#e6ffed,stroke:#2da44e;
   class KC down;
   class U,GW,A,R1,R2,PG ok;
-  linkStyle 1 stroke:#cf222e;
+  linkStyle 1 stroke:#cf222e
 ```
 
 The wiring section showed that identity is verified at the gateway and the policy engine, and this is where that pays off: both verify tokens offline. The gateway checks user JWTs against a cached JWKS, the policy engine checks them against signing keys the operator projects into the policy on a short poll interval, and when the issuer is unreachable the projector leaves the existing keys intact rather than blanking them. A user holding a valid, unexpired token keeps recalling and writing memory as if nothing happened.
