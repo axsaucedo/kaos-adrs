@@ -13,7 +13,7 @@ This document defines the minimal canonical trajectory schema that OTel GenAI se
 
 ## The canonical model
 
-A **trajectory** is one run envelope plus an ordered list of events. Events form a tree via parent linkage; three kinds cover the S1 evidence: `run` (root), `llm`, `tool`. Agent/sub-agent nesting reuses `run`-kind events below the root; further kinds (retrieval, evaluation) are additive later.
+A **trajectory** is one run envelope plus an ordered list of events. Events form a tree via parent linkage; four kinds cover the S1 evidence: `run` (root), `llm`, `tool`, and `internal` (added by S1-P4: the kind carrying `xai.parametric.observe` / `xai.cost.observe` evidence events, which joined a real trajectory without any change to the canonical columns and left parametric-free trajectories byte-for-byte unaffected). Agent/sub-agent nesting reuses `run`-kind events below the root; further kinds (retrieval, evaluation) are additive later.
 
 ### Common event envelope
 
