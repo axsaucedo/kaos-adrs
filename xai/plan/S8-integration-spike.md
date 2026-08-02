@@ -1,0 +1,24 @@
+# Spike S8 — end-to-end integration prototype (ingest → diagnose → explain → signals → TUI)
+
+**Validates:** the seams of [proposed-split.md](./proposed-split.md) and the four ADRs assembled into one working system before packaging hardens — schema/ingest/replay boundaries, F's additivity in practice, and ADR 0004's TUI-as-API-view rule. This is the gate between the ADR phase and implementation increment A.
+**Execution:** phase-gated Codex on one long-lived session (the A/B-track session holds S1/S2/S7-P4 context); per-phase briefs, orchestrator gates. **Code is committed** — branch `spike/s8-integration` in the `xai` source repo, prototype under top-level `spike_s8/` (a self-contained mini-package `spike_s8/xai_proto/` prefiguring the split's subpackage names; clearly a prototype, not the shipped package). One comprehensive reviewable commit per phase, conventional messages, no session-URL trailers. Reports at `tmp/spikes/s8/PHASE<n>-REPORT.md` (gitignored); learnings to `impl/learnings/S8-integration.md` in kaos-ai-docs.
+
+## Verification loop (every phase)
+
+pytest suite under `spike_s8/tests/` grows each phase and must be green at every gate; campaign fixtures (S1 exports, S2 engine tests, S7 datasets) are the regression anchors; each phase ends with its commit pushed to the branch plus a report.
+
+## Phases
+
+1. **P1 — Core: schema, ingest, trajectory.** Port S1's proven assets into `xai_proto/{schema,ingest,trajectory}` with the split's module boundaries: canonical dataclasses/enums per stage 9, the three adapters (langfuse, otlp, json-mapping), `load()`/`Trajectory` with typed accessors and the replay-manifest view. Tests: the S1 alignment/round-trip/manifest/parametric-join suites re-pointed at the package. Gate: all S1 assertions green through the packaged paths; adapter line counts stay small.
+2. **P2 — Replay: engine + adapters.** Port S2 into `xai_proto/replay`: five-operation protocol (incl. named `reference_arm`), checkpoint/intervention dataclasses aligned to schema, stat engine, taxonomy, budgets, guided screening; reference adapters `synthetic` (unit SCM) and `openai_endpoint` (from S2-P4). `xai_proto.explain(traj, ...)` as the public call. Tests: S2 unit suites + a reduced calibration check (null FPR + one planted delta, ~50 replications) as a slow marker. Gate: green, plus one scripted real-model wrong-context localization via the endpoint adapter against the pinned llama.cpp server.
+3. **P3 — Diagnose + parametric.** `xai_proto/diagnose` (baseline findings: tool errors/retries, non-completion/spiral from cap+entropy, uncertainty spikes) and `xai_proto/parametric` (signals accessors over `internal` events, provenance/numerics surfacing, tie flag). Wire a real source: convert an S7 per-step signal slice into `xai.parametric.observe` spans joined to a real trace (the S1 fixture run or a fresh llama.cpp generation with the S7 extractor), proving F-additivity through the packaged path. Gate: `traj.signals` and signal-aware diagnostics working on real data; a signal-free trajectory unchanged (byte-diff assertion).
+4. **P4 — TUI.** `xai_proto/tui` (Textual, three panes per ADR 0004): tree with badges, step inspector, replay panel running `explain` live against the synthetic adapter (fast) and the endpoint adapter (real). Strictly public-API calls. Tests: Textual pilot snapshot tests for each pane + one scripted replay-panel interaction. Gate: `python -m xai_proto.tui <trace>` works on the P3 artifact; snapshots committed.
+5. **P5 — End-to-end demo + hardening sweep.** `spike_s8/demo/run_demo.py`: one command that (a) generates a fresh small agent run against the local model with dual capture, (b) loads both sources and asserts alignment, (c) diagnoses, (d) plants a wrong-context fact and localizes it via `explain` (screen tier), (e) attaches live uncertainty signals, (f) opens the TUI (or headless-renders all panes in CI mode). README for the branch; full test suite; a final self-review pass for dead code/TODOs. Gate: demo runs clean twice from scratch; suite green; report includes seam findings for the split plan.
+
+## Steer triggers
+
+- A split seam proves wrong (e.g. schema↔replay coupling forces an import cycle, or the TUI needs private access) — stop; that is a proposed-split amendment, decided by the orchestrator before code adapts.
+- The endpoint adapter cannot drive the local server reliably — fall back to recorded-fixture mode for the TUI/demo and flag the live path.
+- Textual snapshot tests prove flaky — pin terminal size/theme; if still flaky, downgrade to structural assertions and record the finding for ADR 0004.
+
+**Fail-fast:** each phase self-limits ~60 min wall-clock (P5 ~75) before reporting for steering; background compute must be `nohup setsid`-detached with checkpoints per the campaign's operational rule.
