@@ -235,9 +235,8 @@ A failure contract that has never been probed is a hope. So instead of asserting
 
 ```mermaid
 flowchart LR
-  U["Users"] --> GW["Gateway"]
-  GW -.->|"verify token"| KC["Keycloak"]
-  GW --> A["Agents"]
+  U["Users"] --> A["Agents"]
+  A -.->|"verify token"| AS["Auth Service"]
   A -->|"keeps serving"| R1["MemoryStore<br/>replica A"]
   A -->|"evicted, drained<br/>from endpoints"| R2["MemoryStore<br/>replica B"]
   R1 --> PG[("Postgres + pgvector")]
@@ -246,8 +245,8 @@ flowchart LR
   classDef warn fill:#fff8c5,stroke:#d4a72c;
   classDef ok fill:#e6ffed,stroke:#2da44e;
   class R2 down;
-  class U,GW,KC,A,R1,PG ok;
-  linkStyle 4 stroke:#cf222e
+  class U,AS,A,R1,PG ok;
+  linkStyle 3 stroke:#cf222e
 ```
 
 Nothing pages. In external mode the service defaults to two replicas and is deliberately stateless: the deployment mounts no volumes, and even the engine's internal change-history log is placed on an ephemeral per-replica path so that Postgres remains the only shared state. A `PodDisruptionBudget` with `minAvailable: 1` guards exactly this kind of voluntary eviction, and the readiness probe (which pings both the relational tier and the vector collection) pulls an unhealthy replica out of the Service endpoints without killing it. The surviving replica keeps serving from the same database, and nothing is lost.
@@ -260,9 +259,8 @@ The local mode is the stated exception. Its PersistentVolume is single-writer, s
 
 ```mermaid
 flowchart LR
-  U["Users"] --> GW["Gateway"]
-  GW -.->|"verify token"| KC["Keycloak"]
-  GW --> A["Agents"]
+  U["Users"] --> A["Agents"]
+  A -.->|"verify token"| AS["Auth Service"]
   A --> R1["MemoryStore<br/>replica A"]
   A --> R2["MemoryStore<br/>replica B"]
   R1 -->|"killed mid-fold:<br/>transaction rolls back,<br/>advisory lock auto-released"| PG[("Postgres + pgvector")]
@@ -271,8 +269,8 @@ flowchart LR
   classDef warn fill:#fff8c5,stroke:#d4a72c;
   classDef ok fill:#e6ffed,stroke:#2da44e;
   class R1 down;
-  class U,GW,KC,A,R2,PG ok;
-  linkStyle 5 stroke:#cf222e
+  class U,AS,A,R2,PG ok;
+  linkStyle 4 stroke:#cf222e
 ```
 
 Compaction is where a bounce could corrupt state, since the fold spans a summarization call and several table mutations. The service serializes each fold with a Postgres advisory lock keyed on the scope, and runs it as one transaction: read the pending rows, produce the new digest as an append-only version, prune old versions, delete the folded rows, commit. The killed replica's transaction rolls back, the rows stay marked pending, and the advisory lock is session-level so Postgres releases it the moment the dead connection drops. Re-running the fold is idempotent, so nothing double-folds and no summary version is ever half-written.
@@ -285,9 +283,8 @@ There is one honest gap: nothing actively sweeps for orphaned pending rows, they
 
 ```mermaid
 flowchart LR
-  U["Users"] --> GW["Gateway"]
-  GW -.->|"verify token"| KC["Keycloak"]
-  GW --> A["Agents"]
+  U["Users"] --> A["Agents"]
+  A -.->|"verify token"| AS["Auth Service"]
   A -->|"readiness 503,<br/>drained"| R1["MemoryStore<br/>replica A"]
   A -->|"readiness 503,<br/>drained"| R2["MemoryStore<br/>replica B"]
   R1 -->|"connection fails"| PG[("Postgres + pgvector")]
@@ -297,8 +294,8 @@ flowchart LR
   classDef ok fill:#e6ffed,stroke:#2da44e;
   class PG down;
   class R1,R2 warn;
-  class U,GW,KC,A ok;
-  linkStyle 5,6 stroke:#cf222e
+  class U,AS,A ok;
+  linkStyle 4,5 stroke:#cf222e
 ```
 
 The DSN is bring-your-own through `connectionSecretRef`, and the operator deliberately does nothing about Postgres availability: no provisioning, no failover management. Your database's HA story (managed Postgres, Patroni, CloudNativePG) stays your database's HA story, which is the point of reusing infrastructure you already operate rather than shipping a bespoke one. Both service replicas flip NotReady and drain from the endpoints until the database returns.
@@ -311,9 +308,8 @@ What the memory layer contributes is bounded state loss on either side of the fa
 
 ```mermaid
 flowchart LR
-  U["Users"] --> GW["Gateway"]
-  GW -.->|"verify token"| KC["Keycloak"]
-  GW -->|"still serving"| A["Agents"]
+  U["Users"] -->|"still serving"| A["Agents"]
+  A -.->|"verify token"| AS["Auth Service"]
   A -->|"recall: empty,<br/>degraded=true"| R1["MemoryStore<br/>replica A"]
   A -->|"write: soft,<br/>logs and continues"| R2["MemoryStore<br/>replica B"]
   R1 --> PG[("Postgres + pgvector")]
@@ -322,8 +318,8 @@ flowchart LR
   classDef warn fill:#fff8c5,stroke:#d4a72c;
   classDef ok fill:#e6ffed,stroke:#2da44e;
   class R1,R2,PG down;
-  class U,GW,KC,A ok;
-  linkStyle 3,4 stroke:#cf222e
+  class U,AS,A ok;
+  linkStyle 2,3 stroke:#cf222e
 ```
 
 The answer is enforced at both ends of the wire. On the service side, a recall that can only lose the long-term tier degrades within the response: the conversational tiers return and the `degraded` flag is set. On the client side, any failure at all (timeout, connection refused, an error status) is caught and returned as an empty recall marked `degraded`, with a 5 second recall timeout so a hanging store cannot stall the turn. The agent runtime then proceeds: message history falls back to the runtime's own event log, the memory block is simply absent, and the user gets an answer from an agent with a shorter memory.
@@ -332,13 +328,12 @@ Writes follow the soft or strict contract from the resource: `soft` (the default
 
 **Failure 5: The auth service goes down**
 
-02:40. To complete the night, the node running Keycloak goes down with the issuer on it.
+02:40. To complete the night, the node running the auth service goes down with the identity issuer on it.
 
 ```mermaid
 flowchart LR
-  U["Users"] --> GW["Gateway"]
-  GW -.->|"issuer down: cached JWKS keeps<br/>verifying valid tokens; new logins<br/>and token refresh fail closed"| KC["Keycloak"]
-  GW --> A["Agents"]
+  U["Users"] --> A["Agents"]
+  A -.->|"issuer down: cached JWKS keeps<br/>verifying valid tokens; new logins<br/>and token refresh fail closed"| AS["Auth Service"]
   A --> R1["MemoryStore<br/>replica A"]
   A --> R2["MemoryStore<br/>replica B"]
   R1 --> PG[("Postgres + pgvector")]
@@ -346,8 +341,8 @@ flowchart LR
   classDef down fill:#ffebe9,stroke:#cf222e;
   classDef warn fill:#fff8c5,stroke:#d4a72c;
   classDef ok fill:#e6ffed,stroke:#2da44e;
-  class KC down;
-  class U,GW,A,R1,R2,PG ok;
+  class AS down;
+  class U,A,R1,R2,PG ok;
   linkStyle 1 stroke:#cf222e
 ```
 
