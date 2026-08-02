@@ -23,7 +23,7 @@ A **trajectory** is one run envelope plus an ordered list of events. Events form
 | `event_id` | required | `spanId` / observation `id` |
 | `parent_event_id` | required, nullable | null identifies the root event |
 | `kind` | required | `run` / `llm` / `tool` (`AGENT`,`SPAN`→`run`; `LLM`,`GENERATION`→`llm`; `TOOL`→`tool`) |
-| `name` | required | source span/observation name |
+| `name` | required | source span/observation name — **source-assigned display, not canonical identity**: S1-P3 showed instrumentation libraries choose different names for the same logical event (Langfuse wrapper `OpenAI-generation` vs OpenInference `ChatCompletion`), so cross-source alignment keys on `kind` + tree position, never on `name` |
 | `started_at`, `ended_at` | required | normalized UTC |
 | `time_precision` | required | `nanosecond` (raw OTLP) / `millisecond` (Langfuse API export) — declared, never upgraded |
 | `order_key` | required, derived | `(started_at, parent_event_id, source event id)`; labeled derived — a display order, not a causal sequence |
