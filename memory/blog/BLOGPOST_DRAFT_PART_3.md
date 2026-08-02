@@ -4,7 +4,7 @@ _This is a 4-part series on how agents remember: building short-, medium- and lo
 
 ---
 
-It is 2am and the memory database just crashed. Thirty agents are mid-conversation across your cluster. The impact your users feel depends entirely on earlier design choices: Which storage does the memory layer sit on? Does it run inside each agent or as a service they share? What does the resource declare about replicas and availability? And what did everyone agree happens when a dependency disappears? In this post we design multi-tenant memory as native Kubernetes infrastructure, then probe that design failure by failure.
+It is 2am and the memory database just crashed and thirty agents were mid-conversation across your cluster. The impact your users feel depends entirely on earlier design choices: Which storage does the memory layer sit on? Does it run inside each agent or as a service they share? What does the resource declare about replicas and availability? And what did everyone agree happens when a dependency disappears? In this post we design multi-tenant memory as native Kubernetes infrastructure, then probe that design failure by failure.
 
 > This captures why the memory layer deserves the same treatment as any other infrastructure component: a resource, a topology, and a failure contract.
 
@@ -35,18 +35,22 @@ Let's get started.
 
 ## Kubernetes Enters the Picture: Memory as Infrastructure
 
-Now that we have all the separate pieces, we need to decide how to stitch them together, and this involved several architectural design choices. We'll go through the three biggest ones in this section.
+Now that we have all the separate pieces, we need to decide how to stitch them together as a cohesive platform. As I took forward this exercise, this resulted in various architectural design choices. In this post we will go through the three biggest archivetural choices in this section.
 
 **Decision 1: Choosing the Storage**
 
 The first design decision was, which data store should we go for? Should we go for FAISS? Chroma? pgvector? Milvus? Pinecone? 
 
-The answer did not need to be a single store, because the requirements differ between a local development loop and a production fleet. 
+Or maybe more than one! It did not need to be a single choice, especially when considering the requirements differ between a local development loop and a production fleet. 
 
 * **For development** the priority is zero external dependencies, so the store should be embeddable in the service container. 
 * **For production** the priorities are durability, horizontal scaling, and reusing infrastructure you already operate. 
 
-This ruled out SaaS-only options like Pinecone for the first iteration, as well as library-only indexes with no persistence or filtering (eg FAISS), or also dedicated clusters that would add heavy new infrastructure (Milvus, Weaviate). For this we landed on two storage modes with the same service code on top of both:
+This ruled out SaaS-only options like Pinecone for the first iteration, as well as library-only indexes with no persistence or filtering (eg FAISS). At least for now, it also ruled out dedicated clusters that would add heavy new infrastructure (Milvus, Weaviate). For this I landed on two storage modes with the same service code on top of both:
+
+[TODO: Add a brief two bulletpoints to outline the two layers, local mode
+and external model. Worth also sstating that the latter is also flexible as it's based in config and supoprts any other store, but this is the one that we're focusing as first principal support.
+
 
 One interesting caveat that I ran into, was learning that some database engines apply scope filters after the retrieval step, which means that in some cases a query expecting a number of results may return less than expected. This is a known consideration on [pgvector as it post-filters by default](https://dev.to/franckpachot/no-pre-filtering-in-pgvector-means-reduced-ann-recall-1aa1), and it is why engines like [Qdrant filter inside the index traversal](https://qdrant.tech/documentation/manage-data/multitenancy/). 
 
@@ -79,11 +83,9 @@ Integrating the Mem0 Python SDK directly in the agent service looks attractive a
 
 Instead, going for the central option gives us the opposite: LLM extraction lands on the `MemoryStore` service, agents only interact with the respective store, agent images can use only the client, and scales with replicas horizontally.
 
-The "how" mattered as much as the "where", however. Had the requirement been long-term memory alone, the central option could have been as easy as "just deploy Mem0". 
+The "how" mattered as much as the "where", however. If the requirement had been long-term memory alone, the central option could have been as easy as "just deploy Mem0". However I needed a unified layer for short-, medium- and long-term memory where we could interact with it as one integrated contract, server-side scope enforcement, telemetry on every operation, as well as scoped access control. 
 
-The requirements went beyond what any single engine exposes though: we needed a unified layer for short-, medium- and long-term memory where we could interact with it as one integrated contract, server-side scope enforcement, telemetry on every operation, as well as scoped access control. 
-
-For this we had to introduce a new layer through the `kaos-memory` Python package, which provides both the runtime client and the `MemoryStore` service. We will cover the package in more detail in Part 4, where it becomes the integration path for your own agent.
+For this I had to introduce a new layer through the `kaos-memory` Python package, which provides both the runtime client and the `MemoryStore` service. I will cover the package in more detail in Part 4.
 
 Here's the visual overview of how it all fits together in the data plane:
 
@@ -111,7 +113,9 @@ flowchart TB
 
 **Decision 3: Designing the Custom Resource**
 
-The third design decision involved designing the architectural abstraction of "Memory" as an infrastructure component in Kubernetes. In this case it meant codifying the `MemoryStore` resources into a specification that brings together all the points that we covered thus far. We settled on the following:
+The third design decision involved designing the architectural abstraction of "Memory" as an infrastructure component in Kubernetes. In this case it meant codifying the `MemoryStore` resources into a specification that brings together all the points that we covered thus far. 
+
+This took me longer than I would've liked, but I was happy with the proposed contract, which is the following:
 
 ```yaml
 apiVersion: kaos.tools/v1alpha1
@@ -163,8 +167,11 @@ Now that we have the resources designed, we can stand them up on a real cluster 
 
 ## Standing It Up on a Cluster
 
-The design above assumed verified identity everywhere: scopes derive from it, attribution records it, and the store enforces it. That means the cluster itself has to provide identity before any of it works, so we install with authentication enabled:
+Now that we implemented this architecture in the control plane, I can now show what the end product looks like in practice.
 
+Any installation of the K8s Agent OS (KAOS) would have memory enabled, and by default any MemoryStore would run with the local datastore (Chrome + Sqlite in PVC). However for production environments the postgres setup with pgvector is recommended.
+
+We can create the full cluster with auth enabled with the cli:
 ```bash
 $ kaos system install \
   --authz-enabled \
@@ -202,9 +209,11 @@ flowchart TB
   req <--> mem
 ```
 
-The wiring matters for what comes later in this part, so it is worth tracing once. A user's request enters through the gateway mesh, where the user token is verified against the identity service. The agent runtime receives the request with the verified identity attached, derives the read scope and the write attribution from it server-side, and calls the `MemoryStore` service. The store never talks to the auth provider itself: it trusts the identities that arrive on the request, and the operator keeps the authorization graph in sync. Each hop in that chain is a separate thing that can fail, which is exactly what the failure section probes.
+The wiring matters for what comes later in this part, so it is worth explaining this up-front. 
 
-With identity in place, the CLI renders the resources from the design section. The store first, referencing the `ModelAPI` its background workers will use for summarization and embeddings:
+A user's request enters through the gateway mesh, where the user token is verified against the identity service. The agent runtime receives the request with the verified identity attached, derives the read scope and the write attribution from it server-side, and calls the `MemoryStore` service. The store never talks to the auth provider itself: it trusts the identities that arrive on the request as they are verified through the Gateway (runs on gateway-only ingress / cluster-ip restricted), and the operator keeps the authorization graph in sync. Each hop in that chain is a separate thing that can fail, which is exactly what the failure section probes.
+
+With the control plane in place, we can now create dataplane components. The `MemoryStore` here references the `ModelAPI` its background workers will use for summarization and embeddings:
 
 ```bash
 $ kaos memorystore create shared-memory \
@@ -223,15 +232,19 @@ $ kaos agent deploy assistant \
   --memory-tools read
 ```
 
-These commands render exactly the `MemoryStore` specification from Decision 3 plus the agent binding, and the operator does the rest: it deploys the service with the replica defaults for the storage mode, wires the DSN secret, projects the identity configuration, and expands the agent's scope ceiling into its runtime configuration. Part 4 exercises this setup end to end with real users; here we stay on the platform side, because now we get to break it.
+These commands render exactly the `MemoryStore` specification from Decision 3 plus the agent binding, and the operator does the rest: it deploys the service with the replica defaults for the storage mode, wires the DSN secret, projects the identity configuration, and expands the agent's scope ceiling into its runtime configuration. Part 4 goes into a practical example using this setup end to end with real users; here we stay on the platform side, because now we get to break it.
 
 ## The Failure Contract
 
-A failure contract that has never been probed is a hope. So instead of asserting that "memory degrades gracefully", let's take the setup we just stood up and play out one bad night on the cluster, five incidents in increasing blast radius. Every incident reuses one topology diagram, with the same components and arrows throughout: the failing piece turns red, impacted pieces amber, surviving pieces green, and the details of each failure are annotated on the affected arrows. In each case we state what the system actually does, including the places where the honest answer is a trade-off rather than a guarantee.
+Now that we have the memory-as-infrastructure design decision in place, and have also understood what the control and data plane looks like, we can now assess how some of our design decisions would behave on specific failure modes.
+
+
+Here we will walk through five incidents in increasing impact. 
+
 
 **Failure 1: One service replica goes down**
 
-23:47. A routine node pool upgrade evicts one of the two `MemoryStore` replicas.
+23:47 pm. A routine node pool upgrade evicts one of the two `MemoryStore` replicas.
 
 ```mermaid
 %%{init: {"themeVariables": {"edgeLabelBackground": "#ffffff00"}}}%%
@@ -250,13 +263,15 @@ flowchart LR
   linkStyle 3 stroke:#cf222e,color:#cf222e
 ```
 
-Nothing pages. In external mode the service defaults to two replicas and is deliberately stateless: the deployment mounts no volumes, and even the engine's internal change-history log is placed on an ephemeral per-replica path so that Postgres remains the only shared state. A `PodDisruptionBudget` with `minAvailable: 1` guards exactly this kind of voluntary eviction, and the readiness probe (which pings both the relational tier and the vector collection) pulls an unhealthy replica out of the Service endpoints without killing it. The surviving replica keeps serving from the same database, and nothing is lost.
+We should not expect any escalations on this one. 
 
-The local mode is the stated exception. Its PersistentVolume is single-writer, so it runs one replica by design and a replica loss is an outage until the pod reschedules. That is an acceptable contract for a development profile and a wrong one for production, which is what the storage profiles from Decision 1 encode.
+In external mode the service defaults to two replicas and is deliberately stateless: the deployment mounts no volumes, and even the engine's internal change-history log is placed on an ephemeral per-replica path so that Postgres remains the only shared state. A `PodDisruptionBudget` with `minAvailable: 1` guards exactly this kind of voluntary eviction, and the readiness probe (which pings both the relational tier and the vector collection) pulls an unhealthy replica out of the Service endpoints without killing it. The surviving replica keeps serving from the same database, and nothing is lost.
+
+However, it is worth stating that the context where an issue would happen is if it was deployed in local mode, as it is designed as single-replica, primarily for development.
 
 **Failure 2: Replicas bounce mid-compaction**
 
-00:12. The upgrade rolls on and bounces the replica that was mid-fold, halfway through compacting a session's overflow into its medium-term summary.
+00:12 pm. The upgrade rolls on and bounces the replica that was mid-fold, halfway through compacting a session's overflow into its medium-term summary.
 
 ```mermaid
 %%{init: {"themeVariables": {"edgeLabelBackground": "#ffffff00"}}}%%
@@ -275,13 +290,17 @@ flowchart LR
   linkStyle 4 stroke:#cf222e,color:#cf222e
 ```
 
-Compaction is where a bounce could corrupt state, since the fold spans a summarization call and several table mutations. The service serializes each fold with a Postgres advisory lock keyed on the scope, and runs it as one transaction: read the pending rows, produce the new digest as an append-only version, prune old versions, delete the folded rows, commit. The killed replica's transaction rolls back, the rows stay marked pending, and the advisory lock is session-level so Postgres releases it the moment the dead connection drops. Re-running the fold is idempotent, so nothing double-folds and no summary version is ever half-written.
+Summarizaton (aka compaction) is where a bounce could corrupt state, since the fold spans a summarization call and several table mutations. 
+
+The service serializes each fold with a Postgres advisory lock keyed on the scope, and runs it as one transaction: read the pending rows, produce the new summary as an append-only version, prune old versions, delete the folded rows (aka conversations outside of the current window), commit. 
+
+The killed replica's transaction rolls back, the rows stay marked pending, and the advisory lock is session-level so Postgres releases it the moment the dead connection drops. Re-running the fold is idempotent, so nothing double-folds and no summary version is ever half-written.
 
 There is one honest gap: nothing actively sweeps for orphaned pending rows, they fold when the next write to that scope triggers compaction again. And long-term extraction keeps the "no durable queue" trade-off from the design section: the evicted turns are handed to an in-process background worker, so a replica death in that window can lose one batch of extracted facts. With the medium-term tier enabled the same turns still fold into the durable digest, so the conversational record survives even when a fact batch does not.
 
 **Failure 3: A database node goes down**
 
-02:00. The database node itself dies. This is the page from the opening, and it goes to whoever owns Postgres.
+02:00 am. The database node itself dies. This is the incident we opened this blog post with, and it goes to whoever owns Postgres.
 
 ```mermaid
 %%{init: {"themeVariables": {"edgeLabelBackground": "#ffffff00"}}}%%
@@ -301,13 +320,15 @@ flowchart LR
   linkStyle 4,5 stroke:#cf222e,color:#cf222e
 ```
 
-The DSN is bring-your-own through `connectionSecretRef`, and the operator deliberately does nothing about Postgres availability: no provisioning, no failover management. Your database's HA story (managed Postgres, Patroni, CloudNativePG) stays your database's HA story, which is the point of reusing infrastructure you already operate rather than shipping a bespoke one. Both service replicas flip NotReady and drain from the endpoints until the database returns.
+The `MemoryStore` supports any custom DSN to bring-your-own datastore through `connectionSecretRef`, and the operator deliberately does nothing about Postgres availability as it's expected to be an "external service" which is assumed to be HA for critical workloads. 
 
-What the memory layer contributes is bounded state loss on either side of the failover. The medium-term summaries and the long-term facts live in regular logged tables and survive a crash. The short-term window is the deliberate trade-off: it is an `UNLOGGED` table, which keeps the hottest per-turn path at RAM speed at the cost of being truncated by a Postgres crash recovery. After a hard failover the agents come back with their durable digests and facts intact, minus the verbatim window of in-flight conversations, which is the tier designed to be cheapest to lose.
+In this case, both `MemoryStore` service replicas flip `NotReady` and drain from the endpoints until the database returns.
+
+What the memory layer contributes is bounded state loss on either side of the failover. The medium-term summaries and the long-term facts live in regular logged tables and survive a crash. The short-term window is the deliberate trade-off, as it is an `UNLOGGED` table, which keeps the hottest per-turn path at RAM speed at the cost of being truncated by a Postgres crash recovery. After a hard failover the agents come back with their durable digests and facts intact, minus the verbatim window of in-flight conversations, which is the tier designed to be cheapest to lose.
 
 **Failure 4: The whole memory path is unreachable**
 
-02:01. From the agents' side of the wire it does not matter why: the memory path is simply gone, and thirty conversations are mid-turn.
+02:01 am. From the agents' side: the memory path is simply gone, and thirty conversations are mid-turn.
 
 ```mermaid
 %%{init: {"themeVariables": {"edgeLabelBackground": "#ffffff00"}}}%%
@@ -326,13 +347,15 @@ flowchart LR
   linkStyle 2,3 stroke:#cf222e,color:#cf222e
 ```
 
-The answer is enforced at both ends of the wire. On the service side, a recall that can only lose the long-term tier degrades within the response: the conversational tiers return and the `degraded` flag is set. On the client side, any failure at all (timeout, connection refused, an error status) is caught and returned as an empty recall marked `degraded`, with a 5 second recall timeout so a hanging store cannot stall the turn. The agent runtime then proceeds: message history falls back to the runtime's own event log, the memory block is simply absent, and the user gets an answer from an agent with a shorter memory.
+On the service side, the conversational tiers return and the `degraded` flag is set. On the client side, any failure at all (timeout, connection refused, an error status) is caught and returned as an empty recall marked `degraded`, with a 5 second recall timeout so a hanging store cannot stall the turn. 
 
-Writes follow the soft or strict contract from the resource: `soft` (the default) logs the failure and moves on, `strict` fails the turn, which is the right choice only for agents whose writes are the product. Erasure is the deliberate exception to all this softness: a `forget` that cannot clear the durable tiers surfaces as an error, because a deletion you cannot confirm must never look like a success.
+The agent runtime does not stop however, as message history falls back to the runtime's own event log, the memory block is simply absent, and the user gets an answer from an agent with a shorter memory. It is still an open question on how and whether to "inform" the agent about the degraded memory.
+
+Writes follow the soft or strict contract from the resource: `soft` (the default) logs the failure and moves on, `strict` fails the turn, which is the right choice only for agents whose writes are the product. Erasure is the deliberate exception, as a `forget` command that cannot clear the durable tiers surfaces as an error, because a deletion you cannot confirm must never look like a success.
 
 **Failure 5: The auth service goes down**
 
-02:40. To complete the night, the node running the auth service goes down with the identity issuer on it.
+02:40 am. The teams fix the store, and they are back up. However to complete the night, the node running the auth service goes down with the identity issuer on it.
 
 ```mermaid
 %%{init: {"themeVariables": {"edgeLabelBackground": "#ffffff00"}}}%%
@@ -351,15 +374,17 @@ flowchart LR
   linkStyle 1 stroke:#cf222e,color:#cf222e
 ```
 
-The wiring section showed that identity is verified at the gateway and the policy engine, and this is where that pays off: both verify tokens offline. The gateway checks user JWTs against a cached JWKS, the policy engine checks them against signing keys the operator projects into the policy on a short poll interval, and when the issuer is unreachable the projector leaves the existing keys intact rather than blanking them. A user holding a valid, unexpired token keeps recalling and writing memory as if nothing happened.
+The wiring section showed that identity is verified at the gateway + auth server(s) which  both verify tokens offline. The gateway checks user JWTs against a cached JWKS, the policy engine checks them against signing keys the operator projects into the policy on a short poll interval, and when the issuer is unreachable the projector leaves the existing keys intact rather than blanking them. A user holding a valid, unexpired token keeps recalling and writing memory as if nothing happened.
 
-What fails does so closed. New logins fail, since they need the issuer. Agents that mint their identity through client credentials serve from a cached token until it needs refreshing, then refuse to run with a stale or empty identity rather than degrade, and the policy engine denies whatever it cannot verify. Agents running on projected service account tokens are unaffected entirely, because the kubelet refreshes those against the Kubernetes API rather than the issuer. The store itself never talks to the auth provider: it requires the identities to be present and trusts what the gateway verified. The net effect is that an issuer outage is a slow burn rather than a cliff: sessions age out one by one, and every path that cannot verify refuses rather than guesses.
+New logins fail however since they need the issuer. Agents that mint their identity through client credentials serve from a cached token until it needs refreshing, then refuse to run with a stale or empty identity rather than degrade, and the policy engine denies whatever it cannot verify. 
 
-Across the five scenarios the same shape repeats: state loss is bounded by tier durability, service loss is absorbed by stateless replicas, database loss is delegated to the database, and trust loss fails closed. That shape is the failure contract, and it is what lets memory stay an augmentation instead of becoming the dependency that takes the fleet down.
+The store itself never talks to the auth provider, as it requires the identities to be present and trusts what the gateway verified. The net effect is that an issuer outage is a slow burn rather than a cliff: sessions age out one by one, and every path that cannot verify refuses rather than guesses.
+
+Across the five scenarios the main patterns I adopted were that 1) state loss is bounded by tier durability, 2) service loss is absorbed by stateless replicas, database loss is delegated to the database, and 3) trust loss fails closed. This it is what lets memory stay an augmentation instead of becoming the dependency that takes the fleet down.
 
 ## Lessons for Production Agentic Memory
 
-Here are the patterns from this part that I would carry into any agentic memory system, continuing the running list that Part 2 started with lessons one to five.
+Here are the patterns from this part that I would carry into any agentic memory system. Remember we started with 5 lessons from Part 2  so here I start from #6.
 
 ### 6. Adopt the engine and own the contract
 
