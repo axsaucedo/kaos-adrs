@@ -37,11 +37,11 @@ Here's a refresher on this 4-part series on Multi-Tiered / Multi-Tenant Agent Me
 
 Let's get started.
 
-## Kubernetes Enters the Picture: Memory as Infrastructure
+# Kubernetes Enters the Picture: Memory as Infrastructure
 
 Now that we have all the separate pieces, we need to decide how to stitch them together as a cohesive platform. As I took forward this exercise, this resulted in various architectural design choices. In this post we will go through the three biggest archivetural choices in this section.
 
-**Decision 1: Choosing the Storage**
+## Decision 1: Choosing the Storage
 
 The first design decision was, which data store should we go for? Should we go for FAISS? Chroma? pgvector? Milvus? Pinecone? 
 
@@ -79,7 +79,7 @@ flowchart LR
   MS --> prod
 ```
 
-**Decision 2: Designing the Data Plane**
+## Decision 2: Designing the Data Plane
 
 The second design decision was where, and how, the memory layer runs. Should it run **inside every agent** as a library? As a **side-car** next to every pod? Or as a **central service component**?
 
@@ -115,7 +115,7 @@ flowchart TB
     BG --> EMB
 ```
 
-**Decision 3: Designing the Custom Resource**
+## Decision 3: Designing the Custom Resource
 
 The third design decision involved designing the architectural abstraction of "Memory" as an infrastructure component in Kubernetes. In this case it meant codifying the `MemoryStore` resources into a specification that brings together all the points that we covered thus far. 
 
@@ -169,7 +169,7 @@ These were some of the major design decisions worth highlighting - there were of
 
 Now that we have the resources designed, we can stand them up on a real cluster and see what the declarations turn into.
 
-## Standing It Up on a Cluster
+# Standing It Up on a Cluster
 
 Now that we implemented this architecture in the control plane, I can now show what the end product looks like in practice.
 
@@ -238,7 +238,7 @@ $ kaos agent deploy assistant \
 
 These commands render exactly the `MemoryStore` specification from Decision 3 plus the agent binding, and the operator does the rest: it deploys the service with the replica defaults for the storage mode, wires the DSN secret, projects the identity configuration, and expands the agent's scope ceiling into its runtime configuration. Part 4 goes into a practical example using this setup end to end with real users; here we stay on the platform side, because now we get to break it.
 
-## The Failure Contract
+# The Failure Contract
 
 Now that we have the memory-as-infrastructure design decision in place, and have also understood what the control and data plane looks like, we can now assess how some of our design decisions would behave on specific failure modes.
 
@@ -246,7 +246,7 @@ Now that we have the memory-as-infrastructure design decision in place, and have
 Here we will walk through five incidents in increasing impact. 
 
 
-**Failure 1: One service replica goes down**
+## Failure 1: One service replica goes down
 
 23:47 pm. A routine node pool upgrade evicts one of the two `MemoryStore` replicas.
 
@@ -273,7 +273,7 @@ In external mode the service defaults to two replicas and is deliberately statel
 
 However, it is worth stating that the context where an issue would happen is if it was deployed in local mode, as it is designed as single-replica, primarily for development.
 
-**Failure 2: Replicas bounce mid-compaction**
+## Failure 2: Replicas bounce mid-compaction
 
 00:12 pm. The upgrade rolls on and bounces the replica that was mid-fold, halfway through compacting a session's overflow into its medium-term summary.
 
@@ -302,7 +302,7 @@ The killed replica's transaction rolls back, the rows stay marked pending, and t
 
 There is one honest gap: nothing actively sweeps for orphaned pending rows, they fold when the next write to that scope triggers compaction again. And long-term extraction keeps the "no durable queue" trade-off from the design section: the evicted turns are handed to an in-process background worker, so a replica death in that window can lose one batch of extracted facts. With the medium-term tier enabled the same turns still fold into the durable digest, so the conversational record survives even when a fact batch does not.
 
-**Failure 3: A database node goes down**
+## Failure 3: A database node goes down
 
 02:00 am. The database node itself dies. This is the incident we opened this blog post with, and it goes to whoever owns Postgres.
 
@@ -330,7 +330,7 @@ In this case, both `MemoryStore` service replicas flip `NotReady` and drain from
 
 What the memory layer contributes is bounded state loss on either side of the failover. The medium-term summaries and the long-term facts live in regular logged tables and survive a crash. The short-term window is the deliberate trade-off, as it is an `UNLOGGED` table, which keeps the hottest per-turn path at RAM speed at the cost of being truncated by a Postgres crash recovery. After a hard failover the agents come back with their durable digests and facts intact, minus the verbatim window of in-flight conversations, which is the tier designed to be cheapest to lose.
 
-**Failure 4: The whole memory path is unreachable**
+## Failure 4: The whole memory path is unreachable
 
 02:01 am. From the agents' side: the memory path is simply gone, and thirty conversations are mid-turn.
 
@@ -357,7 +357,7 @@ The agent runtime does not stop however, as message history falls back to the ru
 
 Writes follow the soft or strict contract from the resource: `soft` (the default) logs the failure and moves on, `strict` fails the turn, which is the right choice only for agents whose writes are the product. Erasure is the deliberate exception, as a `forget` command that cannot clear the durable tiers surfaces as an error, because a deletion you cannot confirm must never look like a success.
 
-**Failure 5: The auth service goes down**
+## Failure 5: The auth service goes down
 
 02:40 am. The teams fix the store, and they are back up. However to complete the night, the node running the auth service goes down with the identity issuer on it.
 
@@ -386,27 +386,27 @@ The store itself never talks to the auth provider, as it requires the identities
 
 Across the five scenarios the main patterns I adopted were that 1) state loss is bounded by tier durability, 2) service loss is absorbed by stateless replicas, database loss is delegated to the database, and 3) trust loss fails closed. This it is what lets memory stay an augmentation instead of becoming the dependency that takes the fleet down.
 
-## Lessons for Production Agentic Memory
+# Lessons for Production Agentic Memory
 
 Here are the patterns from this part that I would carry into any agentic memory system. Remember we started with 5 lessons from Part 2  so here I start from #6.
 
-### 6. Adopt the engine and own the contract
+## 6. Adopt the engine and own the contract
 
 Wrap the memory engine behind your own interface, and adopt it for the right reason, which is latency and token cost at scale, since raw accuracy can actually favour full-context baselines. Every gap in the engine you select becomes your integration layer, so choose the gaps you know how to fill.
 
-### 7. Memory is augmentation, never a hard dependency
+## 7. Memory is augmentation, never a hard dependency
 
 Recall should degrade instead of raise, so that a memory outage produces an agent with a shorter memory instead of an agent that is down. If an outage of the memory path would be treated as an outage of the agent, the design needs revisiting before it scales.
 
-### 8. Fail soft on state, fail closed on trust
+## 8. Fail soft on state, fail closed on trust
 
 The two halves of the failure contract follow different philosophies, and both are deliberate. When state is unavailable the system degrades: recall comes back empty and flagged, writes log and continue. When trust cannot be established the system refuses: an unverifiable token is denied, and an agent that cannot mint its identity does not run. Confusing the two produces either a fleet that is down when it could serve, or one that serves what it should have refused.
 
-### 9. Probe the failure contract before your users do
+## 9. Probe the failure contract before your users do
 
 Every scenario in this part has an expected answer: kill a replica and nothing is lost, bounce it mid-fold and the transaction rolls back, take the database down and the agents keep answering with shorter memory. Walking through them, or scripting them chaos-style, turns "memory degrades gracefully" from a README claim into behaviour you have observed, and any deviation becomes a bug in the contract rather than a surprise at 2am.
 
-## Closing Thoughts for Part 3
+# Closing Thoughts for Part 3
 
 We opened at 2am with the memory database down and thirty agents mid-conversation, asking four questions. After this part, each has a precise answer.
 
