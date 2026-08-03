@@ -4,7 +4,11 @@ _This is a 4-part series on how agents remember: building short-, medium- and lo
 
 ---
 
-It is 2am and the memory database just crashed and thirty agents were mid-conversation across your cluster. The impact your users feel depends entirely on earlier design choices: Which storage does the memory layer sit on? Does it run inside each agent or as a service they share? What does the resource declare about replicas and availability? And what did everyone agree happens when a dependency disappears? In this post we design multi-tenant memory as native Kubernetes infrastructure, then probe that design failure by failure.
+It is 2am, the memory database just crashed, and thirty agents are mid-conversation across your cluster. What do your users experience?
+
+The impact depends on the design choices of the memory system. Which storage does the memory layer sit on? Does it run inside each agent or as a service they share? What does the resource declare about replicas and availability? And what did everyone agree happens when a dependency disappears?
+
+In this post we design multi-tenant memory as native Kubernetes infrastructure, then probe that design failure by failure.
 
 > This captures why the memory layer deserves the same treatment as any other infrastructure component: a resource, a topology, and a failure contract.
 
@@ -169,7 +173,7 @@ Now that we have the resources designed, we can stand them up on a real cluster 
 
 Now that we implemented this architecture in the control plane, I can now show what the end product looks like in practice.
 
-Any installation of the K8s Agent OS (KAOS) would have memory enabled, and by default any MemoryStore would run with the local datastore (Chrome + Sqlite in PVC). However for production environments the postgres setup with pgvector is recommended.
+Any installation of KAOS would have memory enabled, and by default any MemoryStore would run with the local datastore (Chroma + SQLite on a PVC). However for production environments the Postgres setup with pgvector is recommended.
 
 We can create the full cluster with auth enabled with the cli:
 ```bash
