@@ -26,7 +26,8 @@ The effort ran research → validation spikes → ADRs → plan → integration 
 
 | Step | Read | Why |
 |---|---|---|
-| 1 | [`adrs/library-interface-overview.md`](./adrs/library-interface-overview.md) | The user's-eye view of the whole library — API, workflows, production shape. Start here. |
+| 0 | [`user-guide.md`](./user-guide.md) | **Start here** — a narrative walkthrough of the actual working interface (load → diagnose → explain → signals → TUI), every output real, captured from the prototype. |
+| 1 | [`adrs/library-interface-overview.md`](./adrs/library-interface-overview.md) | The user's-eye view of the whole library — API, workflows, production shape. |
 | 2 | [`adrs/adr_0001…`](./adrs/adr_0001_trajectory-schema-and-ingestion.md) · [`0002`](./adrs/adr_0002_decision-attribution-replay.md) · [`0003`](./adrs/adr_0003_parametric-instrumentation.md) · [`0004`](./adrs/adr_0004_visualization-tui.md) | The four decisions, each with alternatives and evidence links. |
 | 3 | [`plan/proposed-split.md`](./plan/proposed-split.md) | How the repo gets there, increment by increment, including the S8 amendments. |
 | 4 | [`impl/learnings/campaign-synthesis.md`](./impl/learnings/campaign-synthesis.md) | The evidence base in one read; per-spike learnings ([S1](./impl/learnings/S1-trace-ingestion.md)–[S8](./impl/learnings/S8-integration.md)) for depth. |
