@@ -48,8 +48,8 @@ Or maybe more than one! It did not need to be a single choice, especially when c
 
 This ruled out SaaS-only options like Pinecone for the first iteration, as well as library-only indexes with no persistence or filtering (eg FAISS). At least for now, it also ruled out dedicated clusters that would add heavy new infrastructure (Milvus, Weaviate). For this I landed on two storage modes with the same service code on top of both:
 
-[TODO: Add a brief two bulletpoints to outline the two layers, local mode
-and external model. Worth also sstating that the latter is also flexible as it's based in config and supoprts any other store, but this is the one that we're focusing as first principal support.
+* **Local mode** runs embedded Chroma for the long-term vectors and SQLite for the conversational tiers, all inside the service container on one PersistentVolume, so a development cluster needs no external database at all.
+* **External mode** points the service at your own Postgres with pgvector through a connection secret, carrying every tier on infrastructure you already operate. The mode is configuration driven, so other stores can slot in behind the same interface, with pgvector as the first-class supported path.
 
 
 One interesting caveat that I ran into, was learning that some database engines apply scope filters after the retrieval step, which means that in some cases a query expecting a number of results may return less than expected. This is a known consideration on [pgvector as it post-filters by default](https://dev.to/franckpachot/no-pre-filtering-in-pgvector-means-reduced-ann-recall-1aa1), and it is why engines like [Qdrant filter inside the index traversal](https://qdrant.tech/documentation/manage-data/multitenancy/). 
