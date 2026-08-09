@@ -4,9 +4,9 @@ _This is a 4-part series on how agents remember: building short-, medium- and lo
 
 ---
 
-Alice and Bob both use our agent platform. On Monday, Alice works a support incident through it, and the agent remembers what she told it. On Thursday, Bob asks a similar question, and the agent, being helpful, answers with what it learned from Alice. Nothing was hacked, no prompt was crafted, and nothing about that request was malformed. An agent answered a question correctly and it was still a data leak.
+Alice and Bob both use our agent platform. On Monday, Alice worked on a support incident, and the agent remembers what she told it. On Thursday, Bob asks a similar question, and the agent, being helpful, answers with what it learned from Alice. Nothing was hacked, Bob doesn't know about prompt injection, and nothing about that request was malformed. An agent answered a question how it was designed, and it was still a data leak.
 
-The first three parts were spent making sure that cannot happen. This part runs the design on a cluster and shows what came back. Do the three tiers actually work together inside one conversation? Does a single write end up visible to the right agents and invisible to everyone else? Does the boundary hold when the model is told to cross it? And what does it take to get the same behaviour in an agent of your own?
+The first three parts were spent making sure that cannot happen. This part runs the design on a cluster and shows what came back. Do the memory tiers actually work together inside one conversation? Does a single write end up visible to the right agents and invisible to everyone else? Does the boundary hold when the model is told to cross it? And what does it take to get the same behaviour in an agent of your own?
 
 > A design is a set of promises, and the only way to find out which ones survive is to run it and read the output.
 
@@ -30,10 +30,22 @@ Here's a refresher on this 4-part series on Multi-Tiered / Multi-Tenant Agent Me
 
 * **[Part 1: What agent memory is and what to build on.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/)** The taxonomy, the baseline implementations everyone starts with, and the engine landscape from surveying ~30 tools.
 * **[Part 2: Tiers and scopes for multi-tenant agents.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-qx9uf/)** The three-tier design and the answer to whose memory it is.
-* **Part 3: Memory as infrastructure.** The Kubernetes `MemoryStore` resource, its deployment topology, and the failure contract probed scenario by scenario.
+* **[Part 3: Memory as infrastructure.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-pcsof/)** The Kubernetes `MemoryStore` resource, its deployment topology, and the failure contract probed scenario by scenario.
 * **Part 4 (this post): Agent memory in action.** A worked example that runs end to end on a secured cluster with real outputs, plus how to integrate the same pattern in your own agent.
 
 Let's get started.
+
+# Where We Got To
+
+Three parts of design come down to a handful of moving pieces, and the example below exercises all of them, so here they are in one place before any of it starts running.
+
+**The memory an agent carries is three tiers, not one.** The short-term tier is the verbatim window of recent turns, held to a token budget rather than a turn count, since turns vary wildly in size. The medium-term tier is a rolling summary of the turns the window has already dropped, so overflow gets compacted instead of lost. The long-term tier is the facts extracted from those conversations and stored as vectors, searched by meaning rather than by recency. A single recall assembles whichever of the three the caller asked for.
+
+**Every write carries identity, and every read picks a level.** A write attaches all the identities the request was verified with at once: the agent that produced it, the user it belongs to, and the session it happened in. A read picks one level from a nested set, where `session` is what was said in this conversation, `agent` is what this agent knows across its sessions, and `user` is everything that user has produced through any agent. Each level is bound to the identity verified at the gateway, so it filters on who is asking rather than on what the caller claims. A fourth level, `store`, sees everything and belongs to the admin plane alone.
+
+**All of it lives behind one Kubernetes resource.** A `MemoryStore` is a service the agents share rather than a library each of them embeds, backed by Postgres with pgvector, with the extraction and compaction work kept off the turn the user is waiting on. When the store is unreachable the agents keep answering with an empty memory block and a `degraded` flag on the response, so an outage of memory stays a degraded conversation.
+
+That is the design. What follows is the same design running on a cluster, with two logged-in users and three agents that differ only in how much they are allowed to see.
 
 # Worked Example: An Agent That Remembers
 
