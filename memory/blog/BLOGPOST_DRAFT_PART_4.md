@@ -4,7 +4,7 @@ _This is a 4-part series on how agents remember: building short-, medium- and lo
 
 ---
 
-Alice spends Monday morning with a support assistant working out why EU checkout returns 500s after the 3pm deploy, and they land on a missing EUR rate key. On Thursday she opens a different assistant, one she has never spoken to, asks what happened with ticket 42, and gets the rate key back. Bob, logged into the same cluster, asks the same question and gets an empty list. A third agent serving another team gets an empty list too, and it has been writing to that same store all week.
+Alice spends Monday morning with a support assistant working out why EU checkout returns 500s after the 3pm deploy, and they land on a missing EUR rate key. On Thursday she opens a different assistant, one she has never spoken to, asks what happened with ticket 42, and gets the rate key back. Bob, logged into the same cluster, asks the same question and gets an empty list.
 
 The first three parts said it would work like this. This part runs it on a cluster and shows what came back. Do the three tiers actually work together inside one conversation? Does a single write end up visible to the right agents and invisible to everyone else? Does the boundary hold when the model is told to cross it? And what does it take to get the same behaviour in an agent of your own?
 
