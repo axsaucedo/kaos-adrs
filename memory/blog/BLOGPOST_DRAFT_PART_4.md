@@ -4,9 +4,9 @@ _This is a 4-part series on how agents remember: building short-, medium- and lo
 
 ---
 
-Alice spends Monday morning with a support assistant working out why EU checkout returns 500s after the 3pm deploy, and they land on a missing EUR rate key. On Thursday she opens a different assistant, one she has never spoken to, asks what happened with ticket 42, and gets the rate key back. Bob, logged into the same cluster, asks the same question and gets an empty list.
+Alice and Bob both use our agent platform. On Monday, Alice works a support incident through it, and the agent remembers what she told it. On Thursday, Bob asks a similar question, and the agent, being helpful, answers with what it learned from Alice. Nothing was hacked, no prompt was crafted, and nothing about that request was malformed. An agent answered a question correctly and it was still a data leak.
 
-The first three parts said it would work like this. This part runs it on a cluster and shows what came back. Do the three tiers actually work together inside one conversation? Does a single write end up visible to the right agents and invisible to everyone else? Does the boundary hold when the model is told to cross it? And what does it take to get the same behaviour in an agent of your own?
+The first three parts were spent making sure that cannot happen. This part runs the design on a cluster and shows what came back. Do the three tiers actually work together inside one conversation? Does a single write end up visible to the right agents and invisible to everyone else? Does the boundary hold when the model is told to cross it? And what does it take to get the same behaviour in an agent of your own?
 
 > A design is a set of promises, and the only way to find out which ones survive is to run it and read the output.
 
@@ -621,11 +621,11 @@ The context window is the real constraint and turns vary wildly in size, which m
 
 # Closing Thoughts: Making Memory Boring
 
-Back to Alice on Thursday, asking an assistant she has never spoken to what happened with ticket 42. Every part of that opening is now something we ran.
+Back to the incident nobody wants to write up: Bob asking a reasonable question and getting a correct answer assembled out of Alice's Monday. Every question that opening raised is now something we ran on a cluster.
 
 **The three tiers worked together inside one conversation.** A single recall on `ticket-42` returned the last verbatim turn as the short-term window, the rolling summary of everything the window had already dropped, and the extracted facts about the EUR rate key, each tier answering the part of the question the others could not. The compaction that produced the summary happened on the store's own write path, off the turn the user was waiting on.
 
-**One write stayed visible to the right agents and invisible to everyone else.** Every record carried the agent, the verified user, and the session at once, so reading Alice's user level gathered facts written by two different assistants, while Bob's identical query and the unrelated agent's own level both came back empty. Erasing Alice was one command that reached across both assistants and all her sessions, and the team's store-wide record survived it because it was never hers.
+**One write stayed visible to the right agents and invisible to everyone else, so Bob's question came back empty.** Every record carried the agent, the verified user, and the session at once, so reading Alice's user level gathered facts written by two different assistants, while Bob's identical query and the unrelated agent's own level both returned nothing. What keeps the opening incident from happening is that Bob's request never carried Alice's identity, and identity is what the partition is keyed on. Erasing Alice was one command that reached across both assistants and all her sessions, and the team's store-wide record survived it because it was never hers.
 
 **The boundary held when the model was told to cross it.** A prompt built to force a session-only agent into an agent-level search could not be obeyed, because that level is absent from the tool schema the model was given. The entitlement lives in the vocabulary rather than in the model's judgement, which is what makes it survive a hostile prompt.
 
