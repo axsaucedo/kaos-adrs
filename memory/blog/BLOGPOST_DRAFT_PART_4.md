@@ -1,4 +1,4 @@
-# Agent Memory in Action: A Worked Example That Runs (Part 4)
+# Whose Memory Is It? Building Multi-Tenant, Multi-Tier Memory for AI Agents (Part 4)
 
 _This is a 4-part series on how agents remember: building short-, medium- and long-term memory that scales across users, agents, and kubernetes clusters._
 
