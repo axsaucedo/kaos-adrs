@@ -4,16 +4,36 @@ _This is a 4-part series on how agents remember: building short-, medium- and lo
 
 ---
 
-Over the first three parts we built the full picture: Part 1 established the taxonomy and the engine selection, Part 2 designed the three tiers and the scope model that answers "whose memory is it?", and Part 3 made it run as infrastructure with the `MemoryStore` kubernetes resource and its degradation contract.
+Alice spends Monday morning with a support assistant working out why EU checkout returns 500s after the 3pm deploy, and they land on a missing EUR rate key. On Thursday she opens a different assistant, one she has never spoken to, asks what happened with ticket 42, and gets the rate key back. Bob, logged into the same cluster, asks the same question and gets an empty list. A third agent serving another team gets an empty list too, and it has been writing to that same store all week.
 
-This final part is the proof. We run the whole system end to end on a secured cluster: one command to set it up, two logged-in users, and three agents with different read entitlements. We watch each tier do its job inside a single conversation, verify the scope boundaries between users and agents with real captured outputs, and probe the model's permission boundary directly with a prompt injection that fails. We then show how to integrate the same pattern in your own agent, from scratch or through the `kaos-memory` package, cover when long-term memory is worth adding at all, and close with the operational lessons and the series conclusion.
+The first three parts said it would work like this. This part runs it on a cluster and shows what came back. Do the three tiers actually work together inside one conversation? Does a single write end up visible to the right agents and invisible to everyone else? Does the boundary hold when the model is told to cross it? And what does it take to get the same behaviour in an agent of your own?
 
-The series:
+> A design is a set of promises, and the only way to find out which ones survive is to run it and read the output.
 
-* **Part 1: What agent memory is and what to build on.**
-* **Part 2: Tiers and scopes for multi-tenant agents.**
-* **Part 3: Memory as infrastructure.**
-* **Part 4 (this post): Agent memory in action.**
+Recently I spent some time extending the [Kubernetes Agent Orchestration System (KAOS)](https://github.com/axsaucedo/agentic-kubernetes-operator) to support multi-tiered memory persistence (aka short-, medium- and long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into a multi-tenant system, so I thought it would be useful to compile the learnings, design choices and examples into this series.
+
+This is Part 4, the final part, and here we put the whole design to work. It follows [Part 1](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/), where we surveyed ~30 memory engines and adopted [Mem0](https://github.com/mem0ai/mem0) as a library behind our own interface, [Part 2](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-qx9uf/), where we designed the three memory tiers and the scope model that derives "whose memory is it?" from verified identity, and Part 3, where the design became a `MemoryStore` Kubernetes resource with a topology and a failure contract.
+
+The objective throughout the series is:
+
+> Let's make the memory layer BORING, so that the agents can continue to be the fun part.
+
+This part consists of three sections:
+
+1. **A worked example that runs**: One command to deploy the cast on an identity-enabled cluster, then three steps that exercise the tiers inside one conversation, the partitions between users and agents, and the permission boundary the model itself cannot cross.
+2. **Integrating it in your own agent**: The framework-agnostic skeleton, what to add before it becomes a production dependency, and the packaged version of the same design.
+3. **When not to add long-term memory**: The cases where the cost is not worth paying, and the failure mode that shows up even when it is.
+
+Finally we wrap up with the last of the lessons that carry beyond KAOS, and with the conclusion of the series.
+
+Here's a refresher on this 4-part series on Multi-Tiered / Multi-Tenant Agent Memory:
+
+* **[Part 1: What agent memory is and what to build on.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/)** The taxonomy, the baseline implementations everyone starts with, and the engine landscape from surveying ~30 tools.
+* **[Part 2: Tiers and scopes for multi-tenant agents.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-qx9uf/)** The three-tier design and the answer to whose memory it is.
+* **Part 3: Memory as infrastructure.** The Kubernetes `MemoryStore` resource, its deployment topology, and the failure contract probed scenario by scenario.
+* **Part 4 (this post): Agent memory in action.** A worked example that runs end to end on a secured cluster with real outputs, plus how to integrate the same pattern in your own agent.
+
+Let's get started.
 
 # Worked Example: An Agent That Remembers
 
@@ -601,6 +621,16 @@ The context window is the real constraint and turns vary wildly in size, which m
 
 # Closing Thoughts: Making Memory Boring
 
+Back to Alice on Thursday, asking an assistant she has never spoken to what happened with ticket 42. Every part of that opening is now something we ran.
+
+**The three tiers worked together inside one conversation.** A single recall on `ticket-42` returned the last verbatim turn as the short-term window, the rolling summary of everything the window had already dropped, and the extracted facts about the EUR rate key, each tier answering the part of the question the others could not. The compaction that produced the summary happened on the store's own write path, off the turn the user was waiting on.
+
+**One write stayed visible to the right agents and invisible to everyone else.** Every record carried the agent, the verified user, and the session at once, so reading Alice's user level gathered facts written by two different assistants, while Bob's identical query and the unrelated agent's own level both came back empty. Erasing Alice was one command that reached across both assistants and all her sessions, and the team's store-wide record survived it because it was never hers.
+
+**The boundary held when the model was told to cross it.** A prompt built to force a session-only agent into an agent-level search could not be obeyed, because that level is absent from the tool schema the model was given. The entitlement lives in the vocabulary rather than in the model's judgement, which is what makes it survive a hostile prompt.
+
+**Getting this into your own agent is a contract rather than a rewrite.** The skeleton is a recall that degrades to empty on failure, a cheap synchronous append, and an expensive fold pushed to the background, and the parts that turn it into a production dependency are server-side scope derivation, the erasure fan-out, and a service boundary so a fleet shares one memory. That is what the `kaos-memory` package packages.
+
 In the observability post I argued the goal is *boring debugging*, and in the autonomy post that the loop is easy while the operating model is the work. Memory completes the trilogy, and the shape of the lesson is the same.
 
 The extraction models and retrieval tricks will keep improving underneath you, and the research is still openly arguing about where memory systems lose information. What makes agent memory production-grade is instead the tiered structure, the durable source of truth, the non-spoofable scopes, the degradation contract, the background write path, and the one-shot erasure.
@@ -609,7 +639,9 @@ If your memory system is boring (a store outage is a degraded condition instead 
 
 **The series:**
 
-* Part 1: What agent memory is and what to build on.
-* Part 2: Tiers and scopes for multi-tenant agents.
-* Part 3: Memory as infrastructure.
-* Part 4 (this post): Agent memory in action.
+* **[Part 1: What agent memory is and what to build on.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/)** The taxonomy, the baseline implementations everyone starts with, and the engine landscape from surveying ~30 tools.
+* **[Part 2: Tiers and scopes for multi-tenant agents.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-qx9uf/)** The three-tier design and the answer to whose memory it is.
+* **Part 3: Memory as infrastructure.** The Kubernetes `MemoryStore` resource, its deployment topology, and the failure contract probed scenario by scenario.
+* **Part 4 (this post): Agent memory in action.** A worked example that runs end to end on a secured cluster with real outputs, plus how to integrate the same pattern in your own agent.
+
+<!-- TODO(link): add the Part 3 URL in both series lists once it is published. -->
