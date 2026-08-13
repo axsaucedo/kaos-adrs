@@ -35,17 +35,77 @@ Here's a refresher on this 4-part series on Multi-Tiered / Multi-Tenant Agent Me
 
 Let's get started.
 
-# Where We Got To
+# The Series So Far
 
-Three parts of design come down to a handful of moving pieces, and the example below exercises all of them, so here they are in one place before any of it starts running.
+It's been a fun ride across the universe of agent memory, so here is where all of it landed before any of it starts running.
 
-**The memory an agent carries is three tiers, not one.** The short-term tier is the verbatim window of recent turns, held to a token budget rather than a turn count, since turns vary wildly in size. The medium-term tier is a rolling summary of the turns the window has already dropped, so overflow gets compacted instead of lost. The long-term tier is the facts extracted from those conversations and stored as vectors, searched by meaning rather than by recency. A single recall assembles whichever of the three the caller asked for.
+In Part 1 we covered what agent memory actually is: the taxonomy of memory types from the CoALA paper, the baseline implementations everyone builds first, and a survey of ~30 memory engines that ended with us adopting Mem0 as a library behind our own interface rather than as our architecture. The taxonomy is the vocabulary the rest of the series is built on:
 
-**Every write carries identity, and every read picks a level.** A write attaches all the identities the request was verified with at once: the agent that produced it, the user it belongs to, and the session it happened in. A read picks one level from a nested set, where `session` is what was said in this conversation, `agent` is what this agent knows across its sessions, and `user` is everything that user has produced through any agent. Each level is bound to the identity verified at the gateway, so it filters on who is asking rather than on what the caller claims. A fourth level, `store`, sees everything and belongs to the admin plane alone.
+| Memory type          | What it holds                                  | Example                                                     |
+| -------------------- | ---------------------------------------------- | ----------------------------------------------------------- |
+| Short-term (working) | Verbatim recent turns of the live conversation | "The user just said port 8080"                              |
+| Episodic             | Records of specific past events                | "On Tuesday the deploy failed twice"                        |
+| Semantic             | Distilled, durable facts                       | "The user prefers blue-green deploys"                       |
+| Procedural           | Learned skills and how-tos                     | "Here is how we roll back this service"                     |
+| Temporal             | Facts with validity intervals                  | "Joe *was* in a relationship until March, but not anymore." |
 
-**All of it lives behind one Kubernetes resource.** A `MemoryStore` is a service the agents share rather than a library each of them embeds, backed by Postgres with pgvector, with the extraction and compaction work kept off the turn the user is waiting on. When the store is unreachable the agents keep answering with an empty memory block and a `degraded` flag on the response, so an outage of memory stays a degraded conversation.
+Then in Part 2 we designed the tiers and answered "whose memory is it?". The short-term tier is the verbatim window of recent conversations held to a token budget, the medium-term tier is a rolling summary of what the window has dropped, and the long-term tier is facts extracted into vectors and searched by meaning. Every write attaches all the identities the request was verified with (the agent, the user, and the session), and every read picks one level from a nested set, each bound to the identity verified at the gateway rather than to anything the caller claims. The outermost level, `store`, sees everything and belongs to the admin plane alone:
 
-That is the design. What follows is the same design running on a cluster, with two logged-in users and three agents that differ only in how much they are allowed to see.
+```mermaid
+graph LR
+  subgraph store["store: memory for whole store"]
+    subgraph user["user: memory for user across all agents"]
+      subgraph agent["agent: memory for agent x user"]
+        subgraph session["session: memory for user x agent x session"]
+	       memory
+        end
+      end
+    end
+  end
+```
+
+In Part 3 the design became infrastructure. We codified the memory layer as a `MemoryStore` Kubernetes resource that agents share as a service rather than embed as a library, backed by Postgres with pgvector, with summarization and fact extraction kept off the turn the user is waiting on. We then set up the cluster it runs on, and this control plane is what makes the scope model enforceable: a request enters through the gateway mesh, the user token is verified against the identity service, and the agent runtime derives the read scope and the write attribution from that verified identity before it ever calls the store.
+
+```mermaid
+flowchart TB
+  U["Users"]
+  GW["Gateway Mesh"]
+  ID["User / Agent Identity<br>(Keycloak)"]
+  Authz["KAOS Authz Service"]
+  MS["MemoryStore<br>(Memory Management)"]
+  DB[("Postgres + pgvector")]
+  KAOS["KAOS Resources<br>(Agents, MCPs, Models)"]
+
+  subgraph req["Request path"]
+    U --> GW
+    GW --> KAOS
+  end
+
+  subgraph auth["Auth & Identity"]
+    ID <--> Authz
+  end
+
+  subgraph mem["Memory Components"]
+    MS --> DB
+  end
+
+  req <--> auth
+  req <--> mem
+```
+
+Part 3 closed by walking that setup through an example outage of five incidents in increasing impact, from a single evicted replica to the store fully unreachable, and the design held: agents keep answering with an empty memory block and a `degraded` flag on the response, so an outage of memory stays a degraded conversation.
+
+Finally, in this part, we run it. Everything below assumes that cluster exists, and if you are following along, the same one command from Part 3 sets it up:
+
+```bash
+$ kaos system install \
+  --authz-enabled \
+  --user-auth keycloak \
+  --agent-auth keycloak \
+  --wait
+```
+
+The worked example then deploys the whole cast on that cluster and exercises every one of those pieces: the three tiers inside one conversation, the identity-keyed partitions between users and agents, and the ceiling the model itself cannot talk its way past.
 
 # Worked Example: An Agent That Remembers
 
