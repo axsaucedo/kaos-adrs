@@ -12,7 +12,7 @@ The first three parts were spent making sure that cannot happen. This part runs 
 
 Recently I spent some time extending the [Kubernetes Agent Orchestration System (KAOS)](https://github.com/axsaucedo/agentic-kubernetes-operator) to support multi-tiered memory persistence (aka short-, medium- and long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into a multi-tenant system, so I thought it would be useful to compile the learnings, design choices and examples into this series.
 
-This is Part 4, the final part, and here we put the whole design to work. It follows [Part 1](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/), where we surveyed ~30 memory engines and adopted [Mem0](https://github.com/mem0ai/mem0) as a library behind our own interface, [Part 2](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-qx9uf/), where we designed the three memory tiers and the scope model that derives "whose memory is it?" from verified identity, and Part 3, where the design became a `MemoryStore` Kubernetes resource with a topology and a failure contract.
+This is Part 4, the final part, and here we put the whole design to work. It follows [Part 1](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/), where we surveyed ~30 memory engines and adopted [Mem0](https://github.com/mem0ai/mem0) as a library behind our own interface, [Part 2](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-qx9uf/), where we designed the three memory tiers and the scope model that derives "whose memory is it?" from verified identity, and [Part 3](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-pcsof/), where the design became a `MemoryStore` Kubernetes resource with a topology and a failure contract.
 
 The objective throughout the series is:
 
@@ -39,17 +39,15 @@ Let's get started.
 
 It's been a fun ride across the universe of agent memory, so here is where all of it landed before any of it starts running.
 
-In Part 1 we covered what agent memory actually is: the taxonomy of memory types from the CoALA paper, the baseline implementations everyone builds first, and a survey of ~30 memory engines that ended with us adopting Mem0 as a library behind our own interface rather than as our architecture. The taxonomy is the vocabulary the rest of the series is built on:
+In Part 1 we covered what agent memory actually is. We defined a taxonomy of the memory types in our implementation, identified the baseline scope that every memory library has to build first, and a survey of ~30 memory engines that ended with us adopting Mem0 as a library behind our own interface rather than as our architecture. As a refresher, here is the taxonomy that we adopted for our memory:
 
-| Memory type          | What it holds                                  | Example                                                     |
-| -------------------- | ---------------------------------------------- | ----------------------------------------------------------- |
-| Short-term (working) | Verbatim recent turns of the live conversation | "The user just said port 8080"                              |
-| Episodic             | Records of specific past events                | "On Tuesday the deploy failed twice"                        |
-| Semantic             | Distilled, durable facts                       | "The user prefers blue-green deploys"                       |
-| Procedural           | Learned skills and how-tos                     | "Here is how we roll back this service"                     |
-| Temporal             | Facts with validity intervals                  | "Joe *was* in a relationship until March, but not anymore." |
+| Tier        | What it holds                                                                     | When it updates                                      | Backing                      |
+| ----------- | --------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------- |
+| Short-term  | The context window of the live session, bounded by a token budget                 | Every turn (cheap append)                            | Relational rows              |
+| Medium-term | Rolling summary per session, versioned so past summaries stay accessible          | On compaction, when the window hits its token budget | Relational rows, append-only |
+| Long-term   | Atomic facts extracted from context window, keyed by scope, recalled semantically | In the background, after compaction                  | Mem0 into the vector store   |
 
-Then in Part 2 we designed the tiers and answered "whose memory is it?". The short-term tier is the verbatim window of recent conversations held to a token budget, the medium-term tier is a rolling summary of what the window has dropped, and the long-term tier is facts extracted into vectors and searched by meaning. Every write attaches all the identities the request was verified with (the agent, the user, and the session), and every read picks one level from a nested set, each bound to the identity verified at the gateway rather than to anything the caller claims. The outermost level, `store`, sees everything and belongs to the admin plane alone:
+Then in Part 2 we designed the scope model and answered "whose memory is it?". Every write attaches all the identities the request was verified with (the agent, the user, and the session), and every read picks one level from a nested set. Each of these levels is bound to the identity verified at the gateway rather than to anything the caller claims. The outermost level, `store`, sees everything and belongs to the admin plane alone:
 
 ```mermaid
 graph LR
@@ -95,7 +93,7 @@ flowchart TB
 
 Part 3 closed by walking that setup through an example outage of five incidents in increasing impact, from a single evicted replica to the store fully unreachable, and the design held: agents keep answering with an empty memory block and a `degraded` flag on the response, so an outage of memory stays a degraded conversation.
 
-Finally, in this part, we run it. Everything below assumes that cluster exists, and if you are following along, the same one command from Part 3 sets it up:
+Finally, in this part 4, we run it. Everything below assumes that cluster exists, and if you are following along, the same one command from Part 3 sets it up:
 
 ```bash
 $ kaos system install \
@@ -713,7 +711,5 @@ If your memory system is boring (a store outage is a degraded condition instead 
 
 * **[Part 1: What agent memory is and what to build on.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-kvcsf/)** The taxonomy, the baseline implementations everyone starts with, and the engine landscape from surveying ~30 tools.
 * **[Part 2: Tiers and scopes for multi-tenant agents.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-qx9uf/)** The three-tier design and the answer to whose memory it is.
-* **Part 3: Memory as infrastructure.** The Kubernetes `MemoryStore` resource, its deployment topology, and the failure contract probed scenario by scenario.
+* **[Part 3: Memory as infrastructure.](https://www.linkedin.com/pulse/whose-memory-building-multi-tenant-multi-tier-ai-agents-saucedo-pcsof/)** The Kubernetes `MemoryStore` resource, its deployment topology, and the failure contract probed scenario by scenario.
 * **Part 4 (this post): Agent memory in action.** A worked example that runs end to end on a secured cluster with real outputs, plus how to integrate the same pattern in your own agent.
-
-<!-- TODO(link): add the Part 3 URL in both series lists once it is published. -->
