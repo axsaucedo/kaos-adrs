@@ -105,8 +105,6 @@ The worked example then deploys the whole cast on that cluster and exercises eve
 
 # Worked Example: An Agent That Remembers
 
-<!-- TODO(recapture): all command outputs below predate PR #298; commands/shapes updated to current main, outputs to be re-captured on the te-eval cluster before publish. -->
-
 Let's now put all the theory we introduced into practice with one hands on example, and watch each memory mechanism work together.
 
 We will deploy three agents to test different properties of memory:
@@ -139,12 +137,13 @@ For this we will test different rules as follows:
 graph LR
   alice(("Alice")) -->|"writes via user-assistant"| UA[("user: alice")]
   bob(("Bob")) -->|"writes via user-assistant"| UB[("user: bob")]
-  admin["admin-plane publisher"] --> S[("store view")]
+  UA --> S[("store view")]
+  UB --> S
 
   UA -->|"✅ recall scope user: alice"| ok1["Alice's facts"]
   UA -->|"❌ recall scope user: bob"| deny1["blocked"]
-  S  -->|"✅ admin recall scope: store"| ok2["store-wide facts"]
-  UA -->|"❌ agent-bot recall"| deny2["blocked"]
+  S  -->|"✅ admin recall scope: store"| ok2["every owner's facts"]
+  S  -->|"❌ store via an agent actor"| deny2["403 admin-only"]
 
   classDef allow fill:#e6ffed,stroke:#2da44e;
   classDef deny fill:#ffebe9,stroke:#cf222e;
@@ -218,6 +217,25 @@ $ kaos agent deploy agent-bot -n support-demo \
 ```
 
 The store-wide `maxReadScope: user` is the ceiling for every bound agent. An agent that omits its own ceiling inherits that store value, whose CRD default is `agent`, so the session-only agent is explicit here. Every agent write carries the verified user, agent, and session attribution. The configured store remains the tenant boundary.
+
+One thing the memory configuration deliberately does not decide is who may talk to the agent in the first place. That is a separate `AccessGrant`, and with two tenants in the example both groups need one. Alice's group already reaches all three agents; Bob's group needs its own grant, without which the gateway refuses him before any memory code runs:
+
+```yaml
+apiVersion: kaos.tools/v1alpha1
+kind: AccessGrant
+metadata:
+  name: support-to-user-assistant
+  namespace: support-demo
+spec:
+  resources:
+    - kind: Agent
+      name: user-assistant
+  subjects:
+    - kind: Group
+      name: support
+```
+
+Reaching an agent and reading a memory partition are two different permissions, and this is the first of them.
 
 **Let's Fetch the Users' Identities**
 
@@ -400,24 +418,27 @@ on the payments call for EUR currency.
 ✓ allowed — request permitted
 ```
 
+Two caveats are worth stating plainly here, because both are consequences of choices made earlier in the series. Extraction runs in the background after compaction, so a question asked seconds after a conversation can arrive before the facts that answer it exist; that latency is the price of keeping extraction off the turn the user waits on. And automatic recall is best effort: the store returns the facts and the runtime injects them as leading context, but whether the model uses that context is the model's business. The `search_memory` path in Step 3 is the deterministic one.
+
 ## Step 2: Scopes and the Data Partitions
 
 Every record above was written with full attribution: the agent, the verified user, and the session. The agent-plane read hierarchy is `session < agent < user`, and each level is bound to identity verified at the gateway. One write is readable at different levels and isolated at others.
 
 Now that we've seen the basic building blocks of our memory, we can move to showing how scopes enable or restrict memory through access control at multiple layers.
 
-Alice's tickets remain available through her `user` level across agents, while Bob and an unrelated agent stay isolated. A separate team fact, published through the admin plane, belongs to the store-wide administrative view and survives Alice's erasure.
+Alice's tickets remain available through her `user` level across agents, while Bob and an unrelated agent stay isolated. Bob's own ticket, written through the very same assistant, survives her erasure untouched and stays visible to the store-wide administrative view.
 
 ```mermaid
 graph LR
   T42["ticket-42 turns<br/>via session-assistant"] --> UA[("user: alice")]
   T99["ticket-99 turns<br/>via user-assistant"] --> UA
-  TP["team runbook fact<br/>via admin-plane publisher"] --> S[("store view")]
+  T88["ticket-88 turns<br/>via user-assistant"] --> UB[("user: bob")]
 
   UA -->|"recall --user alice"| R1["facts from both agents"]
-  UB[("user: bob")] -->|"recall --user bob"| R2["empty"]
+  UB -->|"recall --user bob"| R2["Bob's own fact only"]
   UA -.->|"forget --user alice"| X["erased"]
-  S -->|"admin recall --scope store"| R3["team fact survives"]
+  UB --> S[("store view")]
+  S -->|"admin recall --scope store"| R3["Bob's fact survives"]
 ```
 
 **Per user, across agents.** Alice raises a second ticket with the `user-assistant`, then reads her `user` scope:
@@ -461,7 +482,16 @@ Resolved user 'alice' to principal '286eec2a-2854-4999-be83-0e1658c31a4c' from t
 
 One `user` scope contains the context from both agents, because every record carries the same verified `user_id` regardless of which agent wrote it.
 
-**Isolation between users and between agents** is enforced, so a different user's query and the unrelated agent's own scope both come back empty:
+**Isolation between tenants** is what the scope model exists for, so let's give Bob a memory of his own rather than an empty partition to compare against. He raises his own ticket through the same assistant Alice just used:
+
+```bash
+$ kaos agent invoke user-assistant -n support-demo \
+  --user bob \
+  --session ticket-88 \
+  -m "Ticket 88: Bob's VPN drops when switching to the staging tenant"
+```
+
+His `user` partition now holds his own fact, written by the very same agent that wrote Alice's:
 
 ```bash
 $ kaos memory recall -n support-demo \
@@ -469,9 +499,37 @@ $ kaos memory recall -n support-demo \
   --user bob \
   --include long-term \
   --json
-# Resolved user 'bob' to principal '8496e38f-6374-4417-a67c-95144b280003' from the cached login.
-# {"long_term": {"facts": [], "block": ""}, "degraded": false}
+```
+```
+Resolved user 'bob' to principal 'f0fe2ba3-a155-4cbc-85c5-8d7f66c2fbfd' from the cached login.
+```
+```json
+{"long_term": {"facts": [
+  {"memory": "User reported that Bob's VPN connection drops when switching to the staging tenant, as noted in Ticket 88 on August 14, 2026", "agent_id": "kaos://agent/support-demo/user-assistant"}
+], "block": "<elided>"}, "degraded": false}
+```
 
+Now the question that matters. We ask Bob exactly what we asked Alice a moment ago, through the same agent, with the same `maxReadScope: user` ceiling, against the same store. The only thing that differs is the identity the gateway verified:
+
+```bash
+$ kaos agent invoke user-assistant -n support-demo \
+  --user bob \
+  --session ticket-88 \
+  -m "What do we know about ticket 42?"
+```
+```
+There is no specific information available about Ticket 42 in the current records. The
+only ticket mentioned so far is Ticket 88, which concerns Bob's VPN connection dropping
+when switching to the staging tenant. If you have any details or context about Ticket 42,
+please share them, and I can help further.
+✓ allowed — request permitted
+```
+
+That same question returned Alice's full incident history. Bob gets his own ticket and none of hers. Nobody wrote a filter for this and no rule names Alice or Bob anywhere: automatic recall runs at the `user` level against whichever principal the gateway verified, so the partition follows the user for free.
+
+The unrelated agent stays isolated on the other axis, its own `agent` scope holding nothing:
+
+```bash
 $ kaos memory recall -n support-demo \
   --scope agent \
   --agent agent-bot \
@@ -496,7 +554,9 @@ Will erase all matching long-term records and conversational memory.
 {"forgotten": true, "degraded": false}
 ```
 
-If we run `recall --scope user --user alice` again, Alice's long-term facts are gone. However, a separate contribution written earlier by a team publisher through an actor-context-free, RBAC-gated admin path is untouched. The admin CLI can see it through the `store` level:
+Running `recall --scope user --user alice` again returns nothing: her facts are gone from both assistants and all of her sessions. Bob's are untouched, down to the same record id and hash they had before her erasure, because that record never carried her principal in the first place. Erasure is bounded by the same key that bounds reads.
+
+The admin plane can see what remains, across every owner in the store:
 
 ```bash
 $ kaos memory recall -n support-demo \
@@ -506,12 +566,29 @@ $ kaos memory recall -n support-demo \
 ```
 ```json
 {"long_term": {"facts": [
-  {"memory": "The support team owns checkout incident triage and when an EU checkout incident is isolated to the payments call and EUR currency, they record customer impact, deployment time, payment-service symptoms, rollback result, and the responsible configuration key before escalating to the Payments team",
-   "user_id": "support-team-publisher"}
+  {"memory": "User reported that Bob's VPN connection drops when switching to the staging tenant, as noted in Ticket 88 on August 14, 2026",
+   "user_id": "f0fe2ba3-a155-4cbc-85c5-8d7f66c2fbfd", "agent_id": "kaos://agent/support-demo/user-assistant"}
 ], "block": "<elided>"}, "degraded": false}
 ```
 
-The same level is closed to the agent plane. Any memory-service recall or list request for `store` that carries an agent actor context receives HTTP 403, and `search_memory` never exposes `store` in an agent's schema. This keeps whole-store access behind the RBAC-gated admin path.
+Note what the `store` level is and is not. It is a read lens with no owner filter, and nothing more; there is no way to write to it. Every fact in the store arrived through an agent acting for a verified user, which is why the surviving record above is Bob's rather than some ownerless entry. Attempting a write without an agent identity is refused outright, so the admin plane can read everything and erase anything, and author nothing.
+
+That lens is also closed to the agent plane. The identical request, differing only by an agent actor context, is refused:
+
+```bash
+$ curl -sS -i -X POST localhost:18080/v1/list \
+  -H 'content-type: application/json' \
+  -H 'X-Actor: kaos://agent/support-demo/user-assistant' \
+  -d '{"scope":{"level":"store"},"include":["long_term"]}'
+```
+```
+HTTP/1.1 403 Forbidden
+content-type: application/json
+
+{"error":"store scope is admin-only"}
+```
+
+Without that header the same request returns 200 and Bob's record. And `search_memory` never exposes `store` in an agent's schema at all, so the level is unreachable from the model side twice over: absent from the vocabulary, and refused at the service.
 
 ## Step 3: The Model's Permission Boundary
 
@@ -538,7 +615,7 @@ $ kaos agent tools session-assistant -n support-demo
 
 `session-assistant` carries only the `session` value, so the model literally cannot express an agent- or user-level search there. Neither agent schema contains the admin-only `store` level. The tool's schema defines the entitlement.
 
-**The model chooses within its boundary.** In this capture, taken before the erasure in Step 2, `user-assistant` searches `user` for Alice's past tickets and answers from facts attributed to her principal:
+**The model chooses within its boundary.** Here `user-assistant` searches `user` for Alice's past tickets and answers from facts attributed to her principal:
 
 ```bash
 $ kaos agent invoke user-assistant -n support-demo \
@@ -548,13 +625,12 @@ $ kaos agent invoke user-assistant -n support-demo \
   -m "Use search_memory exactly once with level user and query what is known about Alice's past tickets. Then answer only from the tool result."
 ```
 ```
-Ticket 42 involves an issue where the checkout process returns a 500 error for EU
-customers. The problem started after a deployment at 3pm on July 19, 2026. The 500
-errors occur only on the payments call and only for transactions in EUR currency.
-Investigation showed that rolling back the payments service resolved the errors. The
-root cause was identified as a missing EUR rate key in the payment processing logic
-after the 3pm deployment on July 19, 2026. If you need more detailed information or
-assistance regarding this ticket, please let me know!
+Alice's past tickets include one about an SSO login looping issue on the staging tenant
+(Ticket 99). She also reported that since the 3pm deploy on August 14, 2026, the checkout
+process returns a 500 error for EU customers. These 500 errors occur only on the payments
+call and only for EUR currency transactions. The root cause was identified as a missing
+EUR rate key in the payment processing logic, which was resolved by rolling back the
+payments service on the same day.
 ✓ allowed — request permitted
 ```
 
