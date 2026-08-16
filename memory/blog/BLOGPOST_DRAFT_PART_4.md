@@ -37,7 +37,7 @@ Let's get started.
 
 It's been a fun ride across the universe of agent memory, so here is a brief recap of where we landed on the design - as a refresher before we run it.
 
-In Part 1 we covered what agent memory actually is. We defined a taxonomy of the memory types in our implementation, identified the baseline scope that every memory library has to build first, and a survey of ~30 memory engines that ended with us adopting Mem0 as a library behind our own interface rather than as our architecture. 
+In Part 1 we covered what agent memory actually is. We defined a taxonomy of the memory types in our implementation, identified the baseline scope that every memory library has to build first, and a survey of ~30 memory engines that ended with us adopting Mem0 as a library behind our own interface rather than as our architecture.
 
 As a refresher, here is the taxonomy that we adopted for our memory:
 
@@ -47,7 +47,7 @@ As a refresher, here is the taxonomy that we adopted for our memory:
 | Medium-term | Rolling summary per session, versioned so past summaries stay accessible          | On compaction, when the window hits its token budget | Relational rows, append-only |
 | Long-term   | Atomic facts extracted from context window, keyed by scope, recalled semantically | In the background, after compaction                  | Mem0 into the vector store   |
 
-Then in Part 2 we designed the scope model and answered "whose memory is it?". Every write attaches all the identities the request was verified with (the agent, the user, and the session), and every read picks one level from a nested set. Each of these levels is bound to the identity verified at the gateway rather than to anything the caller claims. 
+Then in Part 2 we designed the scope model and answered "whose memory is it?". Every write attaches all the identities the request was verified with (the agent, the user, and the session), and every read picks one level from a nested set. Each of these levels is bound to the identity verified at the gateway rather than to anything the caller claims.
 The outermost level, `store` sees everything and belongs to the admin plane alone:
 
 ```mermaid
@@ -433,9 +433,9 @@ on the payments call for EUR currency.
 ✓ allowed — request permitted
 ```
 
-Two caveats are worth stating plainly here, because both are consequences of choices made earlier in the series. 
+Two caveats are worth stating plainly here, because both are consequences of choices made earlier in the series.
 
-* Long-term memory extraction runs in the background after compaction, so a question asked seconds after a conversation can arrive before the facts that answer it exist; that latency is the price of keeping extraction off the message the user waits on. 
+* Long-term memory extraction runs in the background after compaction, so a question asked seconds after a conversation can arrive before the facts that answer it exist; that latency is the price of keeping extraction off the message the user waits on.
 * Automatic recall is best effort: the store returns the facts and the runtime injects them as leading context, but whether the model uses that context is the model's business.
 
 Every message and memory records are written to the database with metadata about their respective agent, user, and session. The agent-plane read however is restricted in a hierarchical scope of `session < agent < user`, and each level is bound to anidentity verified at the gateway.
@@ -572,7 +572,7 @@ Will erase all matching long-term records and conversational memory.
 {"forgotten": true, "degraded": false}
 ```
 
-Running `recall --scope user --user alice` again returns nothing. All her long-term memory facts are gone from both assistants and all of her sessions. 
+Running `recall --scope user --user alice` again returns nothing. All her long-term memory facts are gone from both assistants and all of her sessions.
 
 Bob's are untouched, down to the same record id and hash they had before her erasure, because that record never carried her principal in the first place. Erasure is bounded by the same key that bounds reads.
 
@@ -591,7 +591,7 @@ $ kaos memory recall -n support-demo \
 ], "block": "<elided>"}, "degraded": false}
 ```
 
-Note what the `store` level is and is not. It is a read lens with no owner filter, and nothing more. 
+Note what the `store` level is and is not. It is a read lens with no owner filter, and nothing more.
 
 Every fact in the store arrived through an agent acting for a verified user, which is why the surviving record above is Bob's rather than some ownerless entry. Attempting a write without an agent identity is refused, so the admin plane can read everything and erase anything.
 
@@ -616,7 +616,9 @@ Without that header the same request returns 200 and Bob's record. And `search_m
 
 We can now dive into the last part, exploring what an agent can recall on its own by using internal tools, as opposed to the RAG approach that we've seen before.
 
-The boundary lives in the tool schema itself: each agent's `search_memory` tool only offers the levels that agent is entitled to, so an unentitled search cannot even be expressed:
+As part of this implementation we also provide configuration that can enable each agent to recall using the `search_memory` tool.
+
+However the access is still restricted to the memory scopes that agent is entitled to, so an unentitled search cannot even be expressed:
 
 ```mermaid
 graph LR
@@ -624,7 +626,11 @@ graph LR
   SAg["session-assistant model<br/>level enum: session"] -. "level agent is not in the schema,<br/>the call cannot be expressed" .-> S
 ```
 
-The automatic baseline recalls and persists on every message with no model involvement. Its recall level comes from `MEMORY_MAX_READ_SCOPE`. On top of that, `tools: read` gives the model a `search_memory` tool whose `level` enum contains every level from `session` up to the same ceiling. The two agents differ exactly there:
+The control plane sets each agent's automatic recall level from its `maxReadScope` ceiling, passed to the runtime as `MEMORY_MAX_READ_SCOPE`.
+
+On top of that, `tools: read` gives the model a `search_memory` tool whose `level` enum contains every level from `session` up to the same ceiling.
+
+The two agents we deployed differ exactly there:
 
 ```bash
 $ kaos agent tools user-assistant -n support-demo
@@ -637,7 +643,9 @@ $ kaos agent tools session-assistant -n support-demo
 
 `session-assistant` carries only the `session` value, so the model literally cannot express an agent- or user-level search there. Neither agent schema contains the admin-only `store` level. The tool's schema defines the entitlement.
 
-**The model chooses within its boundary.** Here `user-assistant` searches `user` for Alice's past tickets and answers from facts attributed to her principal:
+**The model is only allowed to recall within its boundary.**
+
+Here `user-assistant` searches `user` for Alice's past tickets and answers from facts attributed to her user scope and nothing more, by using the memory tool it was given:
 
 ```bash
 $ kaos agent invoke user-assistant -n support-demo \
@@ -658,7 +666,9 @@ payments service on the same day.
 
 The CLI prints the grounded reply and the authorization decision; the tool call itself is visible in the telemetry spans from the observability post, not in the chat output, so the selected level is legible from the entitlement and the grounded answer.
 
-**The boundary holds under steering.** A prompt built to force `session-assistant` at the `agent` level it is not entitled to gets nowhere:
+**The boundary holds under steering.**
+
+Attackers may try to do prompt injection to force `session-assistant` at the `agent` level - however this is blocked:
 
 ```bash
 $ kaos agent invoke session-assistant -n support-demo \
@@ -677,11 +687,15 @@ Validation result: The call is invalid because the level "agent" is not permitte
 ✓ allowed — request permitted
 ```
 
-The `agent` level is not in this agent's schema, so the model has no way to express the call the prompt demanded. It stayed inside its vocabulary, reported that the requested level is unsupported, and no agent-level search ran. Because the level is fixed by the tool rather than supplied as a free argument, an injection cannot widen it.
+The `agent` level is not in this agent's schema, so the model has no way to express the call the prompt demanded.
+
+It stayed inside its limits and reported that the requested level is unsupported.
+
+That should give us a good idea on the end to end flows. Now we can look at the final lowest level.
 
 # Integrate It in Your Own Agent
 
-Let's take a look at the framework-agnostic skeleton for memory that we introduced back in Part 1. We can then see how to convert it into a production level integration for any agent, enabling the tiered memory that we saw:
+Let's take a look at the framework-agnostic skeleton for memory that we introduced back in Part 1 - this is the 101 of memory implemented:
 
 ```python
 async def run_with_memory(session_id, user_message, memory, agent):
@@ -708,18 +722,27 @@ async def run_with_memory(session_id, user_message, memory, agent):
     return response
 ```
 
-The skeleton shows the load-bearing choices: recall wrapped so failure degrades instead of raising, the digest and facts injected as one structured block instead of fake conversation messages, the cheap verbatim append on the hot path, and the expensive fold-and-extract pushed to the background the moment the token budget trips.
+What we didn't cover here is what you must add before this becomes a production dependency, which includes server-side scope enforcement, the erasure fan-out across tiers, the soft/strict write contract, OpenTelemetry on every operation, and a service boundary so a fleet shares one memory instead of one process hoarding it.
 
-What it deliberately does not show, and what you must add before this becomes a production dependency: server-side scope enforcement, the erasure fan-out across tiers, the soft/strict write contract, OpenTelemetry on every operation, and a service boundary so a fleet shares one memory instead of one process hoarding it.
+This is what we ended up enabling with the `kaos-memory` package from Part 3's design section.
 
-Alternatively, you can adopt the packaged version of exactly this design: the `kaos-memory` package from Part 3's design section. It is pip-installable and deliberately layered behind extras. The core carries the wire contract and the `MemoryServiceClient`, `[service]` adds Mem0, the vector store, and the FastAPI service, and `[pydantic-ai]` adds the runtime adapters, server-side scope derivation, and the memory toolset:
+It is a pip install library that you can use in your agent projects as well.
+
+The core is the `MemoryServiceClient`, the client an agent calls for recall, write and forget; the retrieval and consolidation happen behind it in the service. The `[service]` extra is the deployed side, adding Mem0, the vector store, and the FastAPI service.
+
+There is also a `[pydantic-ai]` extra that adds the runtime adapters, server-side scope derivation, and the memory toolset for pydantic AI:
 
 ```bash
 pip install kaos-memory                  # wire contract + MemoryServiceClient
+pip install "kaos-memory[service]"       # + Mem0, the vector store and the FastAPI service
 pip install "kaos-memory[pydantic-ai]"   # + runtime adapters and the memory toolset
 ```
 
-The part of the package I would call genuinely novel relative to the ecosystem is that **medium-term memory is a first-class tier**. The two-tier (working plus long-term) split is the industry norm, and the rolling, versioned session summary that keeps continuity across compaction is a concept the surveyed engines do not ship. The package owns the short- and medium-term tiers relationally, wraps Mem0 for the long-term tier, and exposes all three behind the single recall, write, and forget contract used throughout this post.
+The part of the package I would call genuinely novel relative to the ecosystem is that **medium-term memory is a first-class tier**.
+
+The two-tier (short- plus long-term) split is the industry norm, and the rolling, versioned session summary that keeps continuity across compaction is a concept that is not standardised in existing literature.
+
+This is why the package owns the short- and medium-term tiers relationally, and integrates them all together with Mem0 for the long-term tier, with the single recall, write, and forget contract used throughout this post.
 
 The core install gives you the `MemoryServiceClient` against a running MemoryStore service:
 
@@ -742,7 +765,9 @@ response = await agent.run(recalled, user_message)
 await client.write(attribution, turns=[("user", user_message), ("assistant", response)])
 ```
 
-The scope level is one of the concentric radii from Part 2 (`session`, `agent`, `user`), and the response nests one object per requested tier (`short_term.window`, `medium_term.summary`, `long_term.facts`) so a caller only receives, and only pays for, the tiers it asked for. The fourth level, `store`, exists in the vocabulary but the service refuses it on any request arriving through an agent, since whole-store reads belong to the admin plane. Recall degrades to empty context on failure instead of raising, writes honour the soft or strict failure mode, and every call emits the `kaos.memory.*` telemetry spans covered in the observability post.
+The scope level is what we tested in this post across `session < agent < user`, and the response nests one object per requested tier (`short_term.window`, `medium_term.summary`, `long_term.facts`) so a caller only receives the tiers it asked for.
+
+Recall degrades to empty context on failure instead of raising, writes honour the soft or strict failure mode, and every call emits the `kaos.memory.*` telemetry spans covered in the observability post.
 
 If your agent runs on Pydantic AI, the `[pydantic-ai]` extra adds the helpers that wire the pieces from this post together: server-side scope derivation, the explicit memory tools, and full-fidelity history replay.
 
@@ -772,60 +797,37 @@ history = reconstruct_message_history(recalled.short_term.window, recalled.mediu
 result = await agent.run(user_message, message_history=history, toolsets=[toolset])
 ```
 
-On KAOS the operator wires all of this automatically: the effective `maxReadScope` ceiling is passed as `MEMORY_MAX_READ_SCOPE`, expanded into the ordered list of levels the toolset receives, and used directly as the level for automatic per-message recall. The request cannot widen it.
+On KAOS the operator wires all of this automatically, with the effective `maxReadScope` ceiling passed as `MEMORY_MAX_READ_SCOPE`, expanded into the ordered list of levels the toolset receives, and used directly as the level for automatic per-message recall. The request cannot widen it.
 
 # When NOT to Add Long-Term Memory
 
-Like autonomy, memory has become a checkbox feature, and the temptation is to switch it on for everything. It has a measurable break-even, as [a 2026 cost-performance analysis](https://arxiv.org/abs/2603.04814) finds long-context actually wins on raw recall for short interactions, with fact-based memory becoming cost-favorable only after roughly ten messages at 100K-token scale. Long-term memory earns its cost when:
+Throughout these 4 posts we talked about memory designs, implementations and examples - however equally important is to know when NOT to use advanced long-term memory.
 
-- users or goals persist across sessions and personalization compounds,
-- a fleet of agents benefits from shared operational knowledge,
-- agents run [always-on autonomous loops](https://hackernoon.com/autonomous-agentic-systems-a-practical-guide-to-always-on-agents), the biggest memory producers and consumers, since nobody is there to repeat the context to them,
-- the same facts keep being re-established at the start of every session.
+Long term memory especially has a measurable break-even point as [a 2026 cost-performance analysis](https://arxiv.org/abs/2603.04814) finds long-context actually wins on raw recall for short interactions (obviously), and although long-term memory becomes favorable across longer term contexts, this tradeoff is important to understand the cost.
 
-It is a poor fit when:
+Long-term memory is a poor fit when:
 
-- interactions are genuinely single-shot, where session history already covers it,
-- you cannot yet answer the erasure question, since memory without deletion is a liability,
-- tenancy boundaries are unclear, where every memory becomes a potential leak vector,
-- you cannot afford the extraction cost of additional LLM calls for every remembered conversation,
-- an outage of the memory path would be treated as an outage of the agent, in which case memory has become a hard dependency and the design should be revisited before scaling.
+- Interactions are genuinely single-shot, where session history already covers it.
+- You cannot yet answer the erasure question, since memory without deletion is a liability.
+- Tenancy boundaries are unclear, where every memory becomes a potential leak vector.
+- You cannot afford the extraction cost of additional LLM calls for every remembered conversation.
+- An outage of the memory path would be treated as an outage of the agent, in which case memory has become a hard dependency and the design should be revisited before scaling.
 
-One caution applies even when memory *is* the right call, which is that remembering and staying current are different problems. The newest agentic-memory evaluations find a distinctive failure mode where agents treat stale prior-session state as if it were still true instead of re-checking it ([Momento](https://arxiv.org/abs/2606.00832)), meaning a recalled fact is a hypothesis about the present state that may require re-validation.
+One caution applies even when memory *is* the right call, which is that remembering and staying current are different problems.
 
-# Lessons for Production Agentic Memory
-
-Here are the patterns from this part that I would carry into any agentic memory system, closing the running list built across Parts 2 and 3.
-
-## 10. Keep extraction off the hot path
-
-The user is already waiting on one LLM call, so never make them wait on the memory system's LLM too. Append synchronously and distil in the background.
-
-## 11. Budget memory in tokens
-
-The context window is the real constraint and messages vary wildly in size, which makes message counts a poor proxy. Token budgets belong to the same family of safety controls as the iteration and cost budgets from the autonomous post.
-
-## 12. Build erasure before you need it
-
-"Forget everything about this user" must be one operation that fans out across every tier and every derived projection, and it is a different operation from temporal supersession, which preserves history. Retrofitting either across a live system is far harder than designing them in.
+The newest agentic-memory evaluations find a distinctive failure mode where agents treat stale prior-session state as if it were still true instead of re-checking it ([Momento](https://arxiv.org/abs/2606.00832)), meaning a recalled long-term fact is a hypothesis about the present state that may require re-validation.
 
 # Closing Thoughts: Making Memory Boring
 
-Back to the incident nobody wants to write up: Bob asking a reasonable question and getting a correct answer assembled out of Alice's Monday. Every question that opening raised is now something we ran on a cluster.
+Back to the incident that we opened with. Bob asking a reasonable question and getting a correct answer assembled out of Alice's private contexts from another day. We started with several questions, and now we can answer them.
 
-**The three tiers worked together inside one conversation.** A single recall on `ticket-42` returned the last verbatim message as the short-term window, the rolling summary of everything the window had already dropped, and the extracted facts about the EUR rate key, each tier answering the part of the question the others could not. The compaction that produced the summary happened on the store's own write path, off the turn the user was waiting on.
+**The three tiers worked together inside one conversation.** A single recall on `ticket-42` returned the last verbatim message as the short-term window, together with the rolling summary of previously dropped messages, and the extracted longer-term facts about the EUR rate key.
 
-**One write stayed visible to the right agents and invisible to everyone else, so Bob's question came back empty.** Every record carried the agent, the verified user, and the session at once, so reading Alice's user level gathered facts written by two different assistants, while Bob's identical query and the unrelated agent's own level both returned nothing. What keeps the opening incident from happening is that Bob's request never carried Alice's identity, and identity is what the partition is keyed on. Erasing Alice was one command that reached across both assistants and all her sessions, and the team's store-wide record survived it because it was never hers.
+**One write stayed visible to the right agents and invisible to everyone else.** Every record carried the agent, the verified user, and the session at once. Alice could recall user-level long-term memory facts across two agents. And Bob's identical query returned nothing related to Alice as required.
 
-**The boundary held when the model was told to cross it.** A prompt built to force a session-only agent into an agent-level search could not be obeyed, because that level is absent from the tool schema the model was given. The entitlement lives in the vocabulary rather than in the model's judgement, which is what makes it survive a hostile prompt.
+**The tool-level boundary enforced restrictions.** Agents can be enabled with ability to search_memory at different scopes. However the access was restricted by design, guarding from prompt injections by limiting the inputs in the tool code itself, as well as at the service level.
 
-**Getting this into your own agent is a contract rather than a rewrite.** The skeleton is a recall that degrades to empty on failure, a cheap synchronous append, and an expensive fold pushed to the background, and the parts that turn it into a production dependency are server-side scope derivation, the erasure fan-out, and a service boundary so a fleet shares one memory. That is what the `kaos-memory` package packages.
-
-In the observability post I argued the goal is *boring debugging*, and in the autonomy post that the loop is easy while the operating model is the work. Memory completes the trilogy, and the shape of the lesson is the same.
-
-The extraction models and retrieval tricks will keep improving underneath you, and the research is still openly arguing about where memory systems lose information. What makes agent memory production-grade is instead the tiered structure, the durable source of truth, the non-spoofable scopes, the degradation contract, the background write path, and the one-shot erasure.
-
-If your memory system is boring (a store outage is a degraded condition instead of an incident, "whose memory is this?" has a structural answer, and deletion is one operation) then your agents get to be the interesting part.
+If your memory system is boring - it just works, and when it doesn't you don't end up with data leaks or system-wide outages - then your agents get to be the interesting part.
 
 **The series:**
 
