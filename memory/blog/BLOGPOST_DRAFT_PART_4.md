@@ -8,7 +8,7 @@ Alice and Bob both use our agent platform. On Monday, Alice worked on a support 
 
 The first three parts of our 4-part series on agent memory were spent designing a system that ensures such incidents are avoided. In this final part, we actually deploy the components that we've designed so far, and show how it survives in the real world. Do the memory tiers actually work together inside one conversation? Does a single write end up visible to the right agents and invisible to everyone else? Does the boundary hold when the model is told to cross it? And what does it take to get the same behaviour in an agent of your own? Let's find out!
 
-> A design is only the blueprint; he only way to find out if it survives is to run it and see what blows up under pressure.
+> A design is only the blueprint; the only way to find out if it survives is to run it and see what blows up under pressure.
 
 Recently I spent some time extending the [Kubernetes Agent Orchestration System (KAOS)](https://github.com/axsaucedo/agentic-kubernetes-operator) to support multi-tiered memory persistence (aka short-, medium- and long-term memory). Along the way I hit most of the same issues that anyone would whilst building or integrating multi-tiered memory into a multi-tenant system, so I thought it would be useful to compile the learnings, design choices and examples into this series.
 
@@ -43,7 +43,7 @@ As a refresher, here is the taxonomy that we adopted for our memory:
 
 | Tier        | What it holds                                                                     | When it updates                                      | Backing                      |
 | ----------- | --------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------- |
-| Short-term  | The context window of the live session, bounded by a token budget                 | Every turn (cheap append)                            | Relational rows              |
+| Short-term  | The context window of the live session, bounded by a token budget                 | Every message (cheap append)                            | Relational rows              |
 | Medium-term | Rolling summary per session, versioned so past summaries stay accessible          | On compaction, when the window hits its token budget | Relational rows, append-only |
 | Long-term   | Atomic facts extracted from context window, keyed by scope, recalled semantically | In the background, after compaction                  | Mem0 into the vector store   |
 
@@ -63,7 +63,7 @@ graph LR
   end
 ```
 
-In Part 3 we worked on converting the design into infrastructure. We codified the memory layer as a `MemoryStore` Kubernetes resource that agents share as a service backed by Postgres with pgvector, with summarization and fact extraction kept off the turn the user is waiting on. We then set up the cluster it runs on, and this control plane is what makes the scope model enforceable. That is, a request enters through the gateway mesh, the user token is verified against the identity service, and the agent runtime derives the read scope and the write attribution from that verified identity before it ever calls the store.
+In Part 3 we worked on converting the design into infrastructure. We codified the memory layer as a `MemoryStore` Kubernetes resource that agents share as a service backed by Postgres with pgvector, with summarization and fact extraction kept off the message the user is waiting on. We then set up the cluster it runs on, and this control plane is what makes the scope model enforceable. That is, a request enters through the gateway mesh, the user token is verified against the identity service, and the agent runtime derives the read scope and the write attribution from that verified identity before it ever calls the store.
 
 ```mermaid
 flowchart TB
@@ -129,14 +129,23 @@ graph TB
 ```
 
 - **`session-assistant`** is a conversation-only assistant with `maxReadScope: session`; the ceiling limits automatic recall and the `search_memory` tool to the current session.
-- **`user-assistant`** is a personalised assistant with `maxReadScope: user`, which automatically recalls the user's memory on every turn and gives `search_memory` the `session`, `agent`, and `user` levels.
+- **`user-assistant`** is a personalised assistant with `maxReadScope: user`, which automatically recalls the user's memory on every message and gives `search_memory` the `session`, `agent`, and `user` levels.
 - **`agent-bot`** is an agent from a separate domain on the same store with `maxReadScope: agent`, which automatically recalls the agent's own memory across sessions; in Step 2 it acts as the isolation control.
 
 > The key question we'll be answering is, "whose memory is it?".
 
-For this we will test different rules as follows:
+For this we will test the following rules, each of which is exercised by a command later in this post:
 
-[TODO: add the rules as a table for explicitness]
+| What we ask for | What should happen | Where |
+| --- | --- | --- |
+| Alice reads her own `user` scope | Her facts come back from every agent she has used | Step 2 |
+| Bob reads his own `user` scope | Only his own facts, never Alice's | Step 2 |
+| Bob asks the question Alice asked, on the same agent | Answered from his partition alone | Step 2 |
+| `agent-bot` reads its own `agent` scope | Empty; unrelated agents share the store, not the data | Step 2 |
+| Alice erases her `user` scope | Her facts go across all agents and sessions, and Bob's remain | Step 2 |
+| An admin reads the `store` level | Every owner's facts, with no agent actor context on the request | Step 2 |
+| An agent reads the `store` level | Refused with `403`, since the level is admin plane only | Step 2 |
+| `session-assistant` searches at the `agent` level | Not expressible, the level is absent from its tool schema | Step 3 |
 
 ```mermaid
 graph LR
@@ -158,9 +167,7 @@ graph LR
 
 ## Setting up the Example: One Command
 
-[TODO: There seems to be duplication here and in teh cluster instructions previous to this. REconcile, remove,etc]i
-
-The example runs on the identity-enabled cluster we installed in Part 3 (`kaos system install --authz-enabled --user-auth keycloak --agent-auth keycloak`), since it partitions memory by verified user identity; Part 3 also covers how the auth wiring reaches the memory path. Everything the example needs is bundled as a single sample, so one command deploys the whole cast:
+The identity-enabled cluster from the recap above is all this needs, since the example partitions memory by verified user identity, and Part 3 covers how that auth wiring reaches the memory path. Everything else the example needs is bundled as a single sample, so one command deploys the whole cast:
 
 ```bash
 $ kaos samples deploy 7-memory-agent -n support-demo
@@ -194,7 +201,7 @@ metadata:
 spec:
   maxReadScope: user
   shortTerm:
-    tokenBudget: 64        # small, so a few turns overflow the window
+    tokenBudget: 64        # small, so a few messages overflow the window
   mediumTerm:
     enabled: true          # fold overflow into a medium-term summary
 ```
@@ -343,9 +350,8 @@ well.
 ✓ allowed — request permitted
 ```
 
-Each conversation messag is persisted to the central store after the run, and the conversation should have carried out multiple medium-term compaction actions, as well as long-term extraction actions in the memory.
+Each conversation message is persisted to the central store after the run, and the conversation should have carried out multiple medium-term compaction actions, as well as long-term extraction actions in the memory.
 
-[TODO: Stop using the turn term, use message or conversation respectively. replace across the repo]
 
 Now inspect what the store holds for that session:
 
@@ -379,7 +385,7 @@ The JSON responses below are the real outputs with record metadata (ids, hashes,
 
 We can see that the three memory tiers are present in one response.
 
-* The short-term window **is the working memory**, holding only the last conversation turn.
+* The short-term window **is the working memory**, holding only the last conversation message.
 * The medium-term summary **contains the previous context**. Summarisation triggers when the window reached the token limit.
 * The long-term facts capture the learnings from the conversation. Extraction runs also when the window reaches token limit.
 
@@ -410,7 +416,7 @@ Resolved user 'alice' to principal '286eec2a-2854-4999-be83-0e1658c31a4c' from t
 }
 ```
 
-One more property falls out of `user-assistant`'s configuration before we move on. Its `maxReadScope: user` means automatic per-turn recall uses the user level, so the agent receives relevant memories owned by Alice across her sessions and agents:
+One more property falls out of `user-assistant`'s configuration before we move on. Its `maxReadScope: user` means automatic per-message recall uses the user level, so the agent receives relevant memories owned by Alice across her sessions and agents:
 
 ```bash
 $ kaos agent invoke user-assistant -n support-demo \
@@ -429,7 +435,7 @@ on the payments call for EUR currency.
 
 Two caveats are worth stating plainly here, because both are consequences of choices made earlier in the series. 
 
-* Long-term memory extraction runs in the background after compaction, so a question asked seconds after a conversation can arrive before the facts that answer it exist; that latency is the price of keeping extraction off the turn the user waits on. 
+* Long-term memory extraction runs in the background after compaction, so a question asked seconds after a conversation can arrive before the facts that answer it exist; that latency is the price of keeping extraction off the message the user waits on. 
 * Automatic recall is best effort: the store returns the facts and the runtime injects them as leading context, but whether the model uses that context is the model's business.
 
 Every message and memory records are written to the database with metadata about their respective agent, user, and session. The agent-plane read however is restricted in a hierarchical scope of `session < agent < user`, and each level is bound to anidentity verified at the gateway.
@@ -442,9 +448,9 @@ Alice's tickets remain available through her `user` level across agents, while B
 
 ```mermaid
 graph LR
-  T42["ticket-42 turns<br/>via session-assistant"] --> UA[("user: alice")]
-  T99["ticket-99 turns<br/>via user-assistant"] --> UA
-  T88["ticket-88 turns<br/>via user-assistant"] --> UB[("user: bob")]
+  T42["ticket-42 messages<br/>via session-assistant"] --> UA[("user: alice")]
+  T99["ticket-99 messages<br/>via user-assistant"] --> UA
+  T88["ticket-88 messages<br/>via user-assistant"] --> UB[("user: bob")]
 
   UA -->|"recall --user alice"| R1["facts from both agents"]
   UB -->|"recall --user bob"| R2["Bob's own fact only"]
@@ -618,7 +624,7 @@ graph LR
   SAg["session-assistant model<br/>level enum: session"] -. "level agent is not in the schema,<br/>the call cannot be expressed" .-> S
 ```
 
-The automatic baseline recalls and persists on every turn with no model involvement. Its recall level comes from `MEMORY_MAX_READ_SCOPE`. On top of that, `tools: read` gives the model a `search_memory` tool whose `level` enum contains every level from `session` up to the same ceiling. The two agents differ exactly there:
+The automatic baseline recalls and persists on every message with no model involvement. Its recall level comes from `MEMORY_MAX_READ_SCOPE`. On top of that, `tools: read` gives the model a `search_memory` tool whose `level` enum contains every level from `session` up to the same ceiling. The two agents differ exactly there:
 
 ```bash
 $ kaos agent tools user-assistant -n support-demo
@@ -679,7 +685,7 @@ Let's take a look at the framework-agnostic skeleton for memory that we introduc
 
 ```python
 async def run_with_memory(session_id, user_message, memory, agent):
-    # 1. RECALL: assemble the memory block (never let this fail the turn)
+    # 1. RECALL: assemble the memory block (never let this fail the message)
     try:
         window = await memory.window(session_id, token_budget=4000)
         digest = await memory.medium_term_summary(session_id)
@@ -702,7 +708,7 @@ async def run_with_memory(session_id, user_message, memory, agent):
     return response
 ```
 
-The skeleton shows the load-bearing choices: recall wrapped so failure degrades instead of raising, the digest and facts injected as one structured block instead of fake conversation turns, the cheap verbatim append on the hot path, and the expensive fold-and-extract pushed to the background the moment the token budget trips.
+The skeleton shows the load-bearing choices: recall wrapped so failure degrades instead of raising, the digest and facts injected as one structured block instead of fake conversation messages, the cheap verbatim append on the hot path, and the expensive fold-and-extract pushed to the background the moment the token budget trips.
 
 What it deliberately does not show, and what you must add before this becomes a production dependency: server-side scope enforcement, the erasure fan-out across tiers, the soft/strict write contract, OpenTelemetry on every operation, and a service boundary so a fleet shares one memory instead of one process hoarding it.
 
@@ -759,18 +765,18 @@ attribution = attribution_from_deps(deps, agent_identity=agent_identity)
 read_scopes = [ScopeLevel.SESSION, ScopeLevel.AGENT, ScopeLevel.USER]
 toolset = build_memory_toolset(MemoryTools.ALL, read_scopes=read_scopes, agent_identity=agent_identity)
 
-# rebuild message history from the short-term turns plus the rolling summary,
+# rebuild message history from the short-term messages plus the rolling summary,
 # so overflow is represented by summarization instead of truncation
 history = reconstruct_message_history(recalled.short_term.window, recalled.medium_term.summary)
 
 result = await agent.run(user_message, message_history=history, toolsets=[toolset])
 ```
 
-On KAOS the operator wires all of this automatically: the effective `maxReadScope` ceiling is passed as `MEMORY_MAX_READ_SCOPE`, expanded into the ordered list of levels the toolset receives, and used directly as the level for automatic per-turn recall. The request cannot widen it.
+On KAOS the operator wires all of this automatically: the effective `maxReadScope` ceiling is passed as `MEMORY_MAX_READ_SCOPE`, expanded into the ordered list of levels the toolset receives, and used directly as the level for automatic per-message recall. The request cannot widen it.
 
 # When NOT to Add Long-Term Memory
 
-Like autonomy, memory has become a checkbox feature, and the temptation is to switch it on for everything. It has a measurable break-even, as [a 2026 cost-performance analysis](https://arxiv.org/abs/2603.04814) finds long-context actually wins on raw recall for short interactions, with fact-based memory becoming cost-favorable only after roughly ten turns at 100K-token scale. Long-term memory earns its cost when:
+Like autonomy, memory has become a checkbox feature, and the temptation is to switch it on for everything. It has a measurable break-even, as [a 2026 cost-performance analysis](https://arxiv.org/abs/2603.04814) finds long-context actually wins on raw recall for short interactions, with fact-based memory becoming cost-favorable only after roughly ten messages at 100K-token scale. Long-term memory earns its cost when:
 
 - users or goals persist across sessions and personalization compounds,
 - a fleet of agents benefits from shared operational knowledge,
@@ -797,7 +803,7 @@ The user is already waiting on one LLM call, so never make them wait on the memo
 
 ## 11. Budget memory in tokens
 
-The context window is the real constraint and turns vary wildly in size, which makes turn counts a poor proxy. Token budgets belong to the same family of safety controls as the iteration and cost budgets from the autonomous post.
+The context window is the real constraint and messages vary wildly in size, which makes message counts a poor proxy. Token budgets belong to the same family of safety controls as the iteration and cost budgets from the autonomous post.
 
 ## 12. Build erasure before you need it
 
@@ -807,7 +813,7 @@ The context window is the real constraint and turns vary wildly in size, which m
 
 Back to the incident nobody wants to write up: Bob asking a reasonable question and getting a correct answer assembled out of Alice's Monday. Every question that opening raised is now something we ran on a cluster.
 
-**The three tiers worked together inside one conversation.** A single recall on `ticket-42` returned the last verbatim turn as the short-term window, the rolling summary of everything the window had already dropped, and the extracted facts about the EUR rate key, each tier answering the part of the question the others could not. The compaction that produced the summary happened on the store's own write path, off the turn the user was waiting on.
+**The three tiers worked together inside one conversation.** A single recall on `ticket-42` returned the last verbatim message as the short-term window, the rolling summary of everything the window had already dropped, and the extracted facts about the EUR rate key, each tier answering the part of the question the others could not. The compaction that produced the summary happened on the store's own write path, off the turn the user was waiting on.
 
 **One write stayed visible to the right agents and invisible to everyone else, so Bob's question came back empty.** Every record carried the agent, the verified user, and the session at once, so reading Alice's user level gathered facts written by two different assistants, while Bob's identical query and the unrelated agent's own level both returned nothing. What keeps the opening incident from happening is that Bob's request never carried Alice's identity, and identity is what the partition is keyed on. Erasing Alice was one command that reached across both assistants and all her sessions, and the team's store-wide record survived it because it was never hers.
 
