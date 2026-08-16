@@ -300,7 +300,7 @@ The service serializes each fold with a Postgres advisory lock keyed on the scop
 
 The killed replica's transaction rolls back, the rows stay marked pending, and the advisory lock is session-level so Postgres releases it the moment the dead connection drops. Re-running the fold is idempotent, so nothing double-folds and no summary version is ever half-written.
 
-There is one honest gap: nothing actively sweeps for orphaned pending rows, they fold when the next write to that scope triggers compaction again. And long-term extraction keeps the "no durable queue" trade-off from the design section: the evicted turns are handed to an in-process background worker, so a replica death in that window can lose one batch of extracted facts. With the medium-term tier enabled the same turns still fold into the durable digest, so the conversational record survives even when a fact batch does not.
+There is one honest gap: nothing actively sweeps for orphaned pending rows, they fold when the next write to that scope triggers compaction again. And long-term extraction keeps the "no durable queue" trade-off from the design section: the evicted messages are handed to an in-process background worker, so a replica death in that window can lose one batch of extracted facts. With the medium-term tier enabled the same messages still fold into the durable digest, so the conversational record survives even when a fact batch does not.
 
 ## Failure 3: A database node goes down
 
@@ -328,11 +328,11 @@ The `MemoryStore` supports any custom DSN to bring-your-own datastore through `c
 
 In this case, both `MemoryStore` service replicas flip `NotReady` and drain from the endpoints until the database returns.
 
-What the memory layer contributes is bounded state loss on either side of the failover. The medium-term summaries and the long-term facts live in regular logged tables and survive a crash. The short-term window is the deliberate trade-off, as it is an `UNLOGGED` table, which keeps the hottest per-turn path at RAM speed at the cost of being truncated by a Postgres crash recovery. After a hard failover the agents come back with their durable digests and facts intact, minus the verbatim window of in-flight conversations, which is the tier designed to be cheapest to lose.
+What the memory layer contributes is bounded state loss on either side of the failover. The medium-term summaries and the long-term facts live in regular logged tables and survive a crash. The short-term window is the deliberate trade-off, as it is an `UNLOGGED` table, which keeps the hottest per-message path at RAM speed at the cost of being truncated by a Postgres crash recovery. After a hard failover the agents come back with their durable digests and facts intact, minus the verbatim window of in-flight conversations, which is the tier designed to be cheapest to lose.
 
 ## Failure 4: The whole memory path is unreachable
 
-02:01 am. From the agents' side: the memory path is simply gone, and thirty conversations are mid-turn.
+02:01 am. From the agents' side: the memory path is simply gone, and thirty conversations are mid-message.
 
 ```mermaid
 %%{init: {"themeVariables": {"edgeLabelBackground": "#ffffff00"}}}%%
@@ -351,11 +351,11 @@ flowchart LR
   linkStyle 2,3 stroke:#cf222e,color:#cf222e
 ```
 
-On the service side, the conversational tiers return and the `degraded` flag is set. On the client side, any failure at all (timeout, connection refused, an error status) is caught and returned as an empty recall marked `degraded`, with a 5 second recall timeout so a hanging store cannot stall the turn. 
+On the service side, the conversational tiers return and the `degraded` flag is set. On the client side, any failure at all (timeout, connection refused, an error status) is caught and returned as an empty recall marked `degraded`, with a 5 second recall timeout so a hanging store cannot stall the message. 
 
 The agent runtime does not stop however, as message history falls back to the runtime's own event log, the memory block is simply absent, and the user gets an answer from an agent with a shorter memory. It is still an open question on how and whether to "inform" the agent about the degraded memory.
 
-Writes follow the soft or strict contract from the resource: `soft` (the default) logs the failure and moves on, `strict` fails the turn, which is the right choice only for agents whose writes are the product. Erasure is the deliberate exception, as a `forget` command that cannot clear the durable tiers surfaces as an error, because a deletion you cannot confirm must never look like a success.
+Writes follow the soft or strict contract from the resource: `soft` (the default) logs the failure and moves on, `strict` fails the message, which is the right choice only for agents whose writes are the product. Erasure is the deliberate exception, as a `forget` command that cannot clear the durable tiers surfaces as an error, because a deletion you cannot confirm must never look like a success.
 
 ## Failure 5: The auth service goes down
 
