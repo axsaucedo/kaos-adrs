@@ -35,7 +35,7 @@ This post is the first of a 4-part series, which we plan to release weekly over 
 - **Session history**, which holds an auditable transcript of what was said.
 * **Prompt telemetry**, which holds the specific prompts relative to events in the system.
 
-To be more precise we can look at Princeton University's paper on [Cognitive Architectures for Language Agents (CoALA)](https://arxiv.org/abs/2309.02427) to provide a more precise definition for "Memory" in agentic systems. We can define "Memory" as the component that holds the short-, medium- and long-term information an agent carries across turns and sessions to inform its reasoning.
+To be more precise we can look at Princeton University's paper on [Cognitive Architectures for Language Agents (CoALA)](https://arxiv.org/abs/2309.02427) to provide a more precise definition for "Memory" in agentic systems. We can define "Memory" as the component that holds the short-, medium- and long-term information an agent carries across messages and sessions to inform its reasoning.
 
 This research paper quoted also provides a useful taxonomy for "memory types" that we will use to reason throughout the series, and especially in the tier design of part 2. This includes the memory types for episodic, semantic, procedural and temporal memory. 
 
@@ -45,7 +45,7 @@ The formal definition of these memory types (+ a few examples) is outlined as fo
 
 | Memory type          | What it holds                                  | Example                                                     |
 | -------------------- | ---------------------------------------------- | ----------------------------------------------------------- |
-| Short-term (working) | Verbatim recent turns of the live conversation | "The user just said port 8080"                              |
+| Short-term (working) | Verbatim recent messages of the live conversation | "The user just said port 8080"                              |
 | Episodic             | Records of specific past events                | "On Tuesday the deploy failed twice"                        |
 | Semantic             | Distilled, durable facts                       | "The user prefers blue-green deploys"                       |
 | Procedural           | Learned skills and how-tos                     | "Here is how we roll back this service"                     |
@@ -54,7 +54,7 @@ The formal definition of these memory types (+ a few examples) is outlined as fo
 In practice what I found out however is that most frameworks only implement a small number of these, namely **short-term** is always present, **episodic and semantic** are bundled (the only difference is whether time is preserved), **procedural** tends to be present mainly in coding agents (eg creating skills, commands, extensions), and **temporal** tends to be replaced with "forgetting memory" functionality instead, or embedded with episodic/semantic.
 
 These appear more informally defined as:
-* **Conversational continuity**: The agent remembers what was said three turns ago; a *same-session* problem. 
+* **Conversational continuity**: The agent remembers what was said three messages ago; a *same-session* problem. 
 * **Learned knowledge**: The agent remembers what it figured out last week; a *cross-session* problem. 
 
 For example, frameworks like [LangGraph](https://docs.langchain.com/oss/python/langgraph/persistence) separate thread-scoped checkpointers from a cross-thread store. Another example is [Letta](https://docs.letta.com/guides/core-concepts/memory/memory-blocks), which separates always-in-context memory blocks from an archival tier. 
@@ -99,13 +99,13 @@ If we look at it from a feature / functionality standpoint, we can summarise the
 
 | Naive memory                         | Production memory                                                      |
 | ------------------------------------ | ---------------------------------------------------------------------- |
-| Last-N turns, unbounded token growth | Token-budgeted window with principled eviction                         |
+| Last-N messages, unbounded token growth | Token-budgeted window with principled eviction                         |
 | Verbatim replay of everything        | Distilled facts, separated from the transcript (eg long- / short-term) |
 | One user, one process                | Many tenants, many agents, many replicas                               |
 | Memory lives inside the agent pod    | Memory survives restarts and is shared across the fleet                |
 | Writes block the response            | Extraction runs off the hot path                                       |
 | Nothing is ever forgotten            | Decay, retention, and right-to-erasure                                 |
-| Memory failure crashes the turn      | Memory failure degrades the turn                                       |
+| Memory failure crashes the conversation      | Memory failure degrades the conversation                                       |
 
 In this case we can position "production memory" a tiered, scoped, context-specific and dynamic store, as opposed to purely a vector database connected to an agent. 
 
@@ -179,7 +179,7 @@ Based on these, the library that clearly stood out was **Mem0**. At least at the
 
 It's however worth noting that despite Mem0 being the right choice for this context, one learning that may seem obvious in retrospect was that **there is no "Perfect Candidate".** The graph-first leaders (Graphiti, Cognee) have the most features but at the highest cost. Low-delta options (Redis AMS) buy fit at maturity cost. Building it yourself directly on the raw vector or graph stores, which we also weighed as the baseline option, allows you to have all the features and fit, but at the cost of rebuilding mature extraction and retrieval that already exists under permissive licenses.
 
-This also applies to the numbers the frameworks publish about themselves. Interestingly enough, Mem0's own research supports that extraction-based memory improves latency and cost, however it does not improve raw accuracy: in [Mem0's own evaluation](https://arxiv.org/abs/2504.19413) on LoCoMo, a full-context baseline beats Mem0 on raw accuracy (72.9% vs 66.9%), while memory buys a 91% cut in p95 latency (1.44s vs 17.1s) and over 90% fewer tokens per conversation. At fleet scale that trade is exactly right, since you cannot ship 17-second turns and 26K-token replays, but it is a trade you should make knowingly.
+This also applies to the numbers the frameworks publish about themselves. Interestingly enough, Mem0's own research supports that extraction-based memory improves latency and cost, however it does not improve raw accuracy: in [Mem0's own evaluation](https://arxiv.org/abs/2504.19413) on LoCoMo, a full-context baseline beats Mem0 on raw accuracy (72.9% vs 66.9%), while memory buys a 91% cut in p95 latency (1.44s vs 17.1s) and over 90% fewer tokens per conversation. At fleet scale that trade is exactly right, since you cannot ship 17-second responses and 26K-token replays, but it is a trade you should make knowingly.
 
 As part of this, despite Mem0 being the strongest choice, it became clear that **adopting a memory engine means choosing which 60% of the system you do not have to build, and committing to build the remaining 40% around it**. 
 
