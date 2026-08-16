@@ -50,6 +50,50 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, json.dumps({"error": "not found"}))
 
+    def _do_responses(self, req):
+        """Minimal OpenAI Responses API. Codex CLI dropped Chat Completions, so a
+        harness driver pointed at a KAOS ModelAPI needs this wire format."""
+        CALLS.append({
+            "wire": "responses",
+            "n_messages": len(req.get("input", []) or []),
+            "tools": sorted(t.get("name", "?") for t in req.get("tools", []) or []),
+            "auth": self.headers.get("Authorization", ""),
+        })
+        nxt = RESPONSES.pop(0) if RESPONSES else {"type": "text", "text": "done"}
+        text = nxt.get("text", "done")
+        item = {
+            "type": "message", "id": "msg_1", "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }
+        resp = {
+            "id": "resp_mock", "object": "response", "created_at": int(time.time()),
+            "status": "completed", "model": req.get("model", "mock-model"),
+            "output": [item],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        }
+
+        if not req.get("stream"):
+            return self._send(200, json.dumps(resp))
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        seq = [
+            ("response.created", {"response": dict(resp, status="in_progress", output=[])}),
+            ("response.output_item.added", {"output_index": 0, "item": dict(item, content=[])}),
+            ("response.output_text.delta", {"output_index": 0, "content_index": 0,
+                                            "item_id": "msg_1", "delta": text}),
+            ("response.output_text.done", {"output_index": 0, "content_index": 0,
+                                           "item_id": "msg_1", "text": text}),
+            ("response.output_item.done", {"output_index": 0, "item": item}),
+            ("response.completed", {"response": resp}),
+        ]
+        for i, (ev, data) in enumerate(seq):
+            payload = dict(data, type=ev, sequence_number=i)
+            self.wfile.write(f"event: {ev}\ndata: {json.dumps(payload)}\n\n".encode())
+        self.wfile.flush()
+
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(n)
@@ -62,6 +106,9 @@ class Handler(BaseHTTPRequestHandler):
             RESPONSES[:] = req.get("responses", [])
             CALLS.clear()
             return self._send(200, json.dumps({"ok": True, "n": len(RESPONSES)}))
+
+        if self.path.startswith("/v1/responses"):
+            return self._do_responses(req)
 
         if not self.path.startswith("/v1/chat/completions"):
             return self._send(404, json.dumps({"error": "not found"}))
