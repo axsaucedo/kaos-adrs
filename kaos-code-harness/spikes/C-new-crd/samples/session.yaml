@@ -1,0 +1,28 @@
+apiVersion: kaos.tools/v1alpha1
+kind: AgentHarness
+metadata: {name: claude, namespace: default}
+spec:
+  runtime: claude
+  container:
+    image: ghcr.io/myorg/claude-code:2.1.224
+    workingDir: /workspace
+    securityContext:
+      runAsNonRoot: true
+      allowPrivilegeEscalation: false
+      capabilities: {drop: ["ALL"]}
+  credentialsRef: {name: claude-oauth, key: CLAUDE_CODE_OAUTH_TOKEN}
+  runtimeClassName: gvisor
+  mcpServers: [github]
+---
+apiVersion: kaos.tools/v1alpha1
+kind: CodingSession
+metadata: {name: fix-flaky, namespace: default}
+spec:
+  harnessRef: claude
+  prompt: "make the flaky memory e2e test deterministic"
+  mode: autonomous
+  repo:
+    url: https://github.com/axsaucedo/kaos
+    branch: main
+    credentialsRef: {name: gh-token, key: token}
+  budgets: {maxRuntimeSeconds: 3600, maxToolCalls: 500}
