@@ -42,7 +42,7 @@ However when surveying the ecosystem it was clear that in industry it is more co
 
 | Tier        | What it holds                                                                     | When it updates                                      | Backing                      |
 | ----------- | --------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------- |
-| Short-term  | The context window of the live session, bounded by a token budget                 | Every turn (cheap append)                            | Relational rows              |
+| Short-term  | The context window of the live session, bounded by a token budget                 | Every message (cheap append)                            | Relational rows              |
 | Medium-term | Rolling summary per session, versioned so past summaries stay accessible          | On compaction, when the window hits its token budget | Relational rows, append-only |
 | Long-term   | Atomic facts extracted from context window, keyed by scope, recalled semantically | In the background, after compaction                  | Mem0 into the vector store   |
 
@@ -65,7 +65,7 @@ graph LR
     rt["Agent runtime<br/>(remote memory client)"]
   end
   subgraph svc["MemoryStore service"]
-    st["Short-term window<br/>(relational rows)<br/>Verbatim turns, token-budgeted"]
+    st["Short-term window<br/>(relational rows)<br/>Verbatim messages, token-budgeted"]
     mt["Medium-term summary<br/>(relational, append-only)<br/>One rolling window per session"]
     lt["Long-term facts<br/>(Mem0 -> vector store)<br/>Extracted + deduplicated"]
   end
@@ -175,7 +175,7 @@ Now finally once I adopted these design choices, I realised that there were a fe
 
 * **Security Attack Surfaces**: Interesting research such as [AgentPoison](https://arxiv.org/abs/2407.12784)  show the impact of poisoning memory (ie 0.1% poisoned memory yields over 80% attack success), as well as [MINJA](https://arxiv.org/abs/2503.03704) which shows that an attacker needs no write access at all, because if the agent writes its own memory from conversations then every user is a write path. **To mitigate this**, it was decided for KAOS to derive the scope server-side from the authenticated agent identity, fail-closed, and never from model- or tool-supplied arguments.
 * **Depth of intra-store isolation**: Within one store, the boundaries between agents, users and sessions are enforced by application-level filtering. Application-level predicates carry a classic risk, where one forgotten `WHERE` clause silently returns another tenant's rows. **To mitigate this**, the filtering is centralised in a single storage module so there is one place to audit, and on Postgres the relational tiers can be hardened further with [row-level security](https://www.postgresql.org/docs/current/ddl-rowsecurity.html), where a `FORCE ROW LEVEL SECURITY` policy pins every query to the scope set on the transaction, so a missing predicate returns nothing instead of everything. Worth noting this RLS cannot be enforced at the vector level - however isolation *between* stores relies on none of this, since each store is its own deployment with its own database connection, which we cover in Part 3.
-* **Right to Erasure**: Compliance requirements such as GDPR mean you must be able to answer "delete everything you know about this user" reliably, and in a multi-tier design the same information lives in several derived forms at once (raw turns, summaries, extracted facts, and their embeddings), so deleting from one tier is not enough. **To mitigate this**, KAOS implements `forget` as a single operation that fans out across all three tiers in one pass, deleting the short-term rows, the summaries, and the scope-filtered long-term facts. Note this is destruction, which is different from supersession, where facts are merely marked invalid but kept for history.
+* **Right to Erasure**: Compliance requirements such as GDPR mean you must be able to answer "delete everything you know about this user" reliably, and in a multi-tier design the same information lives in several derived forms at once (raw messages, summaries, extracted facts, and their embeddings), so deleting from one tier is not enough. **To mitigate this**, KAOS implements `forget` as a single operation that fans out across all three tiers in one pass, deleting the short-term rows, the summaries, and the scope-filtered long-term facts. Note this is destruction, which is different from supersession, where facts are merely marked invalid but kept for history.
 
 Now that we have sorted the tiers and the access scopes, let's distil the lessons from this part before we make it all run as infrastructure in part 3.
 
