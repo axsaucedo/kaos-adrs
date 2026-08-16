@@ -103,14 +103,27 @@ class Handler(BaseHTTPRequestHandler):
             "tools": sorted(t.get("name", "?") for t in req.get("tools", []) or []),
             "auth": self.headers.get("Authorization", "") or self.headers.get("x-api-key", ""),
         })
-        nxt = RESPONSES.pop(0) if RESPONSES else {"type": "text", "text": "done"}
+        # Claude Code issues a toolless preflight (title/topic generation) before
+        # the real agent turn. It must not consume a scripted response, or every
+        # script is off by one and tool calls never reach the agent loop.
+        if not (req.get("tools") or []):
+            nxt = {"type": "text", "text": "preflight"}
+        else:
+            nxt = RESPONSES.pop(0) if RESPONSES else {"type": "text", "text": "done"}
         text = nxt.get("text", "done")
         model = req.get("model", "mock-model")
         usage = {"input_tokens": 1, "output_tokens": 1}
+        if nxt["type"] == "tool":
+            block = {"type": "tool_use", "id": "toolu_1",
+                     "name": nxt["name"], "input": nxt["args"]}
+            stop = "tool_use"
+        else:
+            block = {"type": "text", "text": text}
+            stop = "end_turn"
         body = {
             "id": "msg_mock", "type": "message", "role": "assistant",
-            "model": model, "content": [{"type": "text", "text": text}],
-            "stop_reason": "end_turn", "stop_sequence": None, "usage": usage,
+            "model": model, "content": [block],
+            "stop_reason": stop, "stop_sequence": None, "usage": usage,
         }
 
         if not req.get("stream"):
@@ -119,13 +132,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
+        if stop == "tool_use":
+            start_block = {"type": "tool_use", "id": "toolu_1",
+                           "name": nxt["name"], "input": {}}
+            delta = {"type": "input_json_delta",
+                     "partial_json": json.dumps(nxt["args"])}
+        else:
+            start_block = {"type": "text", "text": ""}
+            delta = {"type": "text_delta", "text": text}
         seq = [
             ("message_start", {"message": dict(body, content=[], stop_reason=None)}),
-            ("content_block_start", {"index": 0, "content_block": {"type": "text", "text": ""}}),
-            ("content_block_delta", {"index": 0,
-                                     "delta": {"type": "text_delta", "text": text}}),
+            ("content_block_start", {"index": 0, "content_block": start_block}),
+            ("content_block_delta", {"index": 0, "delta": delta}),
             ("content_block_stop", {"index": 0}),
-            ("message_delta", {"delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            ("message_delta", {"delta": {"stop_reason": stop, "stop_sequence": None},
                                "usage": {"output_tokens": 1}}),
             ("message_stop", {}),
         ]
