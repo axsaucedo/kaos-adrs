@@ -35,9 +35,11 @@ Let's get started.
 
 # The Series So Far
 
-It's been a fun ride across the universe of agent memory, so here is where all of it landed before any of it starts running.
+It's been a fun ride across the universe of agent memory, so here is a brief recap of where we landed on the design - as a refresher before we run it.
 
-In Part 1 we covered what agent memory actually is. We defined a taxonomy of the memory types in our implementation, identified the baseline scope that every memory library has to build first, and a survey of ~30 memory engines that ended with us adopting Mem0 as a library behind our own interface rather than as our architecture. As a refresher, here is the taxonomy that we adopted for our memory:
+In Part 1 we covered what agent memory actually is. We defined a taxonomy of the memory types in our implementation, identified the baseline scope that every memory library has to build first, and a survey of ~30 memory engines that ended with us adopting Mem0 as a library behind our own interface rather than as our architecture. 
+
+As a refresher, here is the taxonomy that we adopted for our memory:
 
 | Tier        | What it holds                                                                     | When it updates                                      | Backing                      |
 | ----------- | --------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------- |
@@ -45,7 +47,8 @@ In Part 1 we covered what agent memory actually is. We defined a taxonomy of the
 | Medium-term | Rolling summary per session, versioned so past summaries stay accessible          | On compaction, when the window hits its token budget | Relational rows, append-only |
 | Long-term   | Atomic facts extracted from context window, keyed by scope, recalled semantically | In the background, after compaction                  | Mem0 into the vector store   |
 
-Then in Part 2 we designed the scope model and answered "whose memory is it?". Every write attaches all the identities the request was verified with (the agent, the user, and the session), and every read picks one level from a nested set. Each of these levels is bound to the identity verified at the gateway rather than to anything the caller claims. The outermost level, `store`, sees everything and belongs to the admin plane alone:
+Then in Part 2 we designed the scope model and answered "whose memory is it?". Every write attaches all the identities the request was verified with (the agent, the user, and the session), and every read picks one level from a nested set. Each of these levels is bound to the identity verified at the gateway rather than to anything the caller claims. 
+The outermost level, `store` sees everything and belongs to the admin plane alone:
 
 ```mermaid
 graph LR
@@ -60,7 +63,7 @@ graph LR
   end
 ```
 
-In Part 3 the design became infrastructure. We codified the memory layer as a `MemoryStore` Kubernetes resource that agents share as a service rather than embed as a library, backed by Postgres with pgvector, with summarization and fact extraction kept off the turn the user is waiting on. We then set up the cluster it runs on, and this control plane is what makes the scope model enforceable: a request enters through the gateway mesh, the user token is verified against the identity service, and the agent runtime derives the read scope and the write attribution from that verified identity before it ever calls the store.
+In Part 3 we worked on converting the design into infrastructure. We codified the memory layer as a `MemoryStore` Kubernetes resource that agents share as a service backed by Postgres with pgvector, with summarization and fact extraction kept off the turn the user is waiting on. We then set up the cluster it runs on, and this control plane is what makes the scope model enforceable. That is, a request enters through the gateway mesh, the user token is verified against the identity service, and the agent runtime derives the read scope and the write attribution from that verified identity before it ever calls the store.
 
 ```mermaid
 flowchart TB
@@ -89,9 +92,9 @@ flowchart TB
   req <--> mem
 ```
 
-Part 3 closed by walking that setup through an example outage of five incidents in increasing impact, from a single evicted replica to the store fully unreachable, and the design held: agents keep answering with an empty memory block and a `degraded` flag on the response, so an outage of memory stays a degraded conversation.
+Part 3 closed by walking that setup through an example outage of five incidents in increasing impact, from a single evicted replica to the store fully unreachable, and basically seeing how the design worked against it. Fortunately agents keep answering with an empty memory block and a `degraded` flag on the response, so an outage of memory doesn't mean the whole cluster also crashes.
 
-Finally, in this part 4, we run it. Everything below assumes that cluster exists, and if you are following along, the same one command from Part 3 sets it up:
+Finally, in this part 4, we run it. Everything in this post assumes that the cluster exists, and if you are following along, you can run the same one command from Part 3 to set it up:
 
 ```bash
 $ kaos system install \
@@ -101,7 +104,7 @@ $ kaos system install \
   --wait
 ```
 
-The worked example then deploys the whole cast on that cluster and exercises every one of those pieces: the three tiers inside one conversation, the identity-keyed partitions between users and agents, and the ceiling the model itself cannot talk its way past.
+Now we can move to the hands on example, where we will deploy a full agentic system with multiple users.
 
 # Worked Example: An Agent That Remembers
 
@@ -133,6 +136,8 @@ graph TB
 
 For this we will test different rules as follows:
 
+[TODO: add the rules as a table for explicitness]
+
 ```mermaid
 graph LR
   alice(("Alice")) -->|"writes via user-assistant"| UA[("user: alice")]
@@ -152,6 +157,8 @@ graph LR
 ```
 
 ## Setting up the Example: One Command
+
+[TODO: There seems to be duplication here and in teh cluster instructions previous to this. REconcile, remove,etc]i
 
 The example runs on the identity-enabled cluster we installed in Part 3 (`kaos system install --authz-enabled --user-auth keycloak --agent-auth keycloak`), since it partitions memory by verified user identity; Part 3 also covers how the auth wiring reaches the memory path. Everything the example needs is bundled as a single sample, so one command deploys the whole cast:
 
@@ -309,7 +316,7 @@ them further. Would you like assistance with that?
 ✓ allowed — request permitted
 ```
 
-The third turn closes the incident:
+The third message closes the incident:
 
 ```bash
 $ kaos agent invoke session-assistant -n support-demo \
@@ -336,7 +343,9 @@ well.
 ✓ allowed — request permitted
 ```
 
-Each conversation turn is persisted to the central store after the run, and the conversation should have carried out multiple medium-term compaction actions, as well as long-term extraction actions in the memory.
+Each conversation messag is persisted to the central store after the run, and the conversation should have carried out multiple medium-term compaction actions, as well as long-term extraction actions in the memory.
+
+[TODO: Stop using the turn term, use message or conversation respectively. replace across the repo]
 
 Now inspect what the store holds for that session:
 
@@ -358,7 +367,7 @@ The JSON responses below are the real outputs with record metadata (ids, hashes,
       {"memory": "User reported that the 500 errors in the checkout process since the 3pm deploy on August 14, 2026, occur only on the payments call and only for EUR currency transactions", "metadata": {"kaos_run": "ticket-42"}, "agent_id": "kaos://agent/support-demo/session-assistant", "user_id": "286eec2a-2854-4999-be83-0e1658c31a4c"},
       {"memory": "Rolling back the payments service on August 14, 2026, cleared the 500 errors in the checkout process for EU customers, revealing the root cause as a missing EUR rate key in the payment processing logic", "metadata": {"kaos_run": "ticket-42"}, "agent_id": "kaos://agent/support-demo/session-assistant", "user_id": "286eec2a-2854-4999-be83-0e1658c31a4c"}
     ],
-    "block": "<elided>"
+    "block": "<abridged>"
   },
   "short_term": {"window": [
     ["assistant", "Great, the root cause being a missing EUR rate key explains why the payments service was throwing 500 errors specifically for EUR currency transactions.\n\nNow that the issue is identified, recommended next steps:\n1. Add the missing EUR rate key back into the configuration or database where the payment service retrieves rates.\n2. Perform tests to ensure EUR payments are processed successfully.\n3. Review deployment processes to include validation of critical currency keys to prevent this in the future.\n4. Consider adding monitoring or alerts for missing or invalid currency keys in the payment service.\n5. Document the issue and fix in the ticket for future reference.\n\nIf you need help generating a fix or adding validation checks, I can assist with that as well."]
@@ -418,15 +427,18 @@ on the payments call for EUR currency.
 ✓ allowed — request permitted
 ```
 
-Two caveats are worth stating plainly here, because both are consequences of choices made earlier in the series. Extraction runs in the background after compaction, so a question asked seconds after a conversation can arrive before the facts that answer it exist; that latency is the price of keeping extraction off the turn the user waits on. And automatic recall is best effort: the store returns the facts and the runtime injects them as leading context, but whether the model uses that context is the model's business. The `search_memory` path in Step 3 is the deterministic one.
+Two caveats are worth stating plainly here, because both are consequences of choices made earlier in the series. 
 
-## Step 2: Scopes and the Data Partitions
+* Long-term memory extraction runs in the background after compaction, so a question asked seconds after a conversation can arrive before the facts that answer it exist; that latency is the price of keeping extraction off the turn the user waits on. 
+* Automatic recall is best effort: the store returns the facts and the runtime injects them as leading context, but whether the model uses that context is the model's business.
 
-Every record above was written with full attribution: the agent, the verified user, and the session. The agent-plane read hierarchy is `session < agent < user`, and each level is bound to identity verified at the gateway. One write is readable at different levels and isolated at others.
+Every message and memory records are written to the database with metadata about their respective agent, user, and session. The agent-plane read however is restricted in a hierarchical scope of `session < agent < user`, and each level is bound to anidentity verified at the gateway.
 
 Now that we've seen the basic building blocks of our memory, we can move to showing how scopes enable or restrict memory through access control at multiple layers.
 
-Alice's tickets remain available through her `user` level across agents, while Bob and an unrelated agent stay isolated. Bob's own ticket, written through the very same assistant, survives her erasure untouched and stays visible to the store-wide administrative view.
+## Step 2: Scopes and the Data Partitions
+
+Alice's tickets remain available through her `user` level across agents, while Bob and an unrelated agent stay isolated. We'll follow this workflow and memory relationships below:
 
 ```mermaid
 graph LR
@@ -527,7 +539,7 @@ please share them, and I can help further.
 
 That same question returned Alice's full incident history. Bob gets his own ticket and none of hers. Nobody wrote a filter for this and no rule names Alice or Bob anywhere: automatic recall runs at the `user` level against whichever principal the gateway verified, so the partition follows the user for free.
 
-The unrelated agent stays isolated on the other axis, its own `agent` scope holding nothing:
+As part of this, the unrelated agent stays isolated on the other axis, and it means its own `agent` scope is currently holding nothing on the memory front:
 
 ```bash
 $ kaos memory recall -n support-demo \
@@ -554,7 +566,9 @@ Will erase all matching long-term records and conversational memory.
 {"forgotten": true, "degraded": false}
 ```
 
-Running `recall --scope user --user alice` again returns nothing: her facts are gone from both assistants and all of her sessions. Bob's are untouched, down to the same record id and hash they had before her erasure, because that record never carried her principal in the first place. Erasure is bounded by the same key that bounds reads.
+Running `recall --scope user --user alice` again returns nothing. All her long-term memory facts are gone from both assistants and all of her sessions. 
+
+Bob's are untouched, down to the same record id and hash they had before her erasure, because that record never carried her principal in the first place. Erasure is bounded by the same key that bounds reads.
 
 The admin plane can see what remains, across every owner in the store:
 
@@ -571,7 +585,9 @@ $ kaos memory recall -n support-demo \
 ], "block": "<elided>"}, "degraded": false}
 ```
 
-Note what the `store` level is and is not. It is a read lens with no owner filter, and nothing more; there is no way to write to it. Every fact in the store arrived through an agent acting for a verified user, which is why the surviving record above is Bob's rather than some ownerless entry. Attempting a write without an agent identity is refused outright, so the admin plane can read everything and erase anything, and author nothing.
+Note what the `store` level is and is not. It is a read lens with no owner filter, and nothing more. 
+
+Every fact in the store arrived through an agent acting for a verified user, which is why the surviving record above is Bob's rather than some ownerless entry. Attempting a write without an agent identity is refused, so the admin plane can read everything and erase anything.
 
 That lens is also closed to the agent plane. The identical request, differing only by an agent actor context, is refused:
 
