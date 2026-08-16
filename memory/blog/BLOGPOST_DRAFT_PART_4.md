@@ -614,7 +614,7 @@ Without that header the same request returns 200 and Bob's record. And `search_m
 
 ## Step 3: The Model's Permission Boundary
 
-Steps 1 and 2 were the operator's view of the store. Step 3 is the *model's* view: what the agent may decide to recall on its own, and the boundary it cannot cross.
+We can now dive into the last part, exploring what an agent can recall on its own by using internal tools, as opposed to the RAG approach that we've seen before.
 
 The boundary lives in the tool schema itself: each agent's `search_memory` tool only offers the levels that agent is entitled to, so an unentitled search cannot even be expressed:
 
