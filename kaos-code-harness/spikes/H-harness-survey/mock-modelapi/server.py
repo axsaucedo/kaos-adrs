@@ -94,6 +94,46 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(f"event: {ev}\ndata: {json.dumps(payload)}\n\n".encode())
         self.wfile.flush()
 
+    def _do_messages(self, req):
+        """Minimal Anthropic Messages API. Claude Code speaks this wire format only,
+        so a KAOS ModelAPI in front of it must be a `/v1/messages` passthrough."""
+        CALLS.append({
+            "wire": "messages",
+            "n_messages": len(req.get("messages", []) or []),
+            "tools": sorted(t.get("name", "?") for t in req.get("tools", []) or []),
+            "auth": self.headers.get("Authorization", "") or self.headers.get("x-api-key", ""),
+        })
+        nxt = RESPONSES.pop(0) if RESPONSES else {"type": "text", "text": "done"}
+        text = nxt.get("text", "done")
+        model = req.get("model", "mock-model")
+        usage = {"input_tokens": 1, "output_tokens": 1}
+        body = {
+            "id": "msg_mock", "type": "message", "role": "assistant",
+            "model": model, "content": [{"type": "text", "text": text}],
+            "stop_reason": "end_turn", "stop_sequence": None, "usage": usage,
+        }
+
+        if not req.get("stream"):
+            return self._send(200, json.dumps(body))
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        seq = [
+            ("message_start", {"message": dict(body, content=[], stop_reason=None)}),
+            ("content_block_start", {"index": 0, "content_block": {"type": "text", "text": ""}}),
+            ("content_block_delta", {"index": 0,
+                                     "delta": {"type": "text_delta", "text": text}}),
+            ("content_block_stop", {"index": 0}),
+            ("message_delta", {"delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                               "usage": {"output_tokens": 1}}),
+            ("message_stop", {}),
+        ]
+        for ev, data in seq:
+            payload = dict(data, type=ev)
+            self.wfile.write(f"event: {ev}\ndata: {json.dumps(payload)}\n\n".encode())
+        self.wfile.flush()
+
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(n)
@@ -109,6 +149,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path.startswith("/v1/responses"):
             return self._do_responses(req)
+
+        if self.path.startswith("/v1/messages"):
+            return self._do_messages(req)
 
         if not self.path.startswith("/v1/chat/completions"):
             return self._send(404, json.dumps({"error": "not found"}))
