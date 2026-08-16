@@ -77,10 +77,32 @@ def _record(session_id: str, event_type: str, content: Any) -> None:
     })
 
 
+def _session_workspace(session_id: str) -> str:
+    """Per-session workspace inside the single pod.
+
+    This is the hinge of spike A. `replicas` is a literal int32(1) in the operator
+    with no spec field, so one Agent is one pod. But a pod is not one workspace:
+    each session can get its own directory, which means N concurrent sessions are
+    reachable without any CRD change. What that costs is isolation and per-session
+    resource limits, not parallelism itself.
+    """
+    if not os.path.isdir(WORKSPACE):
+        return ""
+    ws = os.path.join(WORKSPACE, ".sessions", session_id)
+    if not os.path.isdir(ws):
+        os.makedirs(ws, exist_ok=True)
+        # A real driver clones here; the seed keeps the spike honest about the
+        # directories being genuinely distinct.
+        with open(os.path.join(ws, "SESSION"), "w") as fh:
+            fh.write(session_id)
+    return ws
+
+
 async def _run_harness(prompt: str, session_id: str):
     """Drive the harness once. Yields (kind, payload) as it goes."""
     home = _provider_config()
     env = {**os.environ, "HOME": home}
+    ws = _session_workspace(session_id)
     argv = [PI_BIN, "-p", "--provider", "kaos-modelapi", "--model", MODEL_NAME,
             "--session-dir", os.path.join(STATE_DIR, "sessions"),
             "--session-id", session_id,
@@ -94,13 +116,22 @@ async def _run_harness(prompt: str, session_id: str):
                         "action": "tool_call", "target": "harness"})
 
     proc = await asyncio.create_subprocess_exec(
-        *argv, cwd=WORKSPACE if os.path.isdir(WORKSPACE) else None,
+        *argv, cwd=ws or None,
         env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     out, err = await proc.communicate()
     text = (out or b"").decode().strip() or (err or b"").decode().strip()
 
     _record(session_id, "agent_response", text)
     yield ("final", text)
+
+
+@app.get("/sessions")
+async def sessions():
+    """Not part of KAOS's contract — added to show what a session list would need
+    if it lived on the pod rather than on a CR status."""
+    return {"sessions": [
+        {"id": sid, "workspace": _session_workspace(sid),
+         "events": len(evs)} for sid, evs in EVENTS.items()]}
 
 
 def _chunk(session_id: str, content: str | None, finish: str | None = None):

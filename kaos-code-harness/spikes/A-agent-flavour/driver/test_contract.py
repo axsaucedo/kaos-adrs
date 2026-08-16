@@ -168,3 +168,37 @@ def test_memory_events_populated(server):
                     params={"session_id": "sess-1"}, timeout=5).json()["events"]
     kinds = {e["event_type"] for e in evs}
     assert {"user_message", "agent_response"} <= kinds
+
+
+# --- the ceiling: can ONE pod serve N addressable parallel sessions? ----------
+
+def test_parallel_sessions_in_one_pod(server):
+    """`replicas` is int32(1) with no spec field, so an Agent is always one pod.
+    The question that decides design question 2 is whether one pod can still serve
+    N concurrent, separately-addressable sessions with distinct workspaces."""
+    import concurrent.futures as cf
+
+    n = 4
+    script([{"type": "text", "text": f"S{i}"} for i in range(n)] * 4)
+
+    def one(i):
+        r = httpx.post(f"{BASE}/v1/chat/completions", timeout=180,
+                       headers={"X-Session-ID": f"par-{i}"},
+                       json={"messages": [{"role": "user", "content": f"task {i}"}]})
+        return r.status_code, r.json()["id"]
+
+    t0 = time.time()
+    with cf.ThreadPoolExecutor(max_workers=n) as ex:
+        results = list(ex.map(one, range(n)))
+    elapsed = time.time() - t0
+
+    assert all(code == 200 for code, _ in results), results
+    ids = {sid for _, sid in results}
+    assert ids == {f"par-{i}" for i in range(n)}, ids
+
+    # Each session must have its own workspace directory.
+    sess = httpx.get(f"{BASE}/sessions", timeout=5).json()["sessions"]
+    wss = {s["id"]: s["workspace"] for s in sess if s["id"].startswith("par-")}
+    assert len(set(wss.values())) == len(wss), f"workspaces collided: {wss}"
+    print(f"\n  {n} concurrent sessions in one pod in {elapsed:.1f}s; "
+          f"{len(set(wss.values()))} distinct workspaces")
