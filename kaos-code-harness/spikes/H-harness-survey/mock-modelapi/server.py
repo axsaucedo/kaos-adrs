@@ -12,7 +12,7 @@ either plain text or a tool call, so a harness's tool loop can be exercised.
 import json
 import sys
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Scripted turns, consumed in order. Set via /_script before driving the harness.
 RESPONSES = [{"type": "text", "text": "ack"}]
@@ -201,4 +201,4 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8099
     print(f"mock ModelAPI on :{port}", flush=True)
-    HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()

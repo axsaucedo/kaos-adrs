@@ -1,0 +1,82 @@
+# Spike A — a coding harness deployed as an UNMODIFIED KAOS Agent.
+#
+# Nothing here is a new field. Every key below already exists in
+# operator/api/v1alpha1/agent_types.go at commit f8fd7797. If this validates and
+# reconciles, design question 2 does not need a new CRD to ship Mode 2.
+#
+# The workspace is expressed through spec.podSpec, which is a full corev1.PodSpec
+# strategic-merge patch keyed on the container named "agent" — the same mechanism
+# ModelAPI's Hosted mode uses for its Ollama pull-model initContainer.
+apiVersion: kaos.tools/v1alpha1
+kind: Agent
+metadata:
+  name: coder
+  namespace: default
+spec:
+  modelAPI: default-model
+  # Required. Validated against ModelAPI.spec.models by validateAgentModel.
+  model: "gpt-5.4"
+
+  agentNetwork:
+    expose: true
+
+  config:
+    description: "Coding harness (pi) behind the standard KAOS agent contract"
+    instructions: "You are a coding agent. Make the smallest correct change."
+    reasoningLoopMaxSteps: 20
+    taskConfig:
+      maxIterations: 20
+      maxRuntimeSeconds: 3600
+      maxToolCalls: 500
+
+  # Harness image. Ships `pi` + the driver; serves :8000 with the pais contract.
+  container:
+    image: ghcr.io/axsaucedo/kaos-harness-pi:0.1.0
+    env:
+      - name: HARNESS_WORKSPACE
+        value: /workspace
+      - name: HARNESS_STATE_DIR
+        value: /state
+      - name: GIT_REPO_URL
+        value: https://github.com/axsaucedo/kaos
+      - name: GIT_BRANCH
+        value: main
+
+  # Everything the harness needs beyond an API-calling agent goes here.
+  podSpec:
+    initContainers:
+      - name: workspace-clone
+        image: alpine/git:2.45.2
+        command: ["/bin/sh", "-c"]
+        args:
+          - git clone --depth 1 --branch "$GIT_BRANCH" "$GIT_REPO_URL" /workspace
+        env:
+          - name: GIT_REPO_URL
+            value: https://github.com/axsaucedo/kaos
+          - name: GIT_BRANCH
+            value: main
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+    containers:
+      # Strategic merge key — must match the operator's container name.
+      - name: agent
+        workingDir: /workspace
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65532
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+          - name: state
+            mountPath: /state
+    volumes:
+      - name: workspace
+        emptyDir: {}
+      - name: state
+        emptyDir: {}
