@@ -38,7 +38,7 @@ What the platform supports determines the plugin's shape; this must be verified 
 
 The plan stage's verification philosophy needs concrete reference implementations to point at.
 
-- `zalando-markets/agent-marketplace` → `plugins/databricks/skills/streamlit-verification-playwright` (Playwright visual verification companion pattern); kaos repo's kind-based e2e validation; how to encode: workflow-level tests over input-equals-output tests, manual-first `./tmp` scripts run iteratively, parallelisation past a time threshold, cheatsheets for user review.
+- The OSS ports of the data-app creation skill and its Playwright visual-verification companion, landing in `EthicalML/agent-skills-marketplace` via an in-flight PR (verify the final skill paths once merged); kaos repo's kind-based e2e validation; how to encode: workflow-level tests over input-equals-output tests, manual-first `./tmp` scripts run iteratively, parallelisation past a time threshold, cheatsheets for user review.
 - Output: `research-findings-5-verification-patterns.md`.
 
 ## Candidate spikes (proposed, decided after findings land)
