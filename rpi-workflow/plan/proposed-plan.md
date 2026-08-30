@@ -1,6 +1,6 @@
 # Proposed plan — RPI workflow plugin
 
-Status: **proposed — awaiting approval**. Decisions: [adr_0001](../adrs/adr_0001_rpi-workflow-plugin.md).
+Status: **approved (2026-08-30)** — P1 in progress. Decisions: [adr_0001](../adrs/adr_0001_rpi-workflow-plugin.md).
 
 Deliverable: five skills in `EthicalML/agent-skills-marketplace` under `plugins/workflow-automations/skills/` — `new-project`, `rpi-research`, `rpi-adrs`, `rpi-plan`, `rpi-implement` — registered in the plugin manifest and passing `scripts/validate.sh`. Learnings from implementation land in `rpi-workflow/implement/learnings/` here as they happen.
 
