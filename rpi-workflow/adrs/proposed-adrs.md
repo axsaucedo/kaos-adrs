@@ -1,6 +1,6 @@
 # Proposed ADRs — RPI workflow plugin
 
-Status: **proposed (v2) — awaiting approval**. Baseline: [000-initial-request](./000-initial-request.md). Inputs: [findings 1](../research/research-findings-1-rpi-as-practiced.md), [findings 2](../research/research-findings-2-machinery-and-prior-art.md), [findings 3](../research/research-findings-3-verification-patterns.md).
+Status: **approved with modifications (2026-08-30)** — single ADR chosen over the two-ADR recommendation; decisions D1–D6 taken in review, recorded in [adr_0001](./adr_0001_rpi-workflow-plugin.md). Baseline: [000-initial-request](./000-initial-request.md). Inputs: [findings 1](../research/research-findings-1-rpi-as-practiced.md), [findings 2](../research/research-findings-2-machinery-and-prior-art.md), [findings 3](../research/research-findings-3-verification-patterns.md).
 
 ## What this document is
 
