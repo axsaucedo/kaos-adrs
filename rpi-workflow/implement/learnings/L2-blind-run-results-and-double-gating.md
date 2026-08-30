@@ -1,0 +1,7 @@
+# L2 — Blind-run verification results: double-gating at resume, otherwise clean
+
+Five parallel blind sonnet subagent runs (2026-08-30), one per skill, each on a seeded toy project (`wordstats` CLI) in an isolated scratch repo, prompted only to execute the task with the skill — never to judge it. All five held the core discipline: no gate was ever self-approved, every run stopped at its explicit handover, and `rpi-implement` actually ran the manual loop plus the smoke gate and flagged an out-of-scope caveat (unhandled missing-file error) for user decision instead of silently patching.
+
+The one real defect found: the resume step's "offer the next unfinished step and stop unless the user chooses it" made `rpi-adrs` and `rpi-plan` halt to ask permission to draft the stage's own gate document even though the user had just invoked the skill on an untouched stage — a confirmation round on top of the proposal-approval gate that already protects the stage. `rpi-research` happened to read the same wording permissively and proceeded, confirming the ambiguity. Fix applied: a fresh invocation on a stage with no files is itself the user's choice; proceed straight to drafting. Also clarified `new-project` to present and correct the initial request before its commit.
+
+Worth keeping for future harness assertions: a blind run passes when (a) the stage's gate doc exists with `Status: proposed` and was committed alone, (b) no file was written past the gate, (c) the transcript's final message is a stop that names the next skill.
