@@ -1,6 +1,6 @@
 # Proposed research — RPI workflow plugin
 
-Status: **proposed (v2) — awaiting approval**. Baseline: [000-initial-request](../adrs/000-initial-request.md).
+Status: **approved (v2, 2026-08-30) — fan-out in progress** across three parallel subagents (opus/sonnet mix). Baseline: [000-initial-request](../adrs/000-initial-request.md).
 
 Goal of the research stage: ground the design of the RPI plugin in (a) how the workflow has actually been practiced across kaos-ai-docs sections, (b) what the Claude Code plugin/skill machinery supports and how prior art has packaged similar flows, and (c) concrete verification patterns, so the ADR stage can choose between validated options rather than assumptions.
 
@@ -23,7 +23,7 @@ The proposal docs are the workflow's fingerprint; they are not standardised acro
 
 ## Area 3 — External + internal: verification companions
 
-- The OSS ports of the data-app creation skill and its Playwright visual-verification companion landing in `EthicalML/agent-skills-marketplace` via an in-flight PR (verify final skill paths once merged); kaos repo's kind-based e2e validation; how to encode: workflow-level tests over input-equals-output tests, manual-first `./tmp` scripts run iteratively, parallelisation past a time threshold, cheatsheets for user review.
+- The OSS ports of the data-app creation skill and its Playwright visual-verification companion now public in `EthicalML/agent-skills-marketplace` [PR #10](https://github.com/EthicalML/agent-skills-marketplace/pull/10) as `plugins/workflow-automations/skills/create-streamlit-app` and `verify-streamlit-app` (hygiene iterations ongoing); kaos repo's kind-based e2e validation; how to encode: workflow-level tests over input-equals-output tests, manual-first `./tmp` scripts run iteratively, parallelisation past a time threshold, cheatsheets for user review.
 - Output: `research-findings-3-verification-patterns.md`.
 
 ## Candidate spikes (proposed, decided after findings land)
